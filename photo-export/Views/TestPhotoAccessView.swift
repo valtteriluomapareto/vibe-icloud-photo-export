@@ -1,6 +1,6 @@
-import SwiftUI
-import Photos
 import AppKit
+import Photos
+import SwiftUI
 
 struct TestPhotoAccessView: View {
     @EnvironmentObject var photoLibraryManager: PhotoLibraryManager
@@ -8,24 +8,26 @@ struct TestPhotoAccessView: View {
     @State private var assetCounts: [Int: [Int: Int]] = [:]
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var selectedAsset: PHAsset?
-    @State private var selectedThumbnail: NSImage?
-    
+    @State private var selectedYear: Int?
+    @State private var selectedMonth: Int?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Photos Library Test")
                 .font(.largeTitle)
                 .bold()
-            
+
             Group {
-                Text("Authorization Status: \(statusString(photoLibraryManager.authorizationStatus))")
-                    .foregroundColor(photoLibraryManager.isAuthorized ? .green : .red)
-                
+                Text(
+                    "Authorization Status: \(statusString(photoLibraryManager.authorizationStatus))"
+                )
+                .foregroundColor(photoLibraryManager.isAuthorized ? .green : .red)
+
                 Button("Fetch Photos Library Summary") {
                     loadPhotosSummary()
                 }
                 .disabled(isLoading || !photoLibraryManager.isAuthorized)
-                
+
                 if isLoading {
                     HStack {
                         ProgressView()
@@ -34,102 +36,108 @@ struct TestPhotoAccessView: View {
                             .font(.caption)
                     }
                 }
-                
+
                 if let errorMessage = errorMessage {
                     Text("Error: \(errorMessage)")
                         .foregroundColor(.red)
                 }
-                
-                if !assetCounts.isEmpty {
-                    Text("Photos Library Summary:")
-                        .font(.headline)
-                    
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(assetCounts.keys.sorted(), id: \.self) { year in
-                                DisclosureGroup(
-                                    content: {
-                                        VStack(alignment: .leading) {
-                                            ForEach(assetCounts[year]?.keys.sorted() ?? [], id: \.self) { month in
-                                                Button(action: {
-                                                    loadRandomAsset(year: year, month: month)
-                                                }) {
-                                                    Text("\(monthString(month)): \(assetCounts[year]?[month] ?? 0) assets")
-                                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                                }
-                                                .buttonStyle(.plain)
-                                                .padding(.vertical, 2)
-                                            }
-                                        }
-                                        .padding(.leading)
-                                    },
-                                    label: {
-                                        Text("\(year): \(totalForYear(year)) assets")
-                                            .font(.headline)
-                                    }
-                                )
-                                .padding(.vertical, 5)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(height: 200)
-                    .border(Color.gray.opacity(0.3))
-                }
-                
-                if let selectedAsset = selectedAsset {
-                    VStack(spacing: 10) {
-                        Text("Selected Asset:")
+            }
+
+            if !assetCounts.isEmpty {
+                HStack(spacing: 0) {
+                    // Left sidebar with years/months
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Photos Library Summary:")
                             .font(.headline)
-                        
-                        if let thumbnail = selectedThumbnail {
-                            Image(nsImage: thumbnail)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 300, height: 300)
-                                .border(Color.gray)
-                        } else {
-                            Rectangle()
-                                .fill(Color.gray.opacity(0.3))
-                                .frame(width: 300, height: 300)
-                                .overlay(ProgressView())
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("ID: \(selectedAsset.localIdentifier)")
-                            if let date = selectedAsset.creationDate {
-                                Text("Created: \(dateFormatter.string(from: date))")
+
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(assetCounts.keys.sorted(), id: \.self) { year in
+                                    DisclosureGroup(
+                                        isExpanded: Binding<Bool>(
+                                            get: { selectedYear == year },
+                                            set: { if $0 { selectedYear = year } }
+                                        ),
+                                        content: {
+                                            VStack(alignment: .leading) {
+                                                ForEach(
+                                                    assetCounts[year]?.keys.sorted() ?? [],
+                                                    id: \.self
+                                                ) { month in
+                                                    Button(action: {
+                                                        selectYearAndMonth(year: year, month: month)
+                                                    }) {
+                                                        Text(
+                                                            "\(monthString(month)): \(assetCounts[year]?[month] ?? 0) assets"
+                                                        )
+                                                        .frame(
+                                                            maxWidth: .infinity, alignment: .leading
+                                                        )
+                                                        .padding(.vertical, 2)
+                                                        .background(
+                                                            selectedYear == year
+                                                                && selectedMonth == month
+                                                                ? Color.blue.opacity(0.2)
+                                                                : Color.clear
+                                                        )
+                                                        .cornerRadius(4)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                            .padding(.leading)
+                                        },
+                                        label: {
+                                            Text("\(year): \(totalForYear(year)) assets")
+                                                .font(.headline)
+                                        }
+                                    )
+                                    .padding(.vertical, 5)
+                                }
                             }
-                            Text("Type: \(AssetMetadata.mediaTypeString(from: selectedAsset.mediaType))")
-                            Text("Size: \(selectedAsset.pixelWidth) x \(selectedAsset.pixelHeight)")
-                            if selectedAsset.mediaType == .video {
-                                Text("Duration: \(Int(selectedAsset.duration)) seconds")
-                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .font(.caption)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(width: 250)
+                        .background(Color(.textBackgroundColor).opacity(0.3))
+                        .cornerRadius(8)
+                    }
+                    .frame(width: 250)
+
+                    // Right pane for month view
+                    if let selectedYear = selectedYear, let selectedMonth = selectedMonth {
+                        MonthView(year: selectedYear, month: selectedMonth)
+                            .environmentObject(photoLibraryManager)
+                    } else {
+                        VStack {
+                            Spacer()
+                            Text("Select a month to view photos")
+                                .foregroundColor(.gray)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-    
+
     private func loadPhotosSummary() {
         guard photoLibraryManager.isAuthorized else {
             errorMessage = "Not authorized to access Photos library"
             return
         }
-        
+
         isLoading = true
         loadingStatus = "Fetching assets..."
         errorMessage = nil
-        
+
         Task {
             do {
                 let assetsDict = try await photoLibraryManager.fetchAssetsByYearAndMonth()
-                
+
                 // Convert to count dictionary
                 var counts: [Int: [Int: Int]] = [:]
                 for (year, months) in assetsDict {
@@ -138,7 +146,7 @@ struct TestPhotoAccessView: View {
                         counts[year]?[month] = assets.count
                     }
                 }
-                
+
                 DispatchQueue.main.async {
                     self.assetCounts = counts
                     self.isLoading = false
@@ -153,47 +161,16 @@ struct TestPhotoAccessView: View {
             }
         }
     }
-    
-    private func loadRandomAsset(year: Int, month: Int) {
-        isLoading = true
-        loadingStatus = "Loading asset..."
-        errorMessage = nil
-        selectedThumbnail = nil
-        
-        Task {
-            do {
-                let assets = try await photoLibraryManager.fetchAssets(year: year, month: month)
-                
-                if let randomAsset = assets.randomElement() {
-                    let thumbnail = await photoLibraryManager.loadThumbnail(for: randomAsset)
-                    
-                    DispatchQueue.main.async {
-                        self.selectedAsset = randomAsset
-                        self.selectedThumbnail = thumbnail
-                        self.isLoading = false
-                        self.loadingStatus = "Idle"
-                    }
-                } else {
-                    DispatchQueue.main.async {
-                        self.errorMessage = "No assets found for this period"
-                        self.isLoading = false
-                        self.loadingStatus = "Error"
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.errorMessage = error.localizedDescription
-                    self.isLoading = false
-                    self.loadingStatus = "Error"
-                }
-            }
-        }
+
+    private func selectYearAndMonth(year: Int, month: Int) {
+        selectedYear = year
+        selectedMonth = month
     }
-    
+
     private func totalForYear(_ year: Int) -> Int {
         return assetCounts[year]?.values.reduce(0, +) ?? 0
     }
-    
+
     private func statusString(_ status: PHAuthorizationStatus) -> String {
         switch status {
         case .authorized:
@@ -210,7 +187,7 @@ struct TestPhotoAccessView: View {
             return "Unknown"
         }
     }
-    
+
     private func monthString(_ month: Int) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MMMM"
@@ -218,11 +195,4 @@ struct TestPhotoAccessView: View {
         let date = calendar.date(from: DateComponents(year: 2020, month: month))!
         return dateFormatter.string(from: date)
     }
-    
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }
-} 
+}

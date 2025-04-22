@@ -5,14 +5,14 @@
 //  Created by Valtteri Luoma on 22.4.2025.
 //
 
-import SwiftUI
-import Photos
 import AppKit
+import Photos
+import SwiftUI
 
 struct ContentView: View {
     @StateObject private var photoLibraryManager = PhotoLibraryManager()
     @State private var isShowingAuthorizationView = false
-    
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -35,7 +35,7 @@ struct ContentView: View {
 struct AuthorizationView: View {
     @ObservedObject var photoLibraryManager: PhotoLibraryManager
     @State private var isRequestingAuthorization = false
-    
+
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: "photo.on.rectangle.angled")
@@ -43,15 +43,17 @@ struct AuthorizationView: View {
                 .scaledToFit()
                 .frame(width: 100, height: 100)
                 .foregroundColor(.blue)
-            
+
             Text("Photo Library Access Required")
                 .font(.title)
                 .bold()
-            
-            Text("This app needs access to your Photos library to back up photos and videos to external storage.")
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
+
+            Text(
+                "This app needs access to your Photos library to back up photos and videos to external storage."
+            )
+            .multilineTextAlignment(.center)
+            .padding(.horizontal)
+
             Button(action: {
                 requestPermission()
             }) {
@@ -65,29 +67,35 @@ struct AuthorizationView: View {
             }
             .padding(.horizontal)
             .disabled(isRequestingAuthorization)
-            
+
             if isRequestingAuthorization {
                 ProgressView()
                     .padding()
             }
-            
-            if photoLibraryManager.authorizationStatus == .denied || photoLibraryManager.authorizationStatus == .restricted {
+
+            if photoLibraryManager.authorizationStatus == .denied
+                || photoLibraryManager.authorizationStatus == .restricted
+            {
                 Text("Please enable Photos access in Settings to use this app.")
                     .foregroundColor(.red)
                     .padding()
-                
+
                 Button("Open System Preferences") {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos")!)
+                    NSWorkspace.shared.open(
+                        URL(
+                            string:
+                                "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
+                        )!)
                 }
                 .padding()
             }
         }
         .padding()
     }
-    
+
     private func requestPermission() {
         isRequestingAuthorization = true
-        
+
         Task {
             _ = await photoLibraryManager.requestAuthorization()
             isRequestingAuthorization = false
@@ -97,7 +105,7 @@ struct AuthorizationView: View {
 
 struct MainView: View {
     @EnvironmentObject var photoLibraryManager: PhotoLibraryManager
-    
+
     var body: some View {
         TestPhotoAccessView()
             .environmentObject(photoLibraryManager)

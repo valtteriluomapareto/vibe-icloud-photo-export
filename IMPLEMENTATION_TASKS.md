@@ -13,24 +13,24 @@ committed independently.
 
 ### 1. Project Initialization
 
-- [ ] Initialize a new Xcode project for a macOS app (Swift, SwiftUI).
-- [ ] Set deployment target to the latest stable macOS version.
-- [ ] Set up recommended folder structure: `Models`, `ViewModels`, `Views`,
+- [x] Initialize a new Xcode project for a macOS app (Swift, SwiftUI).
+- [x] Set deployment target to the latest stable macOS version.
+- [x] Set up recommended folder structure: `Models`, `ViewModels`, `Views`,
       `Managers`, `Resources`, `SupportingFiles`.
 
 ---
 
 ### 2. Photos Library Access
 
-- [ ] Implement user authorization request for Photos library access using the
+- [x] Implement user authorization request for Photos library access using the
       Photos framework.
-- [ ] Implement a `PhotoLibraryManager` class to query assets from the Photos
+- [x] Implement a `PhotoLibraryManager` class to query assets from the Photos
       library.
-  - [ ] Provide functions to fetch all photo and video assets, grouped by year
+  - [x] Provide functions to fetch all photo and video assets, grouped by year
         and month.
-  - [ ] Extract asset metadata: creation date, media type, local identifier.
-  - [ ] Implement utility for filtering by media type (photos/videos).
-  - [ ] Make APIs asynchronous as needed.
+  - [x] Extract asset metadata: creation date, media type, local identifier.
+  - [x] Implement utility for filtering by media type (photos/videos).
+  - [x] Make APIs asynchronous as needed.
 
 ---
 

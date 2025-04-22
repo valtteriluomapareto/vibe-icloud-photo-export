@@ -1,0 +1,90 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# General instructions
+
+## Special Implementation & Testing Considerations
+
+This document lists critical areas of the Apple Photos Backup project that are **likely to cause issues** or where user data and experience is at risk. **Follow these instructions at every relevant implementation and testing step.**
+
+---
+
+### 1. Photos Framework Permissions
+
+- Always check Photos library authorization status before querying assets.
+- Show clear, user-friendly error messages if access is denied, restricted, or revoked after initial permission is granted.
+- The app must not crash or hang if Photos access is interrupted or denied at any time.
+
+### 2. Large Library Handling
+
+- Test and optimize: loading, filtering, and exporting with libraries containing tens of thousands of photos/videos.
+- Avoid fetching all assets into memory at once — use pagination or efficient batched access methods.
+
+### 3. Export Destination Robustness
+
+- Before exporting, check that the export root folder exists and is writable.
+- Handle unplugged or disconnected export drives gracefully; inform the user if an export cannot proceed or is interrupted.
+- Validate the full file and folder path for invalid or too-long names before writing.
+
+### 4. File Naming and Collisions
+
+- When exporting, check if a file with the same name already exists in the target directory.
+- If conflict occurs, ensure unique file naming (e.g., append number or asset identifier).
+- Never overwrite existing exported files unintentionally.
+
+### 5. Asset Identification, Incremental Export, and Deletions
+
+- Use each asset’s Photos **local identifier** for export tracking and status.
+- Confirm that this identifier is persistent between app launches and resilient to library updates. Re-validate this with test cases where photos are added, moved, edited, or deleted.
+- Before exporting, compare all candidate files with the export record to avoid unnecessary duplicates.
+
+### 6. Error Recovery and Partial Exports
+
+- Track in-progress exports so that interrupted operations can safely resume or roll back.
+- After an export interruption (e.g. app crash, force quit, power failure), verify on next launch that:
+    - All successfully exported assets are marked as such.
+    - No partial or corrupt files are left behind.
+    - User can resume export without data loss.
+
+### 7. Video and Corrupt File Handling
+
+- Detect if a media file is unavailable, missing, or corrupted before or during export.
+- For unsupported/corrupt assets, skip the asset, record the error, and inform the user—do not halt the whole export job.
+
+### 8. Memory Management for Thumbnails and Previews
+
+- Thumbnails and previews must be loaded efficiently and released when no longer needed.
+- The app must stay responsive and avoid out-of-memory errors, even when showing large months/years.
+
+### 9. Handling Concurrent Changes
+
+- The UI and data logic should gracefully update or refresh if the Photos library is changed (e.g., new photos, deletions) while the app is open.
+- Avoid race conditions if implementing background exports or multi-threaded code.
+
+### 10. Testing Diversity
+
+- Test all scenarios below:
+    - Internal and external hard drives, and network shares as export targets.
+    - Export targets with limited permissions (read-only, nearly full).
+    - Large and small Photos libraries.
+    - iCloud-enabled Photos libraries with missing originals.
+    - Photos with non-ASCII or unusual file names and metadata.
+    - Simulated user interruptions (drive unplug, app force quit).
+    - Partially exported states and resume functionality.
+
+---
+
+## General
+
+- Log all errors and edge-case events for easier debugging.
+- Write code and UI for **graceful failure**: any problem should be surfaced to the user with clarity and NO loss or duplication of user data.
+- Document any platform limitations or known issues encountered.
+
+---
+
+**Follow these instructions rigorously** to ensure a robust, user-focused backup application.  
+Update this file if additional edge cases are discovered during implementation or testing.
+
+---

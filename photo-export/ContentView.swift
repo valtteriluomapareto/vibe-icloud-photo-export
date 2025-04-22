@@ -120,22 +120,24 @@ struct MainView: View {
                     .padding()
 
                 List {
-                    // Placeholder for year/month selection
-                    Section("Years") {
+                    // Combined year/month selection
+                    Section("Photos by Month") {
                         ForEach(2020...2025, id: \.self) { year in
-                            Text("\(year)")
+                            ForEach(1...12, id: \.self) { month in
+                                HStack {
+                                    Text("\(year) / \(monthName(month))")
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                                .background(
+                                    selectedYear == year && selectedMonth == month
+                                        ? Color.blue.opacity(0.2) : Color.clear
+                                )
                                 .onTapGesture {
                                     selectedYear = year
-                                }
-                        }
-                    }
-
-                    Section("Months") {
-                        ForEach(1...12, id: \.self) { month in
-                            Text("\(monthName(month))")
-                                .onTapGesture {
                                     selectedMonth = month
                                 }
+                            }
                         }
                     }
                 }
@@ -182,7 +184,7 @@ struct MonthView: View {
     let month: Int
 
     var body: some View {
-        HStack(spacing: 0) {
+        VStack(spacing: 0) {
             // Main image display area
             ZStack {
                 if let selectedAsset = selectedAsset {
@@ -232,15 +234,14 @@ struct MonthView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Thumbnail strip on the right side
+            // Thumbnail strip at the bottom (changed from right side)
             VStack {
                 Divider()
-                    .frame(height: nil)
                     .background(Color.gray)
-                    .padding(.leading, 8)
+                    .padding(.horizontal, 8)
 
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVGrid(columns: [GridItem(.fixed(100))], spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: true) {
+                    LazyHStack(spacing: 8) {
                         ForEach(assets, id: \.localIdentifier) { asset in
                             ThumbnailView(
                                 asset: asset,
@@ -254,8 +255,9 @@ struct MonthView: View {
                         }
                     }
                     .padding(.vertical, 10)
+                    .padding(.horizontal)
                 }
-                .frame(width: 120)
+                .frame(height: 120)
                 .background(Color(.windowBackgroundColor))
             }
         }

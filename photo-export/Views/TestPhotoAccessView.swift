@@ -2,6 +2,10 @@ import AppKit
 import Photos
 import SwiftUI
 
+// Remove problematic imports
+// @_exported import class photo_export.PhotoLibraryManager
+// @_exported import struct photo_export.MonthView
+
 struct TestPhotoAccessView: View {
     @EnvironmentObject var photoLibraryManager: PhotoLibraryManager
     @State private var loadingStatus = "Idle"
@@ -12,117 +16,126 @@ struct TestPhotoAccessView: View {
     @State private var selectedMonth: Int?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        HStack(spacing: 0) {
+            // LEFT SIDE - Control Panel
+            leftSideView
+                .frame(width: 300)
+                .padding()
+                .background(Color(.windowBackgroundColor).opacity(0.5))
+
+            // RIGHT SIDE - Content Area
+            if let selectedYear = selectedYear, let selectedMonth = selectedMonth {
+                MonthView(year: selectedYear, month: selectedMonth)
+                    .environmentObject(photoLibraryManager)
+            } else {
+                noSelectionView
+            }
+        }
+    }
+
+    // MARK: - Helper Views
+
+    private var leftSideView: some View {
+        VStack(alignment: .leading, spacing: 15) {
             Text("Photos Library Test")
                 .font(.largeTitle)
                 .bold()
 
-            Group {
-                Text(
-                    "Authorization Status: \(statusString(photoLibraryManager.authorizationStatus))"
-                )
+            Text("Authorization Status: \(statusString(photoLibraryManager.authorizationStatus))")
                 .foregroundColor(photoLibraryManager.isAuthorized ? .green : .red)
 
-                Button("Fetch Photos Library Summary") {
-                    loadPhotosSummary()
-                }
-                .disabled(isLoading || !photoLibraryManager.isAuthorized)
+            Button("Fetch Photos Library Summary") {
+                loadPhotosSummary()
+            }
+            .disabled(isLoading || !photoLibraryManager.isAuthorized)
 
-                if isLoading {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text(loadingStatus)
-                            .font(.caption)
-                    }
+            if isLoading {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text(loadingStatus)
+                        .font(.caption)
                 }
+            }
 
-                if let errorMessage = errorMessage {
-                    Text("Error: \(errorMessage)")
-                        .foregroundColor(.red)
-                }
+            if let errorMessage = errorMessage {
+                Text("Error: \(errorMessage)")
+                    .foregroundColor(.red)
             }
 
             if !assetCounts.isEmpty {
-                HStack(spacing: 0) {
-                    // Left sidebar with years/months
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Photos Library Summary:")
-                            .font(.headline)
+                Text("Photos Library Summary:")
+                    .font(.headline)
 
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(assetCounts.keys.sorted(), id: \.self) { year in
-                                    DisclosureGroup(
-                                        isExpanded: Binding<Bool>(
-                                            get: { selectedYear == year },
-                                            set: { if $0 { selectedYear = year } }
-                                        ),
-                                        content: {
-                                            VStack(alignment: .leading) {
-                                                ForEach(
-                                                    assetCounts[year]?.keys.sorted() ?? [],
-                                                    id: \.self
-                                                ) { month in
-                                                    Button(action: {
-                                                        selectYearAndMonth(year: year, month: month)
-                                                    }) {
-                                                        Text(
-                                                            "\(monthString(month)): \(assetCounts[year]?[month] ?? 0) assets"
-                                                        )
-                                                        .frame(
-                                                            maxWidth: .infinity, alignment: .leading
-                                                        )
-                                                        .padding(.vertical, 2)
-                                                        .background(
-                                                            selectedYear == year
-                                                                && selectedMonth == month
-                                                                ? Color.blue.opacity(0.2)
-                                                                : Color.clear
-                                                        )
-                                                        .cornerRadius(4)
-                                                    }
-                                                    .buttonStyle(.plain)
-                                                }
-                                            }
-                                            .padding(.leading)
-                                        },
-                                        label: {
-                                            Text("\(year): \(totalForYear(year)) assets")
-                                                .font(.headline)
-                                        }
-                                    )
-                                    .padding(.vertical, 5)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(width: 250)
-                        .background(Color(.textBackgroundColor).opacity(0.3))
-                        .cornerRadius(8)
-                    }
-                    .frame(width: 250)
+                yearsMonthsList
+            }
 
-                    // Right pane for month view
-                    if let selectedYear = selectedYear, let selectedMonth = selectedMonth {
-                        MonthView(year: selectedYear, month: selectedMonth)
-                            .environmentObject(photoLibraryManager)
-                    } else {
-                        VStack {
-                            Spacer()
-                            Text("Select a month to view photos")
-                                .foregroundColor(.gray)
-                            Spacer()
+            Spacer()
+        }
+    }
+
+    private var yearsMonthsList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(assetCounts.keys.sorted(), id: \.self) { year in
+                    DisclosureGroup(
+                        isExpanded: Binding<Bool>(
+                            get: { selectedYear == year },
+                            set: { if $0 { selectedYear = year } }
+                        ),
+                        content: {
+                            monthsList(for: year)
+                        },
+                        label: {
+                            Text("\(year): \(totalForYear(year)) assets")
+                                .font(.headline)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+                    )
+                    .padding(.vertical, 5)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(.textBackgroundColor).opacity(0.3))
+        .cornerRadius(8)
     }
+
+    private func monthsList(for year: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(assetCounts[year]?.keys.sorted() ?? [], id: \.self) { month in
+                Button(action: {
+                    selectYearAndMonth(year: year, month: month)
+                }) {
+                    Text("\(monthString(month)): \(assetCounts[year]?[month] ?? 0) assets")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                        .background(
+                            selectedYear == year && selectedMonth == month
+                                ? Color.blue.opacity(0.2)
+                                : Color.clear
+                        )
+                        .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.leading)
+    }
+
+    private var noSelectionView: some View {
+        VStack {
+            Spacer()
+            if assetCounts.isEmpty {
+                Text("Fetch Photos Library Summary to start")
+            } else {
+                Text("Select a month to view photos")
+            }
+            Spacer()
+        }
+        .foregroundColor(.gray)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Helper Methods
 
     private func loadPhotosSummary() {
         guard photoLibraryManager.isAuthorized else {

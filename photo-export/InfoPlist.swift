@@ -12,7 +12,7 @@ enum PhotoExportInfoPlist {
     static func register() {
         // Add our values to the existing Info.plist at runtime
         for (key, value) in infoDictionary {
-            Bundle.main.infoDictionary?[key] = value
+            // Bundle.main.infoDictionary?[key] = value
         }
     }
 } 

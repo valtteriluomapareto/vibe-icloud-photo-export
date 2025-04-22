@@ -1,0 +1,2 @@
+// Xcode build configuration file
+INFOPLIST_FILE = $(SRCROOT)/photo-export/Info.plist 

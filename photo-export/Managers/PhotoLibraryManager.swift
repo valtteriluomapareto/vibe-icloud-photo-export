@@ -1,0 +1,211 @@
+import Photos
+import SwiftUI
+import AppKit
+
+/// Manages access to the Photos library, including authorization and asset fetching
+class PhotoLibraryManager: ObservableObject {
+    /// Published properties to track authorization status
+    @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
+    @Published var isAuthorized: Bool = false
+    
+    /// Errors that can occur in the Photo Library Manager
+    enum PhotoLibraryError: Error {
+        case authorizationDenied
+        case fetchFailed
+        case assetUnavailable
+    }
+    
+    init() {
+        // Initialize with current authorization status
+        authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        isAuthorized = authorizationStatus == .authorized
+    }
+    
+    /// Request authorization to access the Photos library
+    func requestAuthorization() async -> Bool {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        
+        DispatchQueue.main.async {
+            self.authorizationStatus = status
+            self.isAuthorized = status == .authorized
+        }
+        
+        return status == .authorized
+    }
+    
+    /// Fetch all assets grouped by year and month
+    func fetchAssetsByYearAndMonth() async throws -> [Int: [Int: [PHAsset]]] {
+        guard isAuthorized else {
+            throw PhotoLibraryError.authorizationDenied
+        }
+        
+        // Create fetch options
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        
+        // Fetch all photo and video assets
+        let fetchResult = PHAsset.fetchAssets(with: fetchOptions)
+        
+        // Group assets by year and month
+        var assetsByYearAndMonth: [Int: [Int: [PHAsset]]] = [:]
+        
+        // Process in batches to avoid loading everything into memory at once
+        let totalAssets = fetchResult.count
+        let batchSize = 500
+        
+        for index in 0..<totalAssets {
+            autoreleasepool {
+                guard let asset = fetchResult.object(at: index) as? PHAsset,
+                      let creationDate = asset.creationDate else {
+                    return
+                }
+                
+                let calendar = Calendar.current
+                let year = calendar.component(.year, from: creationDate)
+                let month = calendar.component(.month, from: creationDate)
+                
+                if assetsByYearAndMonth[year] == nil {
+                    assetsByYearAndMonth[year] = [:]
+                }
+                
+                if assetsByYearAndMonth[year]?[month] == nil {
+                    assetsByYearAndMonth[year]?[month] = []
+                }
+                
+                assetsByYearAndMonth[year]?[month]?.append(asset)
+            }
+            
+            // Yield to main thread periodically
+            if index % batchSize == 0 && index > 0 {
+                try await Task.sleep(nanoseconds: 1_000_000) // 1ms
+            }
+        }
+        
+        return assetsByYearAndMonth
+    }
+    
+    /// Fetch assets for a specific year and month
+    func fetchAssets(year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil) async throws -> [PHAsset] {
+        guard isAuthorized else {
+            throw PhotoLibraryError.authorizationDenied
+        }
+        
+        // Create date predicates for filtering
+        let calendar = Calendar.current
+        var startDateComponents = DateComponents()
+        startDateComponents.year = year
+        startDateComponents.month = month ?? 1
+        startDateComponents.day = 1
+        
+        var endDateComponents = DateComponents()
+        endDateComponents.year = month == nil ? year + 1 : year
+        endDateComponents.month = month == nil ? 1 : (month! + 1)
+        endDateComponents.day = 1
+        
+        guard let startDate = calendar.date(from: startDateComponents),
+              let endDate = calendar.date(from: endDateComponents) else {
+            throw PhotoLibraryError.fetchFailed
+        }
+        
+        // Create fetch options
+        let fetchOptions = PHFetchOptions()
+        
+        // Create date predicate
+        fetchOptions.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate, endDate as NSDate)
+        
+        // Add media type filter if specified
+        if let mediaType = mediaType {
+            let mediaTypePredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
+            
+            if let existingPredicate = fetchOptions.predicate {
+                fetchOptions.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [existingPredicate, mediaTypePredicate])
+            } else {
+                fetchOptions.predicate = mediaTypePredicate
+            }
+        }
+        
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        
+        // Fetch assets
+        let fetchResult = PHAsset.fetchAssets(with: fetchOptions)
+        var assets: [PHAsset] = []
+        
+        // Process in batches to avoid loading everything into memory at once
+        let totalAssets = fetchResult.count
+        let batchSize = 500
+        
+        for index in 0..<totalAssets {
+            autoreleasepool {
+                assets.append(fetchResult.object(at: index))
+            }
+            
+            // Yield to main thread periodically
+            if index % batchSize == 0 && index > 0 {
+                try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
+            }
+        }
+        
+        return assets
+    }
+    
+    /// Extract asset metadata into a structured format
+    func extractAssetMetadata(from asset: PHAsset) -> AssetMetadata {
+        return AssetMetadata(
+            localIdentifier: asset.localIdentifier,
+            creationDate: asset.creationDate,
+            mediaType: asset.mediaType,
+            pixelWidth: asset.pixelWidth,
+            pixelHeight: asset.pixelHeight,
+            duration: asset.duration,
+            isFavorite: asset.isFavorite
+        )
+    }
+    
+    /// Load thumbnail for an asset
+    func loadThumbnail(for asset: PHAsset, size: CGSize = CGSize(width: 200, height: 200), contentMode: PHImageContentMode = .aspectFill) async -> NSImage? {
+        return await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .opportunistic
+            options.isNetworkAccessAllowed = true
+            options.resizeMode = .fast
+            
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: size,
+                contentMode: contentMode,
+                options: options
+            ) { image, _ in
+                continuation.resume(returning: image as? NSImage)
+            }
+        }
+    }
+    
+    /// Request a full-size image for an asset
+    func requestFullImage(for asset: PHAsset) async throws -> NSImage {
+        return try await withCheckedThrowingContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            options.isSynchronous = false
+            
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: PHImageManagerMaximumSize,
+                contentMode: .aspectFit,
+                options: options
+            ) { image, info in
+                if let error = info?[PHImageErrorKey] as? Error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                
+                guard let image = image as? NSImage else {
+                    continuation.resume(throwing: PhotoLibraryError.assetUnavailable)
+                    return
+                }
+                
+                continuation.resume(returning: image)
+            }
+        }
+    }
+} 

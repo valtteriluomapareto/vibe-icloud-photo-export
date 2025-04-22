@@ -16,9 +16,23 @@ class PhotoLibraryManager: ObservableObject {
     }
     
     init() {
+        // Check if Info.plist contains photos usage description
+        verifyPhotoLibraryPermissions()
+        
         // Initialize with current authorization status
         authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         isAuthorized = authorizationStatus == .authorized
+    }
+    
+    /// Verify that Photos usage description is properly set in Info.plist
+    private func verifyPhotoLibraryPermissions() {
+        let bundleDict = Bundle.main.infoDictionary
+        if bundleDict?["NSPhotoLibraryUsageDescription"] == nil {
+            print("WARNING: NSPhotoLibraryUsageDescription not found in Info.plist")
+            print("Available keys: \(bundleDict?.keys.joined(separator: ", ") ?? "none")")
+        } else {
+            print("Found NSPhotoLibraryUsageDescription in Info.plist")
+        }
     }
     
     /// Request authorization to access the Photos library

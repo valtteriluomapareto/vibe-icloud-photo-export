@@ -53,27 +53,28 @@ committed independently.
 
 ### 5. Export Record and Status Tracking
 
-- [ ] Implement an `ExportRecordStore` (e.g., lightweight database or local
+- [x] Implement an `ExportRecordStore` (e.g., lightweight database or local
       JSON/plist).
-  - [ ] Store which assets (by Photos local identifier) have been exported, with
+  - [x] Store which assets (by Photos local identifier) have been exported, with
         year/month, export path, and export date.
-  - [ ] Load export records at app start; save updates after each export.
-- [ ] Implement logic to detect:
-  - [ ] Which months/years have been fully exported.
-  - [ ] Which months have new or changed photos needing export.
+  - [x] Load export records at app start; save updates after each export.
+- [x] Implement logic to detect:
+  - [x] Which months/years have been fully exported.
+  - [x] Which months have new or changed photos needing export.
 
 ---
 
 ### 6. UI Implementation
 
 - [ ] Implement the main SwiftUI view with:
-  - [ ] Export folder selection section.
-  - [ ] List or grid of available years and months, showing export status (not
+  - [x] Export folder selection section.
+  - [x] List or grid of available years and months, showing export status (not
         exported, partially exported, exported).
 - [ ] Implement a month view:
   - [ ] Display a grid of thumbnails for all assets in the month, filterable by
         media type.
   - [x] Provide a preview pane for the selected asset (large photo/video).
+  - [ ] Show unexported assets visually (uses `ExportRecordStore`).
 - [ ] Implement filter controls:
   - [ ] Toggle to show only photos, only videos, or both.
 - [ ] Delineate which assets are new/unexported visually in the asset grid.

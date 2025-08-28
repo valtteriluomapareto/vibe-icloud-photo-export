@@ -13,27 +13,69 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var photoLibraryManager = PhotoLibraryManager()
     @State private var isShowingAuthorizationView = false
-    @State private var selectedYear: Int = Calendar.current.component(.year, from: Date())
-    @State private var selectedMonth: Int = Calendar.current.component(.month, from: Date())
+    @State private var selectedYearMonth: YearMonth? = YearMonth(
+        year: Calendar.current.component(.year, from: Date()),
+        month: Calendar.current.component(.month, from: Date()))
 
     var body: some View {
-        NavigationView {
-            ZStack {
-                if photoLibraryManager.isAuthorized {
-                    MainView(selectedYear: $selectedYear, selectedMonth: $selectedMonth)
-                        .environmentObject(photoLibraryManager)
+        Group {
+            if photoLibraryManager.isAuthorized {
+                NavigationSplitView {
+                    List(selection: $selectedYearMonth) {
+                        Section("Photos by Month") {
+                            ForEach(2020...2025, id: \.self) { year in
+                                ForEach(1...12, id: \.self) { month in
+                                    Text("\(year) \(monthName(month))")
+                                        .tag(YearMonth(year: year, month: month))
+                                }
+                            }
+                        }
+                    }
+                    .navigationTitle("Photo Export")
+                } detail: {
+                    if let selected = selectedYearMonth {
+                        MonthView(year: selected.year, month: selected.month)
+                            .environmentObject(photoLibraryManager)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        VStack {
+                            Spacer()
+                            Text("Select a month")
+                                .foregroundColor(.gray)
+                            Spacer()
+                        }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    AuthorizationView(photoLibraryManager: photoLibraryManager)
+                    }
                 }
+            } else {
+                AuthorizationView(photoLibraryManager: photoLibraryManager)
             }
-            .navigationTitle("Photo Export")
         }
         .onAppear {
             isShowingAuthorizationView = photoLibraryManager.authorizationStatus != .authorized
         }
         .frame(minWidth: 900, minHeight: 600)
         .background(Color(.windowBackgroundColor))
+    }
+
+    private struct YearMonth: Hashable, Identifiable {
+        let year: Int
+        let month: Int
+        var id: String { "\(year)-\(month)" }
+    }
+
+    private func monthName(_ month: Int) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMMM"
+
+        var components = DateComponents()
+        components.month = month
+        components.year = 2023  // Any year will do for getting month name
+
+        if let date = Calendar.current.date(from: components) {
+            return dateFormatter.string(from: date)
+        }
+        return "\(month)"
     }
 }
 

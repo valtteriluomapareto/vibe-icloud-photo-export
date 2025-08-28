@@ -22,6 +22,7 @@ struct ContentView: View {
                 if photoLibraryManager.isAuthorized {
                     MainView(selectedYear: $selectedYear, selectedMonth: $selectedMonth)
                         .environmentObject(photoLibraryManager)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     AuthorizationView(photoLibraryManager: photoLibraryManager)
                 }
@@ -31,7 +32,8 @@ struct ContentView: View {
         .onAppear {
             isShowingAuthorizationView = photoLibraryManager.authorizationStatus != .authorized
         }
-        .frame(minWidth: 800, minHeight: 600)
+        .frame(minWidth: 900, minHeight: 600)
+        .background(Color(.windowBackgroundColor))
     }
 }
 
@@ -112,41 +114,44 @@ struct MainView: View {
     @Binding var selectedMonth: Int
 
     var body: some View {
-        HSplitView {
-            // Left sidebar with navigation/selection options
-            VStack(alignment: .leading) {
-                Text("Library")
-                    .font(.headline)
-                    .padding()
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                // Left sidebar with navigation/selection options
+                VStack(alignment: .leading) {
+                    Text("Library")
+                        .font(.headline)
+                        .padding()
 
-                List {
-                    // Combined year/month selection
-                    Section("Photos by Month") {
-                        ForEach(2020...2025, id: \.self) { year in
-                            ForEach(1...12, id: \.self) { month in
-                                HStack {
-                                    Text("\(year) / \(monthName(month))")
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                                .background(
-                                    selectedYear == year && selectedMonth == month
-                                        ? Color.blue.opacity(0.2) : Color.clear
-                                )
-                                .onTapGesture {
-                                    selectedYear = year
-                                    selectedMonth = month
+                    List {
+                        // Combined year/month selection
+                        Section("Photos by Month") {
+                            ForEach(2020...2025, id: \.self) { year in
+                                ForEach(1...12, id: \.self) { month in
+                                    HStack {
+                                        Text("\(year) \(monthName(month))")
+                                        Spacer()
+                                    }
+                                    .contentShape(Rectangle())
+                                    .background(
+                                        selectedYear == year && selectedMonth == month
+                                            ? Color.blue.opacity(0.2) : Color.clear
+                                    )
+                                    .onTapGesture {
+                                        selectedYear = year
+                                        selectedMonth = month
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            .frame(minWidth: 200)
+                .frame(width: geometry.size.width * 0.25)
 
-            // Right side with MonthView for displaying photos
-            MonthView(year: selectedYear, month: selectedMonth)
-                .environmentObject(photoLibraryManager)
+                // Right side with MonthView for displaying photos
+                MonthView(year: selectedYear, month: selectedMonth)
+                    .environmentObject(photoLibraryManager)
+                    .frame(width: geometry.size.width * 0.75)
+            }
         }
     }
 
@@ -234,7 +239,7 @@ struct MonthView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Thumbnail strip at the bottom (changed from right side)
+            // Thumbnail strip at the bottom
             VStack {
                 Divider()
                     .background(Color.gray)
@@ -261,7 +266,14 @@ struct MonthView: View {
                 .background(Color(.windowBackgroundColor))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
+            loadAssetsForMonth()
+        }
+        .onChange(of: year) {
+            loadAssetsForMonth()
+        }
+        .onChange(of: month) {
             loadAssetsForMonth()
         }
         .overlay(
@@ -297,6 +309,12 @@ struct MonthView: View {
     private func loadAssetsForMonth() {
         isLoading = true
         errorMessage = nil
+
+        // Reset state for new selection
+        assets = []
+        thumbnails = [:]
+        selectedAsset = nil
+        selectedFullImage = nil
 
         Task {
             do {

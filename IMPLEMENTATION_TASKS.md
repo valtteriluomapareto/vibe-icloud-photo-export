@@ -36,18 +36,18 @@ committed independently.
 
 ### 3. Export Destination Management
 
-- [ ] Implement UI for users to select a root export folder using the standard
+- [x] Implement UI for users to select a root export folder using the standard
       macOS folder picker.
-- [ ] Persist the chosen export folder path using user defaults or app storage.
-- [ ] Display the currently selected export folder in the main UI.
+- [x] Persist the chosen export folder path using user defaults or app storage.
+- [x] Display the currently selected export folder in the main UI.
 
 ---
 
 ### 4. Export Folder Structure
 
-- [ ] Implement logic to generate export paths in the format:
+- [x] Implement logic to generate export paths in the format:
       `<root>/<year>/<month>/`.
-- [ ] Ensure folder structure is automatically created as needed during export.
+- [x] Ensure folder structure is automatically created as needed during export.
 
 ---
 

@@ -17,6 +17,37 @@ final class ExportDestinationManager: ObservableObject {
 
     private var volumeObservers: [NSObjectProtocol] = []
 
+    // MARK: - Errors
+    enum ExportDestinationError: LocalizedError {
+        case noSelection
+        case notAvailable
+        case notWritable
+        case invalidYear
+        case invalidMonth
+        case scopeAccessDenied
+        case pathTooLong
+        case notDirectory(URL)
+        case failedToCreateFolder(URL, underlying: Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .noSelection: return "No export folder selected."
+            case .notAvailable: return "Export folder is not reachable (drive unplugged?)."
+            case .notWritable: return "Export folder is read-only."
+            case .invalidYear: return "Invalid year."
+            case .invalidMonth: return "Invalid month."
+            case .scopeAccessDenied: return "Could not access the selected folder due to sandbox restrictions."
+            case .pathTooLong: return "The generated export path is too long."
+            case .notDirectory(let url): return "Path exists but is not a folder: \(url.path)"
+            case .failedToCreateFolder(let url, let underlying):
+                return "Failed to create folder at \(url.path): \(underlying.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - Public Computed
+    var canExportNow: Bool { selectedFolderURL != nil && isAvailable && isWritable }
+
     // MARK: - Lifecycle
     init() {
         restoreBookmarkIfAvailable()
@@ -69,6 +100,61 @@ final class ExportDestinationManager: ObservableObject {
 
     func endScopedAccess() {
         selectedFolderURL?.stopAccessingSecurityScopedResource()
+    }
+
+    /// Returns the URL for the <root>/<year>/<month>/ folder, optionally creating it.
+    /// Month is formatted as two digits ("01" … "12").
+    /// - Parameters:
+    ///   - year: e.g., 2025
+    ///   - month: 1…12
+    ///   - createIfNeeded: create the directory if it does not exist (default true)
+    /// - Throws: ExportDestinationError on invalid state or inability to create.
+    func urlForMonth(year: Int, month: Int, createIfNeeded: Bool = true) throws -> URL {
+        guard let root = selectedFolderURL else { throw ExportDestinationError.noSelection }
+        guard isAvailable else { throw ExportDestinationError.notAvailable }
+        guard isWritable else { throw ExportDestinationError.notWritable }
+        guard year > 0 else { throw ExportDestinationError.invalidYear }
+        guard (1...12).contains(month) else { throw ExportDestinationError.invalidMonth }
+
+        let yearComponent = String(year)
+        let monthComponent = String(format: "%02d", month)
+        let target = root.appendingPathComponent(yearComponent, isDirectory: true)
+            .appendingPathComponent(monthComponent, isDirectory: true)
+
+        // Guard against excessively long paths (PATH_MAX ~1024 on macOS)
+        if target.path.utf8.count >= 1000 { throw ExportDestinationError.pathTooLong }
+
+        let didStart = beginScopedAccess()
+        defer { if didStart { endScopedAccess() } }
+        guard didStart else { throw ExportDestinationError.scopeAccessDenied }
+
+        if createIfNeeded {
+            try ensureDirectoryExists(at: target)
+        } else {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: target.path, isDirectory: &isDir) {
+                if !isDir.boolValue { throw ExportDestinationError.notDirectory(target) }
+            }
+        }
+
+        return target
+    }
+
+    /// Ensures the directory exists at the given URL, creating with intermediates.
+    func ensureDirectoryExists(at url: URL) throws {
+        var isDir: ObjCBool = false
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
+            if !isDir.boolValue { throw ExportDestinationError.notDirectory(url) }
+            return
+        }
+        do {
+            try fm.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+            logger.info("Ensured directory: \(url.path, privacy: .public)")
+        } catch {
+            logger.error("Failed to create directory: \(url.path, privacy: .public) error: \(String(describing: error), privacy: .public)")
+            throw ExportDestinationError.failedToCreateFolder(url, underlying: error)
+        }
     }
 
     // MARK: - Internal Helpers

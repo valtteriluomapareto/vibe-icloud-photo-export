@@ -73,7 +73,7 @@ committed independently.
 - [ ] Implement a month view:
   - [ ] Display a grid of thumbnails for all assets in the month, filterable by
         media type.
-  - [ ] Provide a preview pane for the selected asset (large photo/video).
+  - [x] Provide a preview pane for the selected asset (large photo/video).
 - [ ] Implement filter controls:
   - [ ] Toggle to show only photos, only videos, or both.
 - [ ] Delineate which assets are new/unexported visually in the asset grid.

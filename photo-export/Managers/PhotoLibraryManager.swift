@@ -161,13 +161,28 @@ class PhotoLibraryManager: ObservableObject {
                 assets.append(fetchResult.object(at: index))
             }
 
-            // Yield to main thread periodically
+        	// Yield to main thread periodically
             if index % batchSize == 0 && index > 0 {
                 try? await Task.sleep(nanoseconds: 1_000_000)  // 1ms
             }
         }
 
         return assets
+    }
+
+    /// Fast count of assets in a given year/month without loading them into memory
+    func countAssets(year: Int, month: Int) throws -> Int {
+        guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+        let calendar = Calendar.current
+        var start = DateComponents(); start.year = year; start.month = month; start.day = 1
+        var end = DateComponents(); end.year = year; end.month = month + 1; end.day = 1
+        guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end) else {
+            throw PhotoLibraryError.fetchFailed
+        }
+        let opts = PHFetchOptions()
+        opts.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate, endDate as NSDate)
+        let result = PHAsset.fetchAssets(with: opts)
+        return result.count
     }
 
     /// Extract asset metadata into a structured format

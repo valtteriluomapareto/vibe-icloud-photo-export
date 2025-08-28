@@ -10,6 +10,17 @@ import Foundation
 import Photos
 import SwiftUI
 
+private struct ExportRecordStoreKey: EnvironmentKey {
+    static let defaultValue: ExportRecordStore? = nil
+}
+
+extension EnvironmentValues {
+    var exportRecordStore: ExportRecordStore? {
+        get { self[ExportRecordStoreKey.self] }
+        set { self[ExportRecordStoreKey.self] = newValue }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var photoLibraryManager = PhotoLibraryManager()
     @State private var isShowingAuthorizationView = false
@@ -17,6 +28,7 @@ struct ContentView: View {
         year: Calendar.current.component(.year, from: Date()),
         month: Calendar.current.component(.month, from: Date()))
     @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+    @Environment(\.exportRecordStore) private var exportRecordStore
 
     var body: some View {
         Group {
@@ -31,8 +43,21 @@ struct ContentView: View {
                         Section("Photos by Month") {
                             ForEach(2020...2025, id: \.self) { year in
                                 ForEach(1...12, id: \.self) { month in
-                                    Text("\(year) \(monthName(month))")
-                                        .tag(YearMonth(year: year, month: month))
+                                    MonthRow(
+                                        year: year,
+                                        month: month,
+                                        totalProvider: { [weak photoLibraryManager] in
+                                            guard let mgr = photoLibraryManager else { return 0 }
+                                            return (try? mgr.countAssets(year: year, month: month)) ?? 0
+                                        },
+                                        summaryProvider: { total in
+                                            if let store = exportRecordStore {
+                                                return store.monthSummary(year: year, month: month, totalAssets: total)
+                                            }
+                                            return MonthStatusSummary(year: year, month: month, exportedCount: 0, totalCount: total, status: .notExported)
+                                        }
+                                    )
+                                    .tag(YearMonth(year: year, month: month))
                                 }
                             }
                         }
@@ -195,6 +220,46 @@ struct AuthorizationView: View {
             _ = await photoLibraryManager.requestAuthorization()
             isRequestingAuthorization = false
         }
+    }
+}
+
+struct MonthRow: View {
+    let year: Int
+    let month: Int
+    let totalProvider: () -> Int
+    let summaryProvider: (_ total: Int) -> MonthStatusSummary
+
+    var body: some View {
+        let total = totalProvider()
+        let summary = summaryProvider(total)
+        return HStack(spacing: 8) {
+            Text("\(year) \(monthName(month))")
+            Spacer()
+            if total > 0 {
+                switch summary.status {
+                case .complete:
+                    Label("\(summary.exportedCount)/\(summary.totalCount)", systemImage: "checkmark.seal.fill")
+                        .foregroundColor(.green)
+                        .font(.caption)
+                case .partial:
+                    Label("\(summary.exportedCount)/\(summary.totalCount)", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                case .notExported:
+                    Label("0/\(summary.totalCount)", systemImage: "circle")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func monthName(_ month: Int) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMMM"
+        let date = Calendar.current.date(from: DateComponents(year: 2023, month: month))!
+        return dateFormatter.string(from: date)
     }
 }
 

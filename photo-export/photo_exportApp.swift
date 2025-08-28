@@ -16,6 +16,7 @@ struct photo_exportApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(exportDestinationManager)
+                .environment(\.exportRecordStore, exportRecordStore)
                 .task {
                     try? exportRecordStore.loadOnLaunch()
                 }

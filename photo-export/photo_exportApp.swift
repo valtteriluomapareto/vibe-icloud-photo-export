@@ -10,11 +10,15 @@ import SwiftUI
 @main
 struct photo_exportApp: App {
     @StateObject private var exportDestinationManager = ExportDestinationManager()
+    private let exportRecordStore = ExportRecordStore()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(exportDestinationManager)
+                .task {
+                    try? exportRecordStore.loadOnLaunch()
+                }
         }
     }
 }

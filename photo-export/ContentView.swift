@@ -16,12 +16,18 @@ struct ContentView: View {
     @State private var selectedYearMonth: YearMonth? = YearMonth(
         year: Calendar.current.component(.year, from: Date()),
         month: Calendar.current.component(.month, from: Date()))
+    @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
     var body: some View {
         Group {
             if photoLibraryManager.isAuthorized {
                 NavigationSplitView {
                     List(selection: $selectedYearMonth) {
+                        // Export destination selector
+                        Section("Export Destination") {
+                            exportDestinationSection
+                        }
+
                         Section("Photos by Month") {
                             ForEach(2020...2025, id: \.self) { year in
                                 ForEach(1...12, id: \.self) { month in
@@ -62,6 +68,48 @@ struct ContentView: View {
         let year: Int
         let month: Int
         var id: String { "\(year)-\(month)" }
+    }
+
+    // MARK: - Export Destination UI
+    private var exportDestinationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let url = exportDestinationManager.selectedFolderURL {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: exportDestinationManager.isAvailable && exportDestinationManager.isWritable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundColor(exportDestinationManager.isAvailable && exportDestinationManager.isWritable ? .green : .yellow)
+                    Text(truncatedPath(for: url.path))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(url.path)
+                }
+                if let message = exportDestinationManager.statusMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                HStack(spacing: 8) {
+                    Button("Change…") { exportDestinationManager.selectFolder() }
+                    Button("Reveal in Finder") { exportDestinationManager.revealInFinder() }
+                    Spacer()
+                    Button("Clear") { exportDestinationManager.clearSelection() }
+                        .foregroundColor(.red)
+                }
+            } else {
+                Text("No export folder selected")
+                    .foregroundColor(.secondary)
+                Button("Select Folder…") { exportDestinationManager.selectFolder() }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func truncatedPath(for path: String, maxLength: Int = 40) -> String {
+        guard path.count > maxLength else { return path }
+        let prefixCount = Int(Double(maxLength) * 0.6)
+        let suffixCount = maxLength - prefixCount - 1
+        let start = path.prefix(prefixCount)
+        let end = path.suffix(suffixCount)
+        return String(start) + "…" + String(end)
     }
 
     private func monthName(_ month: Int) -> String {

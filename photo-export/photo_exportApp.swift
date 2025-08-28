@@ -9,9 +9,12 @@ import SwiftUI
 
 @main
 struct photo_exportApp: App {
+    @StateObject private var exportDestinationManager = ExportDestinationManager()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(exportDestinationManager)
         }
     }
 }

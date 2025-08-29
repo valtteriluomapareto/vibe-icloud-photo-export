@@ -4,18 +4,19 @@ import Testing
 
 struct ExportRecordStoreTests {
     @Test func testLoadEmptyStore() throws {
-        let store = ExportRecordStore()
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
         try store.loadOnLaunch()
         #expect(store.recordsById.isEmpty)
     }
 
     @Test func testUpsertAndQuery() throws {
-        let store = ExportRecordStore()
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
         try store.loadOnLaunch()
         let id = "asset-1"
         store.markExported(assetId: id, year: 2025, month: 2, relPath: "2025/02/", filename: "IMG_0001.JPG", exportedAt: Date())
-        // allow IO queue to flush
-        usleep(50_000)
+        store.flushForTesting()
         #expect(store.isExported(assetId: id))
         let info = store.exportInfo(assetId: id)
         #expect(info?.filename == "IMG_0001.JPG")
@@ -24,12 +25,13 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testMonthSummary() throws {
-        let store = ExportRecordStore()
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
         try store.loadOnLaunch()
         store.markExported(assetId: "a1", year: 2025, month: 1, relPath: "2025/01/", filename: "A.jpg", exportedAt: Date())
         store.markExported(assetId: "a2", year: 2025, month: 1, relPath: "2025/01/", filename: "B.jpg", exportedAt: Date())
         store.markFailed(assetId: "a3", error: "disk full", at: Date()) // wrong year/month defaults
-        usleep(50_000)
+        store.flushForTesting()
         let s1 = store.monthSummary(year: 2025, month: 1, totalAssets: 5)
         #expect(s1.exportedCount == 2)
         #expect(s1.totalCount == 5)
@@ -40,13 +42,74 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testFailureUpsert() throws {
-        let store = ExportRecordStore()
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
         try store.loadOnLaunch()
         let id = "asset-fail"
         store.markFailed(assetId: id, error: "network", at: Date())
-        usleep(50_000)
+        store.flushForTesting()
         let info = store.exportInfo(assetId: id)
         #expect(info?.status == .failed)
         #expect(info?.lastError == "network")
+    }
+
+    @Test func testPersistenceAcrossLaunchesAndDeletion() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store1 = ExportRecordStore(baseDirectoryURL: tempDir)
+        try store1.loadOnLaunch()
+        store1.markInProgress(assetId: "x1", year: 2025, month: 3, relPath: "2025/03/", filename: nil)
+        store1.markExported(assetId: "x2", year: 2025, month: 3, relPath: "2025/03/", filename: "X2.jpg", exportedAt: Date())
+        store1.remove(assetId: "x1")
+        store1.flushForTesting()
+
+        // New instance, same directory
+        let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
+        try store2.loadOnLaunch()
+        #expect(store2.exportInfo(assetId: "x2")?.status == .done)
+        #expect(store2.exportInfo(assetId: "x1") == nil)
+    }
+
+    @Test func testInProgressToDoneTransition() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        try store.loadOnLaunch()
+        store.markInProgress(assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "tmp.mov")
+        store.flushForTesting()
+        #expect(store.exportInfo(assetId: "t1")?.status == .inProgress)
+        store.markExported(assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "final.mov", exportedAt: Date())
+        store.flushForTesting()
+        let rec = store.exportInfo(assetId: "t1")
+        #expect(rec?.status == .done)
+        #expect(rec?.filename == "final.mov")
+    }
+
+    @Test func testCorruptedLogLineIsSkipped() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        try store.loadOnLaunch()
+        store.markExported(assetId: "ok", year: 2025, month: 5, relPath: "2025/05/", filename: "OK.jpg", exportedAt: Date())
+        store.flushForTesting()
+        // Append an invalid line to the log
+        let logURL = tempDir.appendingPathComponent("export-records.jsonl")
+        let invalid = "{ this is not valid json }\n".data(using: .utf8)!
+        try invalid.append(to: logURL)
+
+        // Reload - invalid line should be skipped, valid records preserved
+        let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
+        try store2.loadOnLaunch()
+        #expect(store2.exportInfo(assetId: "ok")?.status == .done)
+    }
+}
+
+private extension Data {
+    func append(to url: URL) throws {
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: self)
+        try handle.synchronize()
     }
 }

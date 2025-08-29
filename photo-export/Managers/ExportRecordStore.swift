@@ -42,6 +42,14 @@ final class ExportRecordStore {
         createDirectoryIfNeeded(storeDir)
     }
 
+    // Test-only/init-injection: allow specifying a base directory for the store
+    init(baseDirectoryURL: URL) {
+        self.baseDirectoryURL = baseDirectoryURL
+        self.logFileURL = baseDirectoryURL.appendingPathComponent(Constants.logFileName)
+        self.snapshotFileURL = baseDirectoryURL.appendingPathComponent(Constants.snapshotFileName)
+        createDirectoryIfNeeded(baseDirectoryURL)
+    }
+
     // MARK: - Lifecycle
     func loadOnLaunch() throws {
         recordsById = [:]
@@ -49,7 +57,9 @@ final class ExportRecordStore {
         if fileManager.fileExists(atPath: snapshotFileURL.path) {
             do {
                 let data = try Data(contentsOf: snapshotFileURL)
-                let decoded = try JSONDecoder().decode([String: ExportRecord].self, from: data)
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let decoded = try decoder.decode([String: ExportRecord].self, from: data)
                 recordsById = decoded
             } catch {
                 logger.error("Failed to read snapshot: \(String(describing: error), privacy: .public)")
@@ -59,9 +69,11 @@ final class ExportRecordStore {
             do {
                 let handle = try FileHandle(forReadingFrom: logFileURL)
                 defer { try? handle.close() }
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
                 while let lineData = handle.readLineData() {
                     do {
-                        let mutation = try JSONDecoder().decode(ExportRecordMutation.self, from: lineData)
+                        let mutation = try decoder.decode(ExportRecordMutation.self, from: lineData)
                         apply(mutation)
                     } catch {
                         // Skip broken lines but log
@@ -180,6 +192,12 @@ final class ExportRecordStore {
                 logger.error("Failed to create store directory: \(String(describing: error), privacy: .public)")
             }
         }
+    }
+
+    // MARK: - Testing helpers
+    /// Blocks until all pending IO operations are flushed.
+    func flushForTesting() {
+        ioQueue.sync { }
     }
 }
 

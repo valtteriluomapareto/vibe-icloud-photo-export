@@ -4,7 +4,7 @@ A macOS app to back up the Apple Photos library to local or external storage, ex
 
 - App target: `photo-export`
 - Unit tests: `photo-exportTests`
-- UI tests: `photo-exportUITests`
+- UI tests: `photo-exportUITests` (currently skipped by default)
 - Shared scheme: `photo-export`
 
 See `IMPLEMENTATION_TASKS.md` for open work and `IMPLEMENTED_FEATURES.md` for completed features.
@@ -29,7 +29,7 @@ Optional:
 - `photo-exportUITests/` — UI tests
 - `SWIFT_SWIFTUI_BEST_PRACTICES.md` — Code style and patterns
 - `IMPLEMENTATION_TASKS.md` — Open tasks
-- `IMPLEMENTED_FEATURES.md` — Completed tasks
+- `IMPLEMENTED_FEATURES.md` — Completed features
 - `FUTURE_ENHANCEMENTS.md` — Non-MVP ideas
 
 ---
@@ -62,7 +62,7 @@ Notes:
 
 ## Run Tests from Command Line
 
-Run all tests (unit + UI tests) in the shared scheme:
+Run unit tests (UI tests are skipped by default in the shared scheme):
 
 ```bash
 xcodebuild \
@@ -72,29 +72,7 @@ xcodebuild \
   test
 ```
 
-Run only unit tests:
-
-```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -destination 'platform=macOS' \
-  -only-testing:photo-exportTests \
-  test
-```
-
-Run only UI tests:
-
-```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -destination 'platform=macOS' \
-  -only-testing:photo-exportUITests \
-  test
-```
-
-Run a single test case (example):
+Run a single unit test case (example):
 
 ```bash
 xcodebuild \
@@ -141,7 +119,7 @@ Then press Run in Xcode. Command-line launching of the built app is also possibl
 
 - Code signing: set to Automatic; no special provisioning is needed for local development.
 - Photos access denied: update permissions in System Settings; ensure app handles denial gracefully.
-- UI tests and permissions: UI tests that interact with Photos permissions may require manual approval the first time.
+- UI tests and permissions: UI tests are currently skipped by default in the shared scheme.
 - Schemes: list available schemes if needed:
 
 ```bash

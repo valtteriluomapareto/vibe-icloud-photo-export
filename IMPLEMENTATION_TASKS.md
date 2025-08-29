@@ -74,7 +74,7 @@ committed independently.
   - [ ] Display a grid of thumbnails for all assets in the month, filterable by
         media type.
   - [x] Provide a preview pane for the selected asset (large photo/video).
-  - [ ] Show unexported assets visually (uses `ExportRecordStore`).
+  - [x] Show unexported assets visually (uses `ExportRecordStore`).
 - [ ] Implement filter controls:
   - [ ] Toggle to show only photos, only videos, or both.
 - [ ] Delineate which assets are new/unexported visually in the asset grid.

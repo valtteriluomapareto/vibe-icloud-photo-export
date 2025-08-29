@@ -1,0 +1,52 @@
+# Swift & SwiftUI Best Practices — Swift 6 Compliance (Photo Export)
+
+Use alongside the full guide in [SWIFT_SWIFTUI_BEST_PRACTICES.md](mdc:SWIFT_SWIFTUI_BEST_PRACTICES.md). This rule highlights Swift 6–specific requirements and patterns enforced in this codebase.
+
+## Concurrency & Actor Isolation (Swift 6)
+- **Main actor isolation**
+  - Mark UI-facing types as `@MainActor` (e.g., `ViewModels`, UI-bound `Managers`).
+  - Mutate `@Published` properties only on the main actor. Do not change main-actor state from background queues.
+- **No `Task.detached` for UI work**
+  - Prefer structured `Task {}` scoped to the view or view model.
+  - Keep non-Sendable types (e.g., `NSImage`) within `@MainActor`-isolated code.
+- **Background work**
+  - For IO on background queues, prepare immutable inputs on the main actor, then perform file operations in a background closure.
+  - After background work, hop back with `Task { @MainActor in ... }` before mutating any main-actor state.
+- **Sendable hygiene**
+  - Avoid sending non-Sendable values across actors. Keep `NSImage`, `PHAsset`, etc., on the main actor boundary.
+
+## SwiftUI API Updates
+- **Use modern `.onChange(of:)`**
+  - Prefer the two-parameter closure `(old, new)` form where applicable.
+- **Prefer `.task(id:)`**
+  - Drive async loads with `.task(id:)` keyed by relevant inputs to coalesce and cancel automatically (e.g., `(year, month)` or counters that reflect dependent state).
+
+## Observable Stores & Live UI Updates
+- Stores that drive UI (e.g., export status) should be `@MainActor final class ...: ObservableObject` and expose a published change token (e.g., `@Published private(set) var mutationCounter`) to trigger SwiftUI updates, instead of manual environment keys.
+- Inject these stores via `.environmentObject(...)` and reference them as `@EnvironmentObject` in views for live summary updates.
+
+## Photos & File IO (Safety & Compliance)
+- **Security-scoped access**
+  - Open security scope when writing/moving files into the user-selected folder; close it after the operation.
+- **Atomic, collision-safe writes**
+  - Write to a temp file, then atomically move to the final URL. Ensure unique filenames; never overwrite.
+- **Timestamps**
+  - After moving, set creation/modification dates to the asset `creationDate` using `URLResourceValues` and `FileManager.setAttributes`.
+
+## Patterns to Avoid (Swift 6)
+- Mutating `@MainActor` properties from background closures (e.g., `DispatchQueue`, `ioQueue`).
+- Passing non-Sendable UI or AppKit types across actor boundaries.
+- Deprecated SwiftUI APIs without the Swift 6-compliant replacements.
+
+## Checklist (PR-ready)
+- Types that update UI (`ViewModels`, UI-bound managers) are `@MainActor`.
+- No `Task.detached` in views/view models.
+- Background IO does not mutate main-actor state directly; uses `Task { @MainActor ... }` for updates.
+- SwiftUI uses `.task(id:)` for async loads and the modern `.onChange` form.
+- Stores observed by views are `ObservableObject` and injected via `.environmentObject`.
+- Export writes occur under security-scoped access, with atomic move and unique filenames.
+- File timestamps match `PHAsset.creationDate` after export.
+description:
+globs:
+alwaysApply: true
+---

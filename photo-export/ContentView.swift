@@ -29,7 +29,7 @@ struct ContentView: View {
         year: Calendar.current.component(.year, from: Date()),
         month: Calendar.current.component(.month, from: Date()))
     @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-    @Environment(\.exportRecordStore) private var exportRecordStore
+    @EnvironmentObject private var exportRecordStore: ExportRecordStore
     @State private var years: [Int] = []
     @State private var expandedYears: Set<Int> = []
     @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
@@ -66,10 +66,7 @@ struct ContentView: View {
                                                 return (try? mgr.countAssets(year: year, month: month)) ?? 0
                                             },
                                             summaryProvider: { total in
-                                                if let store = exportRecordStore {
-                                                    return store.monthSummary(year: year, month: month, totalAssets: total)
-                                                }
-                                                return MonthStatusSummary(year: year, month: month, exportedCount: 0, totalCount: total, status: .notExported)
+                                                exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
                                             },
                                             exportAction: {
                                                 exportManager.startExportMonth(year: year, month: month)

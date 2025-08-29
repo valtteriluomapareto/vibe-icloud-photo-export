@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Combine
 
 /// Thread-safe-ish store using a serial IO queue for disk operations and in-memory map for queries.
 ///
@@ -7,7 +8,8 @@ import os
 /// - Mutations are appended to `export-records.jsonl` (one JSON object per line).
 /// - On launch, we fold the JSONL log into `recordsById` and optionally overlay a snapshot `export-records.json` if present.
 /// - After N mutations or at app termination, we compact into a canonical snapshot file and truncate the log.
-final class ExportRecordStore {
+@MainActor
+final class ExportRecordStore: ObservableObject {
     struct Constants {
         static let directoryName = "ExportRecords"
         static let logFileName = "export-records.jsonl"
@@ -20,6 +22,9 @@ final class ExportRecordStore {
 
     private(set) var recordsById: [String: ExportRecord] = [:]
     private var mutationCountSinceCompact: Int = 0
+
+    // Published bump used to notify SwiftUI of logical changes
+    @Published private(set) var mutationCounter: Int = 0
 
     private let fileManager = FileManager.default
     private let baseDirectoryURL: URL
@@ -85,6 +90,7 @@ final class ExportRecordStore {
             }
         }
         mutationCountSinceCompact = 0
+        mutationCounter &+= 1
     }
 
     // MARK: - Public API (mutations)
@@ -145,19 +151,50 @@ final class ExportRecordStore {
     // MARK: - Internals
     private func append(_ mutation: ExportRecordMutation) {
         apply(mutation)
-        ioQueue.async { [self] in
+        // Notify observers immediately on logical change
+        mutationCounter &+= 1
+
+        // Prepare data for log write off the main actor
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let logURL = self.logFileURL
+        let snapshotURL = self.snapshotFileURL
+        let currentRecords = self.recordsById
+        let mutationData: Data
+        do { mutationData = try encoder.encode(mutation) } catch {
+            logger.error("Failed to encode mutation: \(String(describing: error), privacy: .public)")
+            return
+        }
+
+        ioQueue.async { [weak self] in
+            guard let self else { return }
             do {
-                let encoder = JSONEncoder()
-                encoder.dateEncodingStrategy = .iso8601
-                let data = try encoder.encode(mutation)
-                try appendLine(data: data, to: logFileURL)
-                mutationCountSinceCompact += 1
-                if mutationCountSinceCompact >= Constants.compactEveryNMutations {
-                    try compactSnapshot()
-                    mutationCountSinceCompact = 0
-                }
+                try appendLine(data: mutationData, to: logURL)
             } catch {
-                logger.error("Failed to persist mutation: \(String(describing: error), privacy: .public)")
+                self.logger.error("Failed to persist mutation: \(String(describing: error), privacy: .public)")
+            }
+            // After log write, update counters on main actor and possibly compact
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.mutationCountSinceCompact += 1
+                if self.mutationCountSinceCompact >= Constants.compactEveryNMutations {
+                    self.mutationCountSinceCompact = 0
+                    do {
+                        let snapshotData = try encoder.encode(currentRecords)
+                        let snapURL = snapshotURL
+                        let logFile = logURL
+                        self.ioQueue.async { [weak self] in
+                            guard let self else { return }
+                            do {
+                                try writeSnapshotAndTruncate(snapshotData: snapshotData, snapshotFileURL: snapURL, logFileURL: logFile)
+                            } catch {
+                                self.logger.error("Failed to compact snapshot: \(String(describing: error), privacy: .public)")
+                            }
+                        }
+                    } catch {
+                        self.logger.error("Failed to encode snapshot: \(String(describing: error), privacy: .public)")
+                    }
+                }
             }
         }
     }
@@ -169,21 +206,6 @@ final class ExportRecordStore {
         case .delete:
             recordsById.removeValue(forKey: mutation.id)
         }
-    }
-
-    private func compactSnapshot() throws {
-        let tmpURL = snapshotFileURL.appendingPathExtension("tmp")
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(recordsById)
-        try data.write(to: tmpURL, options: .atomic)
-        // Replace snapshot
-        if fileManager.fileExists(atPath: snapshotFileURL.path) {
-            try fileManager.removeItem(at: snapshotFileURL)
-        }
-        try fileManager.moveItem(at: tmpURL, to: snapshotFileURL)
-        // Truncate log
-        try Data().write(to: logFileURL, options: .atomic)
     }
 
     private func createDirectoryIfNeeded(_ url: URL) {
@@ -199,6 +221,18 @@ final class ExportRecordStore {
     func flushForTesting() {
         ioQueue.sync { }
     }
+}
+
+// Non-actor helper to write snapshot and truncate log safely
+private func writeSnapshotAndTruncate(snapshotData: Data, snapshotFileURL: URL, logFileURL: URL) throws {
+    let fileManager = FileManager.default
+    let tmpURL = snapshotFileURL.appendingPathExtension("tmp")
+    try snapshotData.write(to: tmpURL, options: .atomic)
+    if fileManager.fileExists(atPath: snapshotFileURL.path) {
+        try fileManager.removeItem(at: snapshotFileURL)
+    }
+    try fileManager.moveItem(at: tmpURL, to: snapshotFileURL)
+    try Data().write(to: logFileURL, options: .atomic)
 }
 
 // MARK: - FileHandle line reading

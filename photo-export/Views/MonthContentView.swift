@@ -4,7 +4,7 @@ import Photos
 
 struct MonthContentView: View {
     @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-    @Environment(\.exportRecordStore) private var exportRecordStore
+    @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
     @StateObject private var viewModel: MonthViewModel
 
@@ -44,7 +44,7 @@ struct MonthContentView: View {
                             asset: asset,
                             thumbnail: thumb,
                             isSelected: asset.localIdentifier == selectedAsset?.localIdentifier,
-                            isExported: exportRecordStore?.isExported(assetId: asset.localIdentifier) ?? true
+                            isExported: exportRecordStore.isExported(assetId: asset.localIdentifier)
                         )
                         .frame(width: 120, height: 120)
                         .onTapGesture {
@@ -58,7 +58,7 @@ struct MonthContentView: View {
         }
         .padding(.horizontal)
         .overlay(overlayViews)
-        .task(id: "\(year)-\(month)") {
+        .task(id: "\(year)-\(month)-\(exportRecordStore.mutationCounter)") {
             await viewModel.loadAssets(forYear: year, month: month)
             if selectedAsset == nil, let id = viewModel.selectedAssetId, let asset = viewModel.assets.first(where: { $0.localIdentifier == id }) {
                 selectedAsset = asset
@@ -94,8 +94,7 @@ struct MonthContentView: View {
     private var exportSummaryView: some View {
         let total: Int = viewModel.assets.count
         let summary: MonthStatusSummary? = {
-            guard let store = exportRecordStore else { return nil }
-            return store.monthSummary(year: year, month: month, totalAssets: total)
+            return exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
         }()
         return HStack(spacing: 8) {
             if let summary {

@@ -31,7 +31,7 @@ struct photo_exportApp: App {
                 .environmentObject(exportDestinationManager)
                 .environmentObject(photoLibraryManager)
                 .environmentObject(exportManager)
-                .environment(\.exportRecordStore, exportRecordStore)
+                .environmentObject(exportRecordStore)
                 .task {
                     try? exportRecordStore.loadOnLaunch()
                 }

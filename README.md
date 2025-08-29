@@ -58,6 +58,24 @@ Notes:
 - Use `-configuration Release` for release builds.
 - On Apple Silicon, you can be explicit with `-destination 'platform=macOS,arch=arm64'`.
 
+### Standalone Release build (runnable outside Xcode)
+
+```bash
+# Build a Release app bundle to ./build
+xcodebuild \
+  -project photo-export.xcodeproj \
+  -scheme "photo-export" \
+  -configuration Release \
+  -destination 'platform=macOS' \
+  -derivedDataPath build \
+  clean build
+
+# Launch the built app (no Xcode needed)
+open build/Build/Products/Release/photo-export.app
+```
+
+> To distribute to other Macs, sign with Developer ID and notarize. See `PUBLIC_DEPLOYMENT_PLAN.md`.
+
 ---
 
 ## Run Tests from Command Line

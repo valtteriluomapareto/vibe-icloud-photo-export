@@ -135,6 +135,11 @@ final class ExportManager: ObservableObject {
             // Atomic move to final location
             try moveItem(from: tempURL, to: finalURL)
 
+            // Apply timestamps based on asset creation date
+            if let createdAt = asset.creationDate {
+                applyTimestamps(creationDate: createdAt, to: finalURL)
+            }
+
             exportRecordStore.markExported(assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date())
             logger.info("Exported \(finalURL.lastPathComponent, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)")
         } catch {
@@ -194,5 +199,26 @@ final class ExportManager: ObservableObject {
         // Ensure parent exists
         try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.moveItem(at: src, to: dst)
+    }
+
+    private func applyTimestamps(creationDate: Date, to url: URL) {
+        // Best effort: set both creation and modification dates via URLResourceValues and FileManager
+        do {
+            var values = URLResourceValues()
+            values.creationDate = creationDate
+            values.contentModificationDate = creationDate
+            var mutableURL = url
+            try mutableURL.setResourceValues(values)
+        } catch {
+            logger.error("Failed setting URLResourceValues timestamps: \(error.localizedDescription, privacy: .public)")
+        }
+        do {
+            try FileManager.default.setAttributes([
+                .creationDate: creationDate,
+                .modificationDate: creationDate
+            ], ofItemAtPath: url.path)
+        } catch {
+            logger.error("Failed setting FileManager attributes timestamps: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

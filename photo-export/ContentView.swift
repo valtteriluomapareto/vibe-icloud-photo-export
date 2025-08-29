@@ -31,6 +31,7 @@ struct ContentView: View {
     @Environment(\.exportRecordStore) private var exportRecordStore
     @State private var years: [Int] = []
     @State private var expandedYears: Set<Int> = []
+    @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
 
     var body: some View {
         Group {
@@ -52,7 +53,7 @@ struct ContentView: View {
                                         }
                                     )
                                 ) {
-                                    ForEach(1...12, id: \.self) { month in
+                                    ForEach(monthsWithAssetsByYear[year] ?? [], id: \.self) { month in
                                         MonthRow(
                                             year: year,
                                             month: month,
@@ -101,6 +102,7 @@ struct ContentView: View {
                 years = (try? photoLibraryManager.availableYears()) ?? []
                 if let selected = selectedYearMonth {
                     expandedYears.insert(selected.year)
+                    monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(for: selected.year)
                 }
             }
         }
@@ -109,10 +111,18 @@ struct ContentView: View {
                 years = (try? photoLibraryManager.availableYears()) ?? []
                 if let selected = selectedYearMonth {
                     expandedYears.insert(selected.year)
+                    monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(for: selected.year)
                 }
             } else {
                 years = []
                 expandedYears.removeAll()
+                monthsWithAssetsByYear.removeAll()
+            }
+        }
+        .onChange(of: expandedYears) { _ in
+            // Lazy compute months for newly expanded years
+            for year in expandedYears where monthsWithAssetsByYear[year] == nil {
+                monthsWithAssetsByYear[year] = computeMonthsWithAssets(for: year)
             }
         }
         .frame(minWidth: 900, minHeight: 600)
@@ -179,6 +189,12 @@ struct ContentView: View {
             return dateFormatter.string(from: date)
         }
         return "\(month)"
+    }
+
+    private func computeMonthsWithAssets(for year: Int) -> [Int] {
+        (1...12).filter { month in
+            ((try? photoLibraryManager.countAssets(year: year, month: month)) ?? 0) > 0
+        }
     }
 }
 

@@ -118,6 +118,18 @@ final class ExportManager: ObservableObject {
 
             exportRecordStore.markInProgress(assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath, filename: finalURL.lastPathComponent)
 
+            // Ensure security-scoped access for destination during write and move
+            let didStart = exportDestinationManager.beginScopedAccess()
+            defer { if didStart { exportDestinationManager.endScopedAccess() } }
+            guard didStart else {
+                throw NSError(domain: "Export", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"])
+            }
+
+            // Clean up any stale temp file at destination
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                try? FileManager.default.removeItem(at: tempURL)
+            }
+
             try await writeResource(resource, to: tempURL)
 
             // Atomic move to final location
@@ -165,6 +177,7 @@ final class ExportManager: ObservableObject {
         return try await withCheckedThrowingContinuation { continuation in
             let options = PHAssetResourceRequestOptions()
             options.isNetworkAccessAllowed = true
+            // Write directly to the provided URL
             PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
                 if let error { continuation.resume(throwing: error) }
                 else { continuation.resume(returning: ()) }
@@ -178,6 +191,8 @@ final class ExportManager: ObservableObject {
             // Should not happen due to uniqueFileURL, but double-check
             throw NSError(domain: "Export", code: 2, userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
         }
+        // Ensure parent exists
+        try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.moveItem(at: src, to: dst)
     }
 }

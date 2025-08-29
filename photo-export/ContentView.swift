@@ -40,67 +40,81 @@ struct ContentView: View {
     var body: some View {
         Group {
             if photoLibraryManager.isAuthorized {
-                NavigationSplitView(sidebar: {
-                    List(selection: $selectedYearMonth) {
-                        // Export destination selector
-                        Section("Export Destination") {
-                            exportDestinationSection
-                        }
+                NavigationSplitView(
+                    sidebar: {
+                        List(selection: $selectedYearMonth) {
+                            // Export destination selector
+                            Section("Export Destination") {
+                                exportDestinationSection
+                            }
 
-                        Section("Photos by Year") {
-                            ForEach(years, id: \.self) { year in
-                                DisclosureGroup(
-                                    isExpanded: Binding(
-                                        get: { expandedYears.contains(year) },
-                                        set: { newValue in
-                                            if newValue { expandedYears.insert(year) } else { expandedYears.remove(year) }
-                                        }
-                                    )
-                                ) {
-                                    ForEach(monthsWithAssetsByYear[year] ?? [], id: \.self) { month in
-                                        MonthRow(
-                                            year: year,
-                                            month: month,
-                                            totalProvider: { [weak photoLibraryManager] in
-                                                guard let mgr = photoLibraryManager else { return 0 }
-                                                return (try? mgr.countAssets(year: year, month: month)) ?? 0
-                                            },
-                                            summaryProvider: { total in
-                                                exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
-                                            },
-                                            exportAction: {
-                                                exportManager.startExportMonth(year: year, month: month)
-                                            },
-                                            canExportNow: exportDestinationManager.canExportNow
+                            Section("Photos by Year") {
+                                ForEach(years, id: \.self) { year in
+                                    DisclosureGroup(
+                                        isExpanded: Binding(
+                                            get: { expandedYears.contains(year) },
+                                            set: { newValue in
+                                                if newValue {
+                                                    expandedYears.insert(year)
+                                                } else {
+                                                    expandedYears.remove(year)
+                                                }
+                                            }
                                         )
-                                        .tag(YearMonth(year: year, month: month))
+                                    ) {
+                                        ForEach(monthsWithAssetsByYear[year] ?? [], id: \.self) {
+                                            month in
+                                            MonthRow(
+                                                year: year,
+                                                month: month,
+                                                totalProvider: { [weak photoLibraryManager] in
+                                                    guard let mgr = photoLibraryManager else {
+                                                        return 0
+                                                    }
+                                                    return
+                                                        (try? mgr.countAssets(
+                                                            year: year, month: month)) ?? 0
+                                                },
+                                                exportAction: {
+                                                    exportManager.startExportMonth(
+                                                        year: year, month: month)
+                                                },
+                                                canExportNow: exportDestinationManager.canExportNow
+                                            )
+                                            .tag(YearMonth(year: year, month: month))
+                                        }
+                                    } label: {
+                                        Text(verbatim: String(year))
                                     }
-                                } label: {
-                                    Text(verbatim: String(year))
                                 }
                             }
                         }
-                    }
-                    .navigationTitle("Photo Export")
-                }, content: {
-                    if let selected = selectedYearMonth {
-                        MonthContentView(year: selected.year, month: selected.month, selectedAsset: $selectedAsset, photoLibraryManager: photoLibraryManager)
+                        .navigationTitle("Photo Export")
+                    },
+                    content: {
+                        if let selected = selectedYearMonth {
+                            MonthContentView(
+                                year: selected.year, month: selected.month,
+                                selectedAsset: $selectedAsset,
+                                photoLibraryManager: photoLibraryManager
+                            )
                             .environmentObject(photoLibraryManager)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        VStack {
-                            Spacer()
-                            Text("Select a month")
-                                .foregroundColor(.gray)
-                            Spacer()
+                        } else {
+                            VStack {
+                                Spacer()
+                                Text("Select a month")
+                                    .foregroundColor(.gray)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }, detail: {
-                    AssetDetailView(asset: selectedAsset)
-                        .environmentObject(photoLibraryManager)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                })
+                    },
+                    detail: {
+                        AssetDetailView(asset: selectedAsset)
+                            .environmentObject(photoLibraryManager)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    })
             } else {
                 AuthorizationView(photoLibraryManager: photoLibraryManager)
             }
@@ -111,7 +125,8 @@ struct ContentView: View {
                 years = (try? photoLibraryManager.availableYears()) ?? []
                 if let selected = selectedYearMonth {
                     expandedYears.insert(selected.year)
-                    monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(for: selected.year)
+                    monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(
+                        for: selected.year)
                 }
             }
         }
@@ -120,7 +135,8 @@ struct ContentView: View {
                 years = (try? photoLibraryManager.availableYears()) ?? []
                 if let selected = selectedYearMonth {
                     expandedYears.insert(selected.year)
-                    monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(for: selected.year)
+                    monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(
+                        for: selected.year)
                 }
             } else {
                 years = []
@@ -153,8 +169,14 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let url = exportDestinationManager.selectedFolderURL {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: exportDestinationManager.isAvailable && exportDestinationManager.isWritable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundColor(exportDestinationManager.isAvailable && exportDestinationManager.isWritable ? .green : .yellow)
+                    Image(
+                        systemName: exportDestinationManager.isAvailable
+                            && exportDestinationManager.isWritable
+                            ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    )
+                    .foregroundColor(
+                        exportDestinationManager.isAvailable && exportDestinationManager.isWritable
+                            ? .green : .yellow)
                     Text(truncatedPath(for: url.path))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -167,8 +189,12 @@ struct ContentView: View {
                 }
                 // Export queue status
                 HStack(spacing: 6) {
-                    Label("Queue: \(exportManager.queueCount)", systemImage: exportManager.isRunning ? "arrow.triangle.2.circlepath" : "tray.and.arrow.down")
-                        .foregroundColor(exportManager.isRunning ? .orange : .secondary)
+                    Label(
+                        "Queue: \(exportManager.queueCount)",
+                        systemImage: exportManager.isRunning
+                            ? "arrow.triangle.2.circlepath" : "tray.and.arrow.down"
+                    )
+                    .foregroundColor(exportManager.isRunning ? .orange : .secondary)
                     Spacer()
                     if exportManager.isRunning { ProgressView().scaleEffect(0.6) }
                 }
@@ -293,30 +319,36 @@ struct AuthorizationView: View {
 
 struct MonthRow: View {
     @EnvironmentObject private var exportManager: ExportManager
+    @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
     let year: Int
     let month: Int
     let totalProvider: () -> Int
-    let summaryProvider: (_ total: Int) -> MonthStatusSummary
     let exportAction: () -> Void
     let canExportNow: Bool
 
     var body: some View {
         let total = totalProvider()
-        let summary = summaryProvider(total)
+        let summary = exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
         return HStack(spacing: 8) {
             Text("\(String(year)) \(monthName(month))")
             Spacer()
             if total > 0 {
                 switch summary.status {
                 case .complete:
-                    Label("\(summary.exportedCount)/\(summary.totalCount)", systemImage: "checkmark.seal.fill")
-                        .foregroundColor(.green)
-                        .font(.caption)
+                    Label(
+                        "\(summary.exportedCount)/\(summary.totalCount)",
+                        systemImage: "checkmark.seal.fill"
+                    )
+                    .foregroundColor(.green)
+                    .font(.caption)
                 case .partial:
-                    Label("\(summary.exportedCount)/\(summary.totalCount)", systemImage: "arrow.triangle.2.circlepath")
-                        .foregroundColor(.orange)
-                        .font(.caption)
+                    Label(
+                        "\(summary.exportedCount)/\(summary.totalCount)",
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                    .foregroundColor(.orange)
+                    .font(.caption)
                 case .notExported:
                     Label("0/\(summary.totalCount)", systemImage: "circle")
                         .foregroundColor(.secondary)
@@ -325,7 +357,10 @@ struct MonthRow: View {
                 Button("Export") { exportAction() }
                     .buttonStyle(.bordered)
                     .disabled(!canExportNow)
-                    .help(canExportNow ? "Export this month to selected folder" : "Select a writable export folder first")
+                    .help(
+                        canExportNow
+                            ? "Export this month to selected folder"
+                            : "Select a writable export folder first")
             }
         }
         .contentShape(Rectangle())

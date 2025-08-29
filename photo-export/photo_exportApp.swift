@@ -11,7 +11,7 @@ import SwiftUI
 struct photo_exportApp: App {
     @StateObject private var exportDestinationManager: ExportDestinationManager
     @StateObject private var photoLibraryManager: PhotoLibraryManager
-    private let exportRecordStore: ExportRecordStore
+    @StateObject private var exportRecordStore: ExportRecordStore
     @StateObject private var exportManager: ExportManager
 
     init() {
@@ -19,10 +19,12 @@ struct photo_exportApp: App {
         let edm = ExportDestinationManager()
         let plm = PhotoLibraryManager()
         let ers = ExportRecordStore()
-        self.exportRecordStore = ers
         _exportDestinationManager = StateObject(wrappedValue: edm)
         _photoLibraryManager = StateObject(wrappedValue: plm)
-        _exportManager = StateObject(wrappedValue: ExportManager(photoLibraryManager: plm, exportDestinationManager: edm, exportRecordStore: ers))
+        _exportRecordStore = StateObject(wrappedValue: ers)
+        _exportManager = StateObject(
+            wrappedValue: ExportManager(
+                photoLibraryManager: plm, exportDestinationManager: edm, exportRecordStore: ers))
     }
 
     var body: some Scene {
@@ -33,7 +35,13 @@ struct photo_exportApp: App {
                 .environmentObject(exportManager)
                 .environmentObject(exportRecordStore)
                 .task {
-                    try? exportRecordStore.loadOnLaunch()
+                    // Configure store for current destination (if any) at launch
+                    exportRecordStore.configure(for: exportDestinationManager.destinationId)
+                }
+                .onChange(of: exportDestinationManager.destinationId) { _, newId in
+                    // Cancel any in-flight exports and reconfigure the per-destination store
+                    exportManager.cancelAndClear()
+                    exportRecordStore.configure(for: newId)
                 }
         }
     }

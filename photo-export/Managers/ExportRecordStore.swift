@@ -1,12 +1,12 @@
+import Combine
 import Foundation
 import os
-import Combine
 
 /// Thread-safe-ish store using a serial IO queue for disk operations and in-memory map for queries.
 ///
 /// Persistence design:
-/// - Mutations are appended to `export-records.jsonl` (one JSON object per line).
-/// - On launch, we fold the JSONL log into `recordsById` and optionally overlay a snapshot `export-records.json` if present.
+/// - Mutations are appended to `export-records.jsonl` (one JSON object per line) under a destination-specific directory.
+/// - On configure/load, we fold the JSONL log into `recordsById` and optionally overlay a snapshot `export-records.json` if present.
 /// - After N mutations or at app termination, we compact into a canonical snapshot file and truncate the log.
 @MainActor
 final class ExportRecordStore: ObservableObject {
@@ -17,8 +17,10 @@ final class ExportRecordStore: ObservableObject {
         static let compactEveryNMutations = 1000
     }
 
-    private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "ExportRecords")
-    private let ioQueue = DispatchQueue(label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
+    private let logger = Logger(
+        subsystem: "com.valtteriluoma.photo-export", category: "ExportRecords")
+    private let ioQueue = DispatchQueue(
+        label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
 
     private(set) var recordsById: [String: ExportRecord] = [:]
     private var mutationCountSinceCompact: Int = 0
@@ -27,9 +29,15 @@ final class ExportRecordStore: ObservableObject {
     @Published private(set) var mutationCounter: Int = 0
 
     private let fileManager = FileManager.default
-    private let baseDirectoryURL: URL
-    private let logFileURL: URL
-    private let snapshotFileURL: URL
+    private let storeRootURL: URL
+    private var currentStoreDirURL: URL?
+
+    private var logFileURL: URL? {
+        currentStoreDirURL?.appendingPathComponent(Constants.logFileName)
+    }
+    private var snapshotFileURL: URL? {
+        currentStoreDirURL?.appendingPathComponent(Constants.snapshotFileName)
+    }
 
     init() {
         let appSupport = try! fileManager.url(
@@ -41,38 +49,57 @@ final class ExportRecordStore: ObservableObject {
         let bundleId = Bundle.main.bundleIdentifier ?? "com.valtteriluoma.photo-export"
         let root = appSupport.appendingPathComponent(bundleId, isDirectory: true)
         let storeDir = root.appendingPathComponent(Constants.directoryName, isDirectory: true)
-        self.baseDirectoryURL = storeDir
-        self.logFileURL = storeDir.appendingPathComponent(Constants.logFileName)
-        self.snapshotFileURL = storeDir.appendingPathComponent(Constants.snapshotFileName)
+        self.storeRootURL = storeDir
         createDirectoryIfNeeded(storeDir)
     }
 
-    // Test-only/init-injection: allow specifying a base directory for the store
+    // Test-only/init-injection: allow specifying a base directory for the store root
     init(baseDirectoryURL: URL) {
-        self.baseDirectoryURL = baseDirectoryURL
-        self.logFileURL = baseDirectoryURL.appendingPathComponent(Constants.logFileName)
-        self.snapshotFileURL = baseDirectoryURL.appendingPathComponent(Constants.snapshotFileName)
+        self.storeRootURL = baseDirectoryURL
         createDirectoryIfNeeded(baseDirectoryURL)
     }
 
-    // MARK: - Lifecycle
-    func loadOnLaunch() throws {
+    // MARK: - Destination configuration
+    /// Points the store at a specific destination id (subdirectory). Passing nil clears state (shows empty).
+    func configure(for destinationId: String?) {
+        // Reset in-memory state
+        recordsById = [:]
+        mutationCountSinceCompact = 0
+
+        guard let destinationId else {
+            currentStoreDirURL = nil
+            mutationCounter &+= 1
+            return
+        }
+
+        let dir = storeRootURL.appendingPathComponent(destinationId, isDirectory: true)
+        createDirectoryIfNeeded(dir)
+        currentStoreDirURL = dir
+
+        // Load snapshot and log from the current directory
+        loadFromCurrentDirectory()
+        mutationCounter &+= 1
+    }
+
+    private func loadFromCurrentDirectory() {
+        guard let snapshotURL = snapshotFileURL, let logURL = logFileURL else { return }
         recordsById = [:]
         // Prefer snapshot if available, then apply log mutations after
-        if fileManager.fileExists(atPath: snapshotFileURL.path) {
+        if fileManager.fileExists(atPath: snapshotURL.path) {
             do {
-                let data = try Data(contentsOf: snapshotFileURL)
+                let data = try Data(contentsOf: snapshotURL)
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 let decoded = try decoder.decode([String: ExportRecord].self, from: data)
                 recordsById = decoded
             } catch {
-                logger.error("Failed to read snapshot: \(String(describing: error), privacy: .public)")
+                logger.error(
+                    "Failed to read snapshot: \(String(describing: error), privacy: .public)")
             }
         }
-        if fileManager.fileExists(atPath: logFileURL.path) {
+        if fileManager.fileExists(atPath: logURL.path) {
             do {
-                let handle = try FileHandle(forReadingFrom: logFileURL)
+                let handle = try FileHandle(forReadingFrom: logURL)
                 defer { try? handle.close() }
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
@@ -82,20 +109,27 @@ final class ExportRecordStore: ObservableObject {
                         apply(mutation)
                     } catch {
                         // Skip broken lines but log
-                        logger.error("Failed to decode mutation line: \(String(describing: error), privacy: .public)")
+                        logger.error(
+                            "Failed to decode mutation line: \(String(describing: error), privacy: .public)"
+                        )
                     }
                 }
             } catch {
-                logger.error("Failed to read log file: \(String(describing: error), privacy: .public)")
+                logger.error(
+                    "Failed to read log file: \(String(describing: error), privacy: .public)")
             }
         }
-        mutationCountSinceCompact = 0
-        mutationCounter &+= 1
     }
 
     // MARK: - Public API (mutations)
-    func markExported(assetId: String, year: Int, month: Int, relPath: String, filename: String, exportedAt: Date) {
-        var record = recordsById[assetId] ?? ExportRecord(id: assetId, year: year, month: month, relPath: relPath, filename: nil, status: .pending, exportDate: nil, lastError: nil)
+    func markExported(
+        assetId: String, year: Int, month: Int, relPath: String, filename: String, exportedAt: Date
+    ) {
+        var record =
+            recordsById[assetId]
+            ?? ExportRecord(
+                id: assetId, year: year, month: month, relPath: relPath, filename: nil,
+                status: .pending, exportDate: nil, lastError: nil)
         record.year = year
         record.month = month
         record.relPath = relPath
@@ -107,15 +141,24 @@ final class ExportRecordStore: ObservableObject {
     }
 
     func markFailed(assetId: String, error: String, at date: Date) {
-        var record = recordsById[assetId] ?? ExportRecord(id: assetId, year: 0, month: 0, relPath: "", filename: nil, status: .pending, exportDate: nil, lastError: nil)
+        var record =
+            recordsById[assetId]
+            ?? ExportRecord(
+                id: assetId, year: 0, month: 0, relPath: "", filename: nil, status: .pending,
+                exportDate: nil, lastError: nil)
         record.status = .failed
         record.exportDate = date
         record.lastError = error
         append(.upsert(record))
     }
 
-    func markInProgress(assetId: String, year: Int, month: Int, relPath: String, filename: String?) {
-        var record = recordsById[assetId] ?? ExportRecord(id: assetId, year: year, month: month, relPath: relPath, filename: filename, status: .pending, exportDate: nil, lastError: nil)
+    func markInProgress(assetId: String, year: Int, month: Int, relPath: String, filename: String?)
+    {
+        var record =
+            recordsById[assetId]
+            ?? ExportRecord(
+                id: assetId, year: year, month: month, relPath: relPath, filename: filename,
+                status: .pending, exportDate: nil, lastError: nil)
         record.year = year
         record.month = month
         record.relPath = relPath
@@ -142,10 +185,16 @@ final class ExportRecordStore: ObservableObject {
             partial + ((rec.year == year && rec.month == month && rec.status == .done) ? 1 : 0)
         }
         let status: MonthExportStatus
-        if exportedCount == 0 { status = .notExported }
-        else if exportedCount < totalAssets { status = .partial }
-        else { status = .complete }
-        return MonthStatusSummary(year: year, month: month, exportedCount: exportedCount, totalCount: totalAssets, status: status)
+        if exportedCount == 0 {
+            status = .notExported
+        } else if exportedCount < totalAssets {
+            status = .partial
+        } else {
+            status = .complete
+        }
+        return MonthStatusSummary(
+            year: year, month: month, exportedCount: exportedCount, totalCount: totalAssets,
+            status: status)
     }
 
     // MARK: - Internals
@@ -154,15 +203,17 @@ final class ExportRecordStore: ObservableObject {
         // Notify observers immediately on logical change
         mutationCounter &+= 1
 
+        // If not configured to any destination, do not persist
+        guard let logURL = self.logFileURL, let snapshotURL = self.snapshotFileURL else { return }
+
         // Prepare data for log write off the main actor
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let logURL = self.logFileURL
-        let snapshotURL = self.snapshotFileURL
         let currentRecords = self.recordsById
         let mutationData: Data
         do { mutationData = try encoder.encode(mutation) } catch {
-            logger.error("Failed to encode mutation: \(String(describing: error), privacy: .public)")
+            logger.error(
+                "Failed to encode mutation: \(String(describing: error), privacy: .public)")
             return
         }
 
@@ -171,7 +222,8 @@ final class ExportRecordStore: ObservableObject {
             do {
                 try appendLine(data: mutationData, to: logURL)
             } catch {
-                self.logger.error("Failed to persist mutation: \(String(describing: error), privacy: .public)")
+                self.logger.error(
+                    "Failed to persist mutation: \(String(describing: error), privacy: .public)")
             }
             // After log write, update counters on main actor and possibly compact
             Task { @MainActor [weak self] in
@@ -186,13 +238,19 @@ final class ExportRecordStore: ObservableObject {
                         self.ioQueue.async { [weak self] in
                             guard let self else { return }
                             do {
-                                try writeSnapshotAndTruncate(snapshotData: snapshotData, snapshotFileURL: snapURL, logFileURL: logFile)
+                                try writeSnapshotAndTruncate(
+                                    snapshotData: snapshotData, snapshotFileURL: snapURL,
+                                    logFileURL: logFile)
                             } catch {
-                                self.logger.error("Failed to compact snapshot: \(String(describing: error), privacy: .public)")
+                                self.logger.error(
+                                    "Failed to compact snapshot: \(String(describing: error), privacy: .public)"
+                                )
                             }
                         }
                     } catch {
-                        self.logger.error("Failed to encode snapshot: \(String(describing: error), privacy: .public)")
+                        self.logger.error(
+                            "Failed to encode snapshot: \(String(describing: error), privacy: .public)"
+                        )
                     }
                 }
             }
@@ -210,8 +268,11 @@ final class ExportRecordStore: ObservableObject {
 
     private func createDirectoryIfNeeded(_ url: URL) {
         if !fileManager.fileExists(atPath: url.path) {
-            do { try fileManager.createDirectory(at: url, withIntermediateDirectories: true) } catch {
-                logger.error("Failed to create store directory: \(String(describing: error), privacy: .public)")
+            do { try fileManager.createDirectory(at: url, withIntermediateDirectories: true) } catch
+            {
+                logger.error(
+                    "Failed to create store directory: \(String(describing: error), privacy: .public)"
+                )
             }
         }
     }
@@ -219,12 +280,14 @@ final class ExportRecordStore: ObservableObject {
     // MARK: - Testing helpers
     /// Blocks until all pending IO operations are flushed.
     func flushForTesting() {
-        ioQueue.sync { }
+        ioQueue.sync {}
     }
 }
 
 // Non-actor helper to write snapshot and truncate log safely
-private func writeSnapshotAndTruncate(snapshotData: Data, snapshotFileURL: URL, logFileURL: URL) throws {
+private func writeSnapshotAndTruncate(snapshotData: Data, snapshotFileURL: URL, logFileURL: URL)
+    throws
+{
     let fileManager = FileManager.default
     let tmpURL = snapshotFileURL.appendingPathExtension("tmp")
     try snapshotData.write(to: tmpURL, options: .atomic)
@@ -236,16 +299,16 @@ private func writeSnapshotAndTruncate(snapshotData: Data, snapshotFileURL: URL, 
 }
 
 // MARK: - FileHandle line reading
-private extension FileHandle {
+extension FileHandle {
     /// Reads a line terminated by \n and returns Data without the trailing newline.
-    func readLineData() -> Data? {
+    fileprivate func readLineData() -> Data? {
         var buffer = Data()
         while true {
             let chunk = try? self.read(upToCount: 1)
             guard let byte = chunk, !byte.isEmpty else {
                 return buffer.isEmpty ? nil : buffer
             }
-            if byte[0] == 0x0A { // \n
+            if byte[0] == 0x0A {  // \n
                 return buffer
             } else {
                 buffer.append(byte)
@@ -262,6 +325,6 @@ private func appendLine(data: Data, to url: URL) throws {
     defer { try? handle.close() }
     try handle.seekToEnd()
     try handle.write(contentsOf: data)
-    try handle.write(contentsOf: Data([0x0A])) // newline
+    try handle.write(contentsOf: Data([0x0A]))  // newline
     try handle.synchronize()
 }

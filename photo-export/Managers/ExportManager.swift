@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
-import os
 import Photos
 import SwiftUI
+import os
 
 @MainActor
 final class ExportManager: ObservableObject {
@@ -25,8 +25,12 @@ final class ExportManager: ObservableObject {
     // MARK: - Internals
     private var pendingJobs: [ExportJob] = []
     private var isProcessing: Bool = false
+    private var currentTask: Task<Void, Never>? = nil
 
-    init(photoLibraryManager: PhotoLibraryManager, exportDestinationManager: ExportDestinationManager, exportRecordStore: ExportRecordStore) {
+    init(
+        photoLibraryManager: PhotoLibraryManager,
+        exportDestinationManager: ExportDestinationManager, exportRecordStore: ExportRecordStore
+    ) {
         self.photoLibraryManager = photoLibraryManager
         self.exportDestinationManager = exportDestinationManager
         self.exportRecordStore = exportRecordStore
@@ -40,9 +44,21 @@ final class ExportManager: ObservableObject {
                 try await enqueueMonth(year: year, month: month)
                 processQueueIfNeeded()
             } catch {
-                logger.error("Failed to enqueue month export: \(String(describing: error), privacy: .public)")
+                logger.error(
+                    "Failed to enqueue month export: \(String(describing: error), privacy: .public)"
+                )
             }
         }
+    }
+
+    func cancelAndClear() {
+        logger.info("Cancelling current export and clearing queue due to destination change")
+        pendingJobs.removeAll()
+        currentTask?.cancel()
+        currentTask = nil
+        isProcessing = false
+        isRunning = false
+        updateQueueCount()
     }
 
     // MARK: - Queue Handling
@@ -52,7 +68,9 @@ final class ExportManager: ObservableObject {
         let unexported = assets.filter { asset in
             !(exportRecordStore.isExported(assetId: asset.localIdentifier))
         }
-        let newJobs = unexported.map { ExportJob(assetLocalIdentifier: $0.localIdentifier, year: year, month: month) }
+        let newJobs = unexported.map {
+            ExportJob(assetLocalIdentifier: $0.localIdentifier, year: year, month: month)
+        }
         pendingJobs.append(contentsOf: newJobs)
         updateQueueCount()
         logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
@@ -76,7 +94,7 @@ final class ExportManager: ObservableObject {
         }
         let job = pendingJobs.removeFirst()
         updateQueueCount()
-        Task { [weak self] in
+        currentTask = Task { [weak self] in
             await self?.export(job: job)
             await MainActor.run { [weak self] in
                 self?.processNext()
@@ -92,22 +110,28 @@ final class ExportManager: ObservableObject {
     private func export(job: ExportJob) async {
         do {
             // Resolve PHAsset from local identifier
-            let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [job.assetLocalIdentifier], options: nil)
+            let fetchResult = PHAsset.fetchAssets(
+                withLocalIdentifiers: [job.assetLocalIdentifier], options: nil)
             guard let asset = fetchResult.firstObject else {
-                exportRecordStore.markFailed(assetId: job.assetLocalIdentifier, error: "Asset not found", at: Date())
-                logger.error("Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
+                exportRecordStore.markFailed(
+                    assetId: job.assetLocalIdentifier, error: "Asset not found", at: Date())
+                logger.error(
+                    "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
                 return
             }
 
             // Determine destination directory
-            let destDir = try exportDestinationManager.urlForMonth(year: job.year, month: job.month, createIfNeeded: true)
+            let destDir = try exportDestinationManager.urlForMonth(
+                year: job.year, month: job.month, createIfNeeded: true)
             let relPath = "\(job.year)/" + String(format: "%02d", job.month) + "/"
 
             // Select primary resource (prefer photo/video original)
             let resources = PHAssetResource.assetResources(for: asset)
             guard let resource = selectPrimaryResource(from: resources) else {
-                exportRecordStore.markFailed(assetId: asset.localIdentifier, error: "No exportable resource", at: Date())
-                logger.error("No exportable resource for id: \(asset.localIdentifier, privacy: .public)")
+                exportRecordStore.markFailed(
+                    assetId: asset.localIdentifier, error: "No exportable resource", at: Date())
+                logger.error(
+                    "No exportable resource for id: \(asset.localIdentifier, privacy: .public)")
                 return
             }
 
@@ -116,13 +140,19 @@ final class ExportManager: ObservableObject {
             let finalURL = uniqueFileURL(in: destDir, baseName: baseName, ext: ext)
             let tempURL = finalURL.appendingPathExtension("tmp")
 
-            exportRecordStore.markInProgress(assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath, filename: finalURL.lastPathComponent)
+            exportRecordStore.markInProgress(
+                assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath,
+                filename: finalURL.lastPathComponent)
 
             // Ensure security-scoped access for destination during write and move
             let didStart = exportDestinationManager.beginScopedAccess()
             defer { if didStart { exportDestinationManager.endScopedAccess() } }
             guard didStart else {
-                throw NSError(domain: "Export", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"])
+                throw NSError(
+                    domain: "Export", code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"
+                    ])
             }
 
             // Clean up any stale temp file at destination
@@ -140,12 +170,17 @@ final class ExportManager: ObservableObject {
                 applyTimestamps(creationDate: createdAt, to: finalURL)
             }
 
-            exportRecordStore.markExported(assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date())
-            logger.info("Exported \(finalURL.lastPathComponent, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)")
+            exportRecordStore.markExported(
+                assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath,
+                filename: finalURL.lastPathComponent, exportedAt: Date())
+            logger.info(
+                "Exported \(finalURL.lastPathComponent, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
+            )
         } catch {
             // Attempt cleanup of temp file if exists
             logger.error("Export failed: \(String(describing: error), privacy: .public)")
-            exportRecordStore.markFailed(assetId: job.assetLocalIdentifier, error: error.localizedDescription, at: Date())
+            exportRecordStore.markFailed(
+                assetId: job.assetLocalIdentifier, error: error.localizedDescription, at: Date())
         }
     }
 
@@ -153,7 +188,9 @@ final class ExportManager: ObservableObject {
     private func selectPrimaryResource(from resources: [PHAssetResource]) -> PHAssetResource? {
         if let photo = resources.first(where: { $0.type == .photo }) { return photo }
         if let video = resources.first(where: { $0.type == .video }) { return video }
-        if let alternatePhoto = resources.first(where: { $0.type == .alternatePhoto }) { return alternatePhoto }
+        if let alternatePhoto = resources.first(where: { $0.type == .alternatePhoto }) {
+            return alternatePhoto
+        }
         if let fullSize = resources.first(where: { $0.type == .fullSizePhoto }) { return fullSize }
         return resources.first
     }
@@ -183,9 +220,13 @@ final class ExportManager: ObservableObject {
             let options = PHAssetResourceRequestOptions()
             options.isNetworkAccessAllowed = true
             // Write directly to the provided URL
-            PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: ()) }
+            PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options)
+            { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
             }
         }
     }
@@ -194,10 +235,13 @@ final class ExportManager: ObservableObject {
         let fm = FileManager.default
         if fm.fileExists(atPath: dst.path) {
             // Should not happen due to uniqueFileURL, but double-check
-            throw NSError(domain: "Export", code: 2, userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
+            throw NSError(
+                domain: "Export", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
         }
         // Ensure parent exists
-        try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(
+            at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.moveItem(at: src, to: dst)
     }
 
@@ -210,15 +254,20 @@ final class ExportManager: ObservableObject {
             var mutableURL = url
             try mutableURL.setResourceValues(values)
         } catch {
-            logger.error("Failed setting URLResourceValues timestamps: \(error.localizedDescription, privacy: .public)")
+            logger.error(
+                "Failed setting URLResourceValues timestamps: \(error.localizedDescription, privacy: .public)"
+            )
         }
         do {
-            try FileManager.default.setAttributes([
-                .creationDate: creationDate,
-                .modificationDate: creationDate
-            ], ofItemAtPath: url.path)
+            try FileManager.default.setAttributes(
+                [
+                    .creationDate: creationDate,
+                    .modificationDate: creationDate,
+                ], ofItemAtPath: url.path)
         } catch {
-            logger.error("Failed setting FileManager attributes timestamps: \(error.localizedDescription, privacy: .public)")
+            logger.error(
+                "Failed setting FileManager attributes timestamps: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 }

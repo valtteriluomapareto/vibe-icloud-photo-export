@@ -1,7 +1,8 @@
 import AppKit
+import CryptoKit
 import Foundation
-import os
 import SwiftUI
+import os
 
 @MainActor
 final class ExportDestinationManager: ObservableObject {
@@ -10,10 +11,12 @@ final class ExportDestinationManager: ObservableObject {
     @Published private(set) var isAvailable: Bool = false
     @Published private(set) var isWritable: Bool = false
     @Published private(set) var statusMessage: String?
+    @Published private(set) var destinationId: String?
 
     // MARK: - Keys & Logger
     private let bookmarkDefaultsKey = "ExportDestinationBookmark"
-    private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "ExportDestination")
+    private let logger = Logger(
+        subsystem: "com.valtteriluoma.photo-export", category: "ExportDestination")
 
     private var volumeObservers: [NSObjectProtocol] = []
 
@@ -36,7 +39,8 @@ final class ExportDestinationManager: ObservableObject {
             case .notWritable: return "Export folder is read-only."
             case .invalidYear: return "Invalid year."
             case .invalidMonth: return "Invalid month."
-            case .scopeAccessDenied: return "Could not access the selected folder due to sandbox restrictions."
+            case .scopeAccessDenied:
+                return "Could not access the selected folder due to sandbox restrictions."
             case .pathTooLong: return "The generated export path is too long."
             case .notDirectory(let url): return "Path exists but is not a folder: \(url.path)"
             case .failedToCreateFolder(let url, let underlying):
@@ -86,6 +90,7 @@ final class ExportDestinationManager: ObservableObject {
         isAvailable = false
         isWritable = false
         statusMessage = "No export folder selected"
+        destinationId = nil
         UserDefaults.standard.removeObject(forKey: bookmarkDefaultsKey)
         logger.info("Cleared export destination selection")
     }
@@ -152,7 +157,9 @@ final class ExportDestinationManager: ObservableObject {
             try fm.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
             logger.info("Ensured directory: \(url.path, privacy: .public)")
         } catch {
-            logger.error("Failed to create directory: \(url.path, privacy: .public) error: \(String(describing: error), privacy: .public)")
+            logger.error(
+                "Failed to create directory: \(url.path, privacy: .public) error: \(String(describing: error), privacy: .public)"
+            )
             throw ExportDestinationError.failedToCreateFolder(url, underlying: error)
         }
     }
@@ -168,6 +175,11 @@ final class ExportDestinationManager: ObservableObject {
         validate(url: url)
     }
 
+    private func computeDestinationId(from bookmarkData: Data) -> String {
+        let digest = SHA256.hash(data: bookmarkData)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private func saveBookmark(for url: URL) -> Bool {
         do {
             let data = try url.bookmarkData(
@@ -176,9 +188,11 @@ final class ExportDestinationManager: ObservableObject {
                 relativeTo: nil
             )
             UserDefaults.standard.set(data, forKey: bookmarkDefaultsKey)
+            destinationId = computeDestinationId(from: data)
             return true
         } catch {
-            logger.error("Failed to create bookmark: \(String(describing: error), privacy: .public)")
+            logger.error(
+                "Failed to create bookmark: \(String(describing: error), privacy: .public)")
             return false
         }
     }
@@ -186,6 +200,7 @@ final class ExportDestinationManager: ObservableObject {
     private func restoreBookmarkIfAvailable() {
         guard let data = UserDefaults.standard.data(forKey: bookmarkDefaultsKey) else {
             statusMessage = "No export folder selected"
+            destinationId = nil
             return
         }
         do {
@@ -199,15 +214,19 @@ final class ExportDestinationManager: ObservableObject {
             if isStale {
                 logger.info("Bookmark data is stale; attempting to re-save")
                 _ = saveBookmark(for: url)
+            } else {
+                destinationId = computeDestinationId(from: data)
             }
             selectedFolderURL = url
             validate(url: url)
         } catch {
-            logger.error("Failed to restore bookmark: \(String(describing: error), privacy: .public)")
+            logger.error(
+                "Failed to restore bookmark: \(String(describing: error), privacy: .public)")
             statusMessage = "Export folder permission needs to be re-selected"
             selectedFolderURL = nil
             isAvailable = false
             isWritable = false
+            destinationId = nil
         }
     }
 

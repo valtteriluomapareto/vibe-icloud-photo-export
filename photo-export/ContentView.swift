@@ -22,7 +22,8 @@ extension EnvironmentValues {
 }
 
 struct ContentView: View {
-    @StateObject private var photoLibraryManager = PhotoLibraryManager()
+    @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+    @EnvironmentObject private var exportManager: ExportManager
     @State private var isShowingAuthorizationView = false
     @State private var selectedYearMonth: YearMonth? = YearMonth(
         year: Calendar.current.component(.year, from: Date()),
@@ -69,7 +70,11 @@ struct ContentView: View {
                                                     return store.monthSummary(year: year, month: month, totalAssets: total)
                                                 }
                                                 return MonthStatusSummary(year: year, month: month, exportedCount: 0, totalCount: total, status: .notExported)
-                                            }
+                                            },
+                                            exportAction: {
+                                                exportManager.startExportMonth(year: year, month: month)
+                                            },
+                                            canExportNow: exportDestinationManager.canExportNow
                                         )
                                         .tag(YearMonth(year: year, month: month))
                                     }
@@ -163,6 +168,15 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                // Export queue status
+                HStack(spacing: 6) {
+                    Label("Queue: \(exportManager.queueCount)", systemImage: exportManager.isRunning ? "arrow.triangle.2.circlepath" : "tray.and.arrow.down")
+                        .foregroundColor(exportManager.isRunning ? .orange : .secondary)
+                    Spacer()
+                    if exportManager.isRunning { ProgressView().scaleEffect(0.6) }
+                }
+                .font(.caption)
+
                 HStack(spacing: 8) {
                     Button("Change…") { exportDestinationManager.selectFolder() }
                     Button("Reveal in Finder") { exportDestinationManager.revealInFinder() }
@@ -281,10 +295,14 @@ struct AuthorizationView: View {
 }
 
 struct MonthRow: View {
+    @EnvironmentObject private var exportManager: ExportManager
+
     let year: Int
     let month: Int
     let totalProvider: () -> Int
     let summaryProvider: (_ total: Int) -> MonthStatusSummary
+    let exportAction: () -> Void
+    let canExportNow: Bool
 
     var body: some View {
         let total = totalProvider()
@@ -307,6 +325,10 @@ struct MonthRow: View {
                         .foregroundColor(.secondary)
                         .font(.caption)
                 }
+                Button("Export") { exportAction() }
+                    .buttonStyle(.bordered)
+                    .disabled(!canExportNow)
+                    .help(canExportNow ? "Export this month to selected folder" : "Select a writable export folder first")
             }
         }
         .contentShape(Rectangle())

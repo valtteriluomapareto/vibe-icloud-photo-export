@@ -84,13 +84,15 @@ committed independently.
 ### 7. Export Functionality
 
 - [ ] Implement export actions:
-  - [ ] Allow user to export all assets in a month, year, or custom selection.
-  - [ ] Only copy assets which have not yet been exported (based on export
+  - [x] Allow user to export all assets in a month (MVP).
+  - [ ] Allow user to export all assets in a year, or custom selection.
+  - [x] Only copy assets which have not yet been exported (based on export
         records).
-- [ ] Copy asset files into the correct export subfolder.
-  - [ ] Handle both images and videos.
-- [ ] Update the export records after a successful export.
-- [ ] Track and display export progress and status in the UI.
+- [x] Copy asset files into the correct export subfolder.
+  - [x] Handle both images and videos.
+- [x] Update the export records after a successful export.
+- [x] Track and display export progress and status in the UI.
+- [ ] Concurrency: keep serial for MVP; add bounded parallel exports post-MVP.
 
 ---
 

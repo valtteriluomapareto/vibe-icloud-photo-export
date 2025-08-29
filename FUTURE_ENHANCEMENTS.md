@@ -3,7 +3,7 @@
 This document outlines potential improvements to evolve the Apple Photos backup/export app. Each item includes a short rationale to clarify the value.
 
 ### Export Pipeline, Reliability, and Performance
-- **Bounded concurrent export queue**: Implement an async semaphore–backed task queue to export multiple assets in parallel with a configurable limit. Improves throughput while keeping memory and I/O under control.
+- **Bounded concurrent export queue**: Implement an async semaphore–backed task queue to export multiple assets in parallel with a configurable limit. Improves throughput while keeping memory and I/O under control. Keep MVP serial to reduce complexity; enable concurrency under a preference later.
 - **Atomic writes with robust temp handling**: Always write to a temporary file and atomically move to the final location; add verification of file size/date to reduce risk of partial or corrupt files after interruptions.
 - **Crash-resume semantics**: Persist in-progress states more granularly (e.g., “copying”, “verifying”, “done”) to resume precisely where the app left off after a crash or power loss.
 - **Progress UI with pause/cancel**: Add user controls to pause/resume/cancel export jobs and show per-asset and overall progress. Improves transparency and control for long-running exports.

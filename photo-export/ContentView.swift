@@ -333,6 +333,7 @@ struct MainView: View {
 // (The real implementation should be moved to a proper file structure later)
 struct MonthView: View {
     @EnvironmentObject var photoLibraryManager: PhotoLibraryManager
+    @Environment(\.exportRecordStore) private var exportRecordStore
     @State private var assets: [PHAsset] = []
     @State private var selectedAsset: PHAsset?
     @State private var thumbnails: [String: NSImage] = [:]
@@ -406,7 +407,8 @@ struct MonthView: View {
                             ThumbnailView(
                                 asset: asset,
                                 thumbnail: thumbnails[asset.localIdentifier],
-                                isSelected: asset.localIdentifier == selectedAsset?.localIdentifier
+                                isSelected: asset.localIdentifier == selectedAsset?.localIdentifier,
+                                isExported: exportRecordStore?.isExported(assetId: asset.localIdentifier) ?? true
                             )
                             .frame(width: 100, height: 100)
                             .onTapGesture {
@@ -540,6 +542,7 @@ struct ThumbnailView: View {
     let asset: PHAsset
     let thumbnail: NSImage?
     let isSelected: Bool
+    let isExported: Bool
 
     var body: some View {
         ZStack {
@@ -554,6 +557,19 @@ struct ThumbnailView: View {
                     .fill(Color.gray.opacity(0.3))
                     .frame(width: 100, height: 100)
                     .overlay(ProgressView())
+            }
+
+            if !isExported {
+                VStack {
+                    HStack {
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.95))
+                            .frame(width: 8, height: 8)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(6)
             }
 
             if isSelected {

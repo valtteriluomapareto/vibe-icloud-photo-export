@@ -15,6 +15,9 @@ struct TestPhotoAccessView: View {
     @State private var selectedYear: Int?
     @State private var selectedMonth: Int?
 
+    // For new content/detail testing
+    @State private var selectedAsset: PHAsset?
+
     var body: some View {
         HStack(spacing: 0) {
             // LEFT SIDE - Control Panel
@@ -23,10 +26,17 @@ struct TestPhotoAccessView: View {
                 .padding()
                 .background(Color(.windowBackgroundColor).opacity(0.5))
 
-            // RIGHT SIDE - Content Area
+            // RIGHT SIDE - Content + Detail testing split
             if let selectedYear = selectedYear, let selectedMonth = selectedMonth {
-                MonthView(year: selectedYear, month: selectedMonth)
-                    .environmentObject(photoLibraryManager)
+                HStack(spacing: 0) {
+                    MonthContentView(year: selectedYear, month: selectedMonth, selectedAsset: $selectedAsset, photoLibraryManager: photoLibraryManager)
+                        .environmentObject(photoLibraryManager)
+                        .frame(minWidth: 400)
+                    Divider()
+                    AssetDetailView(asset: selectedAsset)
+                        .environmentObject(photoLibraryManager)
+                        .frame(minWidth: 400)
+                }
             } else {
                 noSelectionView
             }
@@ -178,6 +188,7 @@ struct TestPhotoAccessView: View {
     private func selectYearAndMonth(year: Int, month: Int) {
         selectedYear = year
         selectedMonth = month
+        selectedAsset = nil
     }
 
     private func totalForYear(_ year: Int) -> Int {

@@ -69,9 +69,7 @@ class PhotoLibraryManager: ObservableObject {
 
         for index in 0..<totalAssets {
             autoreleasepool {
-                guard let asset = fetchResult.object(at: index) as? PHAsset,
-                    let creationDate = asset.creationDate
-                else {
+                guard let creationDate = fetchResult.object(at: index).creationDate else {
                     return
                 }
 
@@ -87,7 +85,7 @@ class PhotoLibraryManager: ObservableObject {
                     assetsByYearAndMonth[year]?[month] = []
                 }
 
-                assetsByYearAndMonth[year]?[month]?.append(asset)
+                assetsByYearAndMonth[year]?[month]?.append(fetchResult.object(at: index))
             }
 
             // Yield to main thread periodically
@@ -183,6 +181,46 @@ class PhotoLibraryManager: ObservableObject {
         opts.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate, endDate as NSDate)
         let result = PHAsset.fetchAssets(with: opts)
         return result.count
+    }
+
+    /// Fast count of assets in a given year
+    func countAssets(year: Int) throws -> Int {
+        guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+        let calendar = Calendar.current
+        var start = DateComponents(); start.year = year; start.month = 1; start.day = 1
+        var end = DateComponents(); end.year = year + 1; end.month = 1; end.day = 1
+        guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end) else {
+            throw PhotoLibraryError.fetchFailed
+        }
+        let opts = PHFetchOptions()
+        opts.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate, endDate as NSDate)
+        let result = PHAsset.fetchAssets(with: opts)
+        return result.count
+    }
+
+    /// Returns descending list of years that have at least one asset
+    func availableYears() throws -> [Int] {
+        guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        let result = PHAsset.fetchAssets(with: opts)
+        let count = result.count
+        guard count > 0 else { return [] }
+
+        guard let firstDate = result.object(at: 0).creationDate,
+              let lastDate = result.object(at: count - 1).creationDate else {
+            return []
+        }
+
+        let calendar = Calendar.current
+        let startYear = calendar.component(.year, from: firstDate)
+        let endYear = calendar.component(.year, from: lastDate)
+        guard startYear <= endYear else { return [] }
+
+        // Build descending list
+        return Array(stride(from: endYear, through: startYear, by: -1))
+            .filter { (try? self.countAssets(year: $0)) ?? 0 > 0 }
     }
 
     /// Extract asset metadata into a structured format

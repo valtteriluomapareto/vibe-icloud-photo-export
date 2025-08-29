@@ -29,6 +29,8 @@ struct ContentView: View {
         month: Calendar.current.component(.month, from: Date()))
     @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
     @Environment(\.exportRecordStore) private var exportRecordStore
+    @State private var years: [Int] = []
+    @State private var expandedYears: Set<Int> = []
 
     var body: some View {
         Group {
@@ -40,24 +42,35 @@ struct ContentView: View {
                             exportDestinationSection
                         }
 
-                        Section("Photos by Month") {
-                            ForEach(2020...2025, id: \.self) { year in
-                                ForEach(1...12, id: \.self) { month in
-                                    MonthRow(
-                                        year: year,
-                                        month: month,
-                                        totalProvider: { [weak photoLibraryManager] in
-                                            guard let mgr = photoLibraryManager else { return 0 }
-                                            return (try? mgr.countAssets(year: year, month: month)) ?? 0
-                                        },
-                                        summaryProvider: { total in
-                                            if let store = exportRecordStore {
-                                                return store.monthSummary(year: year, month: month, totalAssets: total)
-                                            }
-                                            return MonthStatusSummary(year: year, month: month, exportedCount: 0, totalCount: total, status: .notExported)
+                        Section("Photos by Year") {
+                            ForEach(years, id: \.self) { year in
+                                DisclosureGroup(
+                                    isExpanded: Binding(
+                                        get: { expandedYears.contains(year) },
+                                        set: { newValue in
+                                            if newValue { expandedYears.insert(year) } else { expandedYears.remove(year) }
                                         }
                                     )
-                                    .tag(YearMonth(year: year, month: month))
+                                ) {
+                                    ForEach(1...12, id: \.self) { month in
+                                        MonthRow(
+                                            year: year,
+                                            month: month,
+                                            totalProvider: { [weak photoLibraryManager] in
+                                                guard let mgr = photoLibraryManager else { return 0 }
+                                                return (try? mgr.countAssets(year: year, month: month)) ?? 0
+                                            },
+                                            summaryProvider: { total in
+                                                if let store = exportRecordStore {
+                                                    return store.monthSummary(year: year, month: month, totalAssets: total)
+                                                }
+                                                return MonthStatusSummary(year: year, month: month, exportedCount: 0, totalCount: total, status: .notExported)
+                                            }
+                                        )
+                                        .tag(YearMonth(year: year, month: month))
+                                    }
+                                } label: {
+                                    Text(verbatim: String(year))
                                 }
                             }
                         }
@@ -84,6 +97,23 @@ struct ContentView: View {
         }
         .onAppear {
             isShowingAuthorizationView = photoLibraryManager.authorizationStatus != .authorized
+            if photoLibraryManager.isAuthorized {
+                years = (try? photoLibraryManager.availableYears()) ?? []
+                if let selected = selectedYearMonth {
+                    expandedYears.insert(selected.year)
+                }
+            }
+        }
+        .onChange(of: photoLibraryManager.isAuthorized) { isAuth in
+            if isAuth {
+                years = (try? photoLibraryManager.availableYears()) ?? []
+                if let selected = selectedYearMonth {
+                    expandedYears.insert(selected.year)
+                }
+            } else {
+                years = []
+                expandedYears.removeAll()
+            }
         }
         .frame(minWidth: 900, minHeight: 600)
         .background(Color(.windowBackgroundColor))
@@ -233,7 +263,7 @@ struct MonthRow: View {
         let total = totalProvider()
         let summary = summaryProvider(total)
         return HStack(spacing: 8) {
-            Text("\(year) \(monthName(month))")
+            Text("\(String(year)) \(monthName(month))")
             Spacer()
             if total > 0 {
                 switch summary.status {

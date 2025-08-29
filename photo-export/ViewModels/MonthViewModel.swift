@@ -51,13 +51,11 @@ final class MonthViewModel: ObservableObject {
             }
 
             // Load remaining thumbnails in the background without blocking UI updates
-            Task.detached { [weak self] in
+            Task { [weak self] in
                 guard let self else { return }
                 for asset in monthAssets.dropFirst(self.initialThumbnailBatchSize) {
                     if let thumb = await self.photoLibraryManager.loadThumbnail(for: asset) {
-                        await MainActor.run {
-                            self.thumbnailsById[asset.localIdentifier] = thumb
-                        }
+                        self.thumbnailsById[asset.localIdentifier] = thumb
                     }
                 }
             }

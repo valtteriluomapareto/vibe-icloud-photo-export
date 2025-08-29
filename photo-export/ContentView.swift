@@ -118,8 +118,8 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: photoLibraryManager.isAuthorized) { isAuth in
-            if isAuth {
+        .onChange(of: photoLibraryManager.isAuthorized) { old, new in
+            if new {
                 years = (try? photoLibraryManager.availableYears()) ?? []
                 if let selected = selectedYearMonth {
                     expandedYears.insert(selected.year)
@@ -131,13 +131,13 @@ struct ContentView: View {
                 monthsWithAssetsByYear.removeAll()
             }
         }
-        .onChange(of: expandedYears) { _ in
+        .onChange(of: expandedYears) { _, _ in
             // Lazy compute months for newly expanded years
             for year in expandedYears where monthsWithAssetsByYear[year] == nil {
                 monthsWithAssetsByYear[year] = computeMonthsWithAssets(for: year)
             }
         }
-        .onChange(of: selectedYearMonth) { _ in
+        .onChange(of: selectedYearMonth) { _, _ in
             // Clear asset selection when month changes
             selectedAsset = nil
         }

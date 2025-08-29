@@ -3,7 +3,8 @@ import Photos
 import SwiftUI
 
 /// Manages access to the Photos library, including authorization and asset fetching
-class PhotoLibraryManager: ObservableObject {
+@MainActor
+final class PhotoLibraryManager: ObservableObject {
     /// Published properties to track authorization status
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
     @Published var isAuthorized: Bool = false
@@ -39,10 +40,8 @@ class PhotoLibraryManager: ObservableObject {
     func requestAuthorization() async -> Bool {
         let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
 
-        DispatchQueue.main.async {
-            self.authorizationStatus = status
-            self.isAuthorized = status == .authorized
-        }
+        self.authorizationStatus = status
+        self.isAuthorized = status == .authorized
 
         return status == .authorized
     }

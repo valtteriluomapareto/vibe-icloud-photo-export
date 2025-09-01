@@ -285,6 +285,7 @@ final class PhotoLibraryManager: ObservableObject {
     }
 
     /// Load thumbnail for an asset
+    @MainActor
     func loadThumbnail(
         for asset: PHAsset, size: CGSize = CGSize(width: 200, height: 200),
         contentMode: PHImageContentMode = .aspectFill,

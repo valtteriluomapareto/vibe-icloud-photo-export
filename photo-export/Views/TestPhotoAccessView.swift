@@ -95,15 +95,13 @@ struct TestPhotoAccessView: View {
             isExpanded: Binding<Bool>(
               get: { selectedYear == year },
               set: { if $0 { selectedYear = year } }
-            ),
-            content: {
-              monthsList(for: year)
-            },
-            label: {
-              Text("\(year): \(totalForYear(year)) assets")
-                .font(.headline)
-            }
-          )
+            )
+          ) {
+            monthsList(for: year)
+          } label: {
+            Text("\(year): \(totalForYear(year)) assets")
+              .font(.headline)
+          }
           .padding(.vertical, 5)
         }
       }

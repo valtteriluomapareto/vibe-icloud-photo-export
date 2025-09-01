@@ -67,8 +67,7 @@ struct ContentView: View {
                       }
                     )
                   ) {
-                    ForEach(monthsWithAssetsByYear[year] ?? [], id: \.self) {
-                      month in
+                    ForEach(monthsWithAssetsByYear[year] ?? [], id: \.self) { month in
                       MonthRow(
                         year: year,
                         month: month,
@@ -311,17 +310,18 @@ struct AuthorizationView: View {
       .multilineTextAlignment(.center)
       .padding(.horizontal)
 
-      Button(action: {
-        requestPermission()
-      }) {
-        Text("Grant Access")
-          .fontWeight(.semibold)
-          .foregroundColor(.white)
-          .padding()
-          .frame(maxWidth: .infinity)
-          .background(Color.blue)
-          .cornerRadius(10)
-      }
+      Button(
+        action: { requestPermission() },
+        label: {
+          Text("Grant Access")
+            .fontWeight(.semibold)
+            .foregroundColor(.white)
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(Color.blue)
+            .cornerRadius(10)
+        }
+      )
       .padding(.horizontal)
       .disabled(isRequestingAuthorization)
 
@@ -331,7 +331,8 @@ struct AuthorizationView: View {
       }
 
       if photoLibraryManager.authorizationStatus == .denied
-        || photoLibraryManager.authorizationStatus == .restricted {
+        || photoLibraryManager.authorizationStatus == .restricted
+      {
         Text("Please enable Photos access in Settings to use this app.")
           .foregroundColor(.red)
           .padding()

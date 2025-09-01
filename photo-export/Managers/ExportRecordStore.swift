@@ -128,7 +128,12 @@ final class ExportRecordStore: ObservableObject {
 
   // MARK: - Public API (mutations)
   func markExported(
-    assetId: String, year: Int, month: Int, relPath: String, filename: String, exportedAt: Date
+    assetId: String,
+    year: Int,
+    month: Int,
+    relPath: String,
+    filename: String,
+    exportedAt: Date
   ) {
     var record =
       recordsById[assetId]
@@ -319,7 +324,8 @@ final class ExportRecordStore: ObservableObject {
 
 // Non-actor helper to write snapshot and truncate log safely
 private func writeSnapshotAndTruncate(snapshotData: Data, snapshotFileURL: URL, logFileURL: URL)
-  throws {
+  throws
+{
   let fileManager = FileManager.default
   let tmpURL = snapshotFileURL.appendingPathExtension("tmp")
   try snapshotData.write(to: tmpURL, options: .atomic)

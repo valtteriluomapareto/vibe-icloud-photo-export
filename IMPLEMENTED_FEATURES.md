@@ -73,4 +73,23 @@ Below are the features that have been completed and verified as implemented. The
 
 ---
 
+### 8. Performance & UX Improvements (Completed)
+
+- [x] Concurrency kept serial for MVP; plan bounded parallelism post-MVP.
+- [x] Fast thumbnail loading and in-memory caching for grids.
+- [x] Pause/disable thumbnail networking during export to reduce contention.
+- [x] Ensure image previews display quickly and at suitable size.
+- [x] Add loading indicators where appropriate.
+
+---
+
+### 9. Fault Tolerance (Completed)
+
+- [x] Graceful handling of failures:
+  - [x] Photos library access denied.
+  - [x] Export folder unavailable or write-protected.
+  - [x] Individual asset export failure (skip, record, continue).
+
+---
+
 These items reflect the current MVP baseline delivered so far.

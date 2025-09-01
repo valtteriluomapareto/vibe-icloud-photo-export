@@ -49,6 +49,10 @@ struct ContentView: View {
                                 exportDestinationSection
                             }
 
+                            Section("Export Process") {
+                                exportProcessSection
+                            }
+
                             Section("Photos by Year") {
                                 ForEach(years, id: \.self) { year in
                                     DisclosureGroup(
@@ -195,37 +199,6 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                // Export queue status
-                HStack(spacing: 6) {
-                    Label(
-                        "Queue: \(exportManager.queueCount)",
-                        systemImage: exportManager.isRunning
-                            ? "arrow.triangle.2.circlepath" : "tray.and.arrow.down"
-                    )
-                    .foregroundColor(exportManager.isRunning ? .orange : .secondary)
-                    Spacer()
-                    if exportManager.isRunning { ProgressView().scaleEffect(0.6) }
-                }
-                .font(.caption)
-
-                HStack(spacing: 8) {
-                    if exportManager.isPaused {
-                        Button("Resume") { exportManager.resume() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(exportManager.queueCount == 0)
-                    } else {
-                        Button("Pause") { exportManager.pause() }
-                            .buttonStyle(.bordered)
-                            .disabled(exportManager.queueCount == 0)
-                    }
-                    Button("Clear Pending") { exportManager.clearPending() }
-                        .disabled(exportManager.queueCount == 0)
-                    Button("Cancel & Clear") { exportManager.cancelAndClear() }
-                        .foregroundColor(.red)
-                        .help("Abort current export and clear the queue")
-                    Spacer()
-                }
-                .font(.caption)
 
                 HStack(spacing: 8) {
                     Button("Change…") { exportDestinationManager.selectFolder() }
@@ -239,6 +212,43 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                 Button("Select Folder…") { exportDestinationManager.selectFolder() }
             }
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Export Process UI
+    private var exportProcessSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Label(
+                    "Queue: \(exportManager.queueCount)",
+                    systemImage: exportManager.isRunning
+                        ? "arrow.triangle.2.circlepath" : "tray.and.arrow.down"
+                )
+                .foregroundColor(exportManager.isRunning ? .orange : .secondary)
+                Spacer()
+                if exportManager.isRunning { ProgressView().scaleEffect(0.6) }
+            }
+            .font(.caption)
+
+            HStack(spacing: 8) {
+                if exportManager.isPaused {
+                    Button("Resume") { exportManager.resume() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(exportManager.queueCount == 0)
+                } else {
+                    Button("Pause") { exportManager.pause() }
+                        .buttonStyle(.bordered)
+                        .disabled(exportManager.queueCount == 0)
+                }
+                Button("Clear Pending") { exportManager.clearPending() }
+                    .disabled(exportManager.queueCount == 0)
+                Button("Cancel & Clear") { exportManager.cancelAndClear() }
+                    .foregroundColor(.red)
+                    .help("Abort current export and clear the queue")
+                Spacer()
+            }
+            .font(.caption)
         }
         .padding(.vertical, 4)
     }

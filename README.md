@@ -23,6 +23,8 @@ If you’re browsing the code: it follows a simple SwiftUI + Managers pattern. V
 
 Optional:
 - `xcpretty` for nicer CLI output (`gem install xcpretty`)
+- SwiftLint for linting (`brew install swiftlint`)
+- swift-format for formatting (`brew install swift-format`)
 
 ---
 
@@ -134,6 +136,20 @@ Then press Run in Xcode. Command-line launching of the built app is also possibl
 - Log with `os.Logger`. Avoid `print` in production code.
 - Prefer `.task(id:)` for cancellation-aware loading.
 - Track exports by `PHAsset.localIdentifier` and avoid overwrites.
+
+### Linting (SwiftLint)
+- Install: `brew install swiftlint`
+- Run locally: `swiftlint` (from repo root)
+- CI runs SwiftLint with `--strict`. Config: `.swiftlint.yml`.
+
+### Formatting (swift-format)
+- Install: `brew install swift-format`
+- Check formatting: `swift-format lint --recursive photo-export`
+- Apply formatting: `swift-format format --recursive --in-place photo-export`
+- Config: `.swift-format.json`
+
+> Tip: You can add a Run Script Phase in Xcode to run SwiftLint if installed:
+> `if which swiftlint >/dev/null; then swiftlint; fi`
 
 ---
 

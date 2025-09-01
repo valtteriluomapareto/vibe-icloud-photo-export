@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "indentation": {
+    "spaces": 4
+  },
+  "lineLength": 120,
+  "respectsExistingLineBreaks": true,
+  "rules": {
+    "DoNotUseSemicolons": true,
+    "NoAssignmentInExpressions": true,
+    "NeverUseForceTry": false,
+    "NeverUseForceUnwrap": false
+  }
+}

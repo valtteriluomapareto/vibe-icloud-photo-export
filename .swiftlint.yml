@@ -1,0 +1,37 @@
+# SwiftLint configuration (lenient baseline)
+# See: https://github.com/realm/SwiftLint
+
+included:
+  - photo-export
+excluded:
+  - build
+  - photo-export.xcodeproj
+  - photo-export.xcodeproj/project.xcworkspace
+  - photo-export.xcodeproj/xcshareddata
+
+# Reporter suitable for Xcode/CI logs
+reporter: "xcode"
+
+# Rule tuning (keep CI green to start; tighten over time)
+disabled_rules:
+  - trailing_whitespace
+  - force_cast
+  - force_try
+  - function_body_length
+  - type_body_length
+  - file_length
+  - cyclomatic_complexity
+  - identifier_name
+  - large_tuple
+  - nesting
+
+# Common thresholds
+line_length:
+  warning: 140
+  ignores_comments: true
+  ignores_interpolated_strings: true
+  ignores_urls: true
+
+identifier_name:
+  min_length: 2
+  excluded: [id, x, y, i, j]

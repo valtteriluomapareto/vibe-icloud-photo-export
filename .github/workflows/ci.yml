@@ -24,6 +24,22 @@ jobs:
           fi
           xcodebuild -version
 
+      - name: Install SwiftLint and swift-format
+        run: |
+          brew update
+          brew install swiftlint swift-format || true
+          swiftlint version || true
+          swift-format --version || true
+
+      - name: SwiftLint
+        run: |
+          swiftlint --strict || true
+
+      - name: SwiftFormat (check)
+        run: |
+          # Check formatting (non-destructive). Use --in-place locally.
+          swift-format lint --recursive photo-export || true
+
       - name: Build Debug
         run: |
           set -o pipefail

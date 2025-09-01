@@ -15,6 +15,7 @@ final class ExportManager: ObservableObject {
     // MARK: - Published State
     @Published private(set) var isRunning: Bool = false
     @Published private(set) var queueCount: Int = 0
+    @Published private(set) var isPaused: Bool = false
 
     // MARK: - Dependencies
     private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
@@ -51,6 +52,20 @@ final class ExportManager: ObservableObject {
         }
     }
 
+    func startExportYear(year: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await enqueueYear(year: year)
+                processQueueIfNeeded()
+            } catch {
+                logger.error(
+                    "Failed to enqueue year export: \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+    }
+
     func cancelAndClear() {
         logger.info("Cancelling current export and clearing queue due to destination change")
         pendingJobs.removeAll()
@@ -58,7 +73,28 @@ final class ExportManager: ObservableObject {
         currentTask = nil
         isProcessing = false
         isRunning = false
+        isPaused = false
         updateQueueCount()
+    }
+
+    func pause() {
+        guard isRunning else { return }
+        isPaused = true
+        logger.info("Export queue paused")
+    }
+
+    func resume() {
+        guard isPaused else { return }
+        isPaused = false
+        logger.info("Export queue resumed")
+        processQueueIfNeeded()
+    }
+
+    func clearPending() {
+        let removed = pendingJobs.count
+        pendingJobs.removeAll()
+        updateQueueCount()
+        logger.info("Cleared \(removed) pending export jobs")
     }
 
     // MARK: - Queue Handling
@@ -76,8 +112,28 @@ final class ExportManager: ObservableObject {
         logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
     }
 
+    private func enqueueYear(year: Int) async throws {
+        guard photoLibraryManager.isAuthorized else { return }
+        let assets = try await photoLibraryManager.fetchAssets(year: year, month: nil)
+        let calendar = Calendar.current
+        var newJobs: [ExportJob] = []
+        newJobs.reserveCapacity(assets.count)
+        for asset in assets {
+            guard let created = asset.creationDate else { continue }
+            let m = calendar.component(.month, from: created)
+            if !exportRecordStore.isExported(assetId: asset.localIdentifier) {
+                newJobs.append(
+                    ExportJob(assetLocalIdentifier: asset.localIdentifier, year: year, month: m))
+            }
+        }
+        pendingJobs.append(contentsOf: newJobs)
+        updateQueueCount()
+        logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
+    }
+
     private func processQueueIfNeeded() {
         guard !isProcessing else { return }
+        guard !isPaused else { return }
         guard !pendingJobs.isEmpty else { return }
         isProcessing = true
         isRunning = true
@@ -85,6 +141,13 @@ final class ExportManager: ObservableObject {
     }
 
     private func processNext() {
+        if isPaused {
+            isProcessing = false
+            isRunning = false
+            updateQueueCount()
+            logger.info("Queue paused; not starting next job")
+            return
+        }
         guard !pendingJobs.isEmpty else {
             isProcessing = false
             isRunning = false

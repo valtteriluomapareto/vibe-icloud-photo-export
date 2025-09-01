@@ -10,9 +10,10 @@ Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the rema
 
 ### UI modification
   
-- [ ] Implement a month view:
-   - [ ] Display a grid of thumbnails for all assets in the month, filterable by media type.
-- [ ] Delineate which assets are new/unexported visually in the asset grid.
+- [x] Implement a month view:
+  - [x] Display a grid of thumbnails for all assets in the month
+  - [ ] Add filter control for media type (photos/videos)
+- [x] Delineate which assets are unexported visually in the asset grid.
 - [ ] Identify and visually indicate newly added assets for partially exported months.
 
 ---
@@ -21,25 +22,28 @@ Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the rema
 
 - [ ] Implement export actions:
   - [ ] Allow user to export all assets in a year, or custom selection.
-- [ ] On app launch or manual refresh, rescan Photos library and cross-check with existing exports.
-- [ ] Support incremental export, exporting only the new assets for any selected month.
+- [x] On app launch, rescan Photos library and cross-check with existing exports.
+- [ ] Manual refresh to rescan library on demand.
+- [x] Support incremental export, exporting only the new assets for any selected month.
 
 ---
 
 ### Performance
 
 - [ ] Concurrency: keep serial for MVP; add bounded parallel exports post-MVP.
-- [ ] Implement fast thumbnail loading and in-memory caching for asset grids.
-- [ ] Ensure previews for images and videos display quickly and at suitable size.
+- [x] Implement fast thumbnail loading and in-memory caching for asset grids.
+- [x] Reduce contention: pause/disable thumbnail networking during export (use non-network thumbnails while exporting)
+- [x] Ensure image previews display quickly and at suitable size.
+- [ ] Ensure video previews display quickly and at suitable size.
 
 ---
 
 ### Fault tolerance
 
-- [ ] Gracefully handle failures:
-  - [ ] Photos library access denied.
-  - [ ] Export folder unavailable or write-protected.
-  - [ ] Individual asset export failure.
+- [x] Gracefully handle failures:
+  - [x] Photos library access denied.
+  - [x] Export folder unavailable or write-protected.
+  - [x] Individual asset export failure (skip, record, continue).
 - [ ] Display clear error messages in the UI where needed.
 - [ ] Allow user to retry failed exports.
 
@@ -50,9 +54,13 @@ Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the rema
 - [ ] Implement filter controls:
   - [ ] Toggle to show only photos, only videos, or both.
 - [ ] Ensure the UI follows macOS human interface guidelines.
-- [ ] Add animations and loading indicators where appropriate.
+- [x] Add loading indicators where appropriate.
+- [ ] Add subtle animations where appropriate.
 - [ ] Ensure good accessibility for all interactive elements.
-- [ ] Persist app settings, including last used export folder and filter choices.
+- [ ] Persist app settings:
+  - [x] Persist last used export folder
+  - [ ] Persist filter choices
+  - [ ] Persist other relevant settings
 - [ ] Remember window state and last viewed month/year.
 
 ---
@@ -61,7 +69,7 @@ Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the rema
 
 - [ ] Keep code modular and well-commented.
 - [ ] Document all public classes and methods in source files.
-- [ ] Write a short README for building, running, and using the app.
+- [x] Write a short README for building, running, and using the app.
 
 ---
 

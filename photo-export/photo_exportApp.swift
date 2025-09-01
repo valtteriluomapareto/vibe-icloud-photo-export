@@ -28,7 +28,7 @@ struct PhotoExportApp: App {
   }
 
   var body: some Scene {
-    WindowGroup {
+    WindowGroup("Photo Export") {
       ContentView()
         .environmentObject(exportDestinationManager)
         .environmentObject(photoLibraryManager)

@@ -1,5 +1,4 @@
 // Xcode build configuration file
-INFOPLIST_FILE = $(SRCROOT)/photo-export/Info.plist
 
-// Set a nicer product name (optional - CFBundleDisplayName in Info.plist takes precedence)
+// Set a nicer product name (optional - CFBundleDisplayName in project settings takes precedence)
 PRODUCT_NAME = Photo Export 

@@ -1,5 +1,7 @@
 # Photo Export (macOS)
 
+> Vibe-coded warning: I didn’t know Swift when I started this. (I still don't) Shipped small, learned fast, fixed forward. Expect a few rough edges — contributions welcome.
+
 A macOS app to back up the Apple Photos library to local or external storage, exporting assets into an organized folder hierarchy.
 
 - App target: `photo-export`
@@ -8,6 +10,8 @@ A macOS app to back up the Apple Photos library to local or external storage, ex
 - Shared scheme: `photo-export`
 
 See `IMPLEMENTATION_TASKS.md` for open work and `IMPLEMENTED_FEATURES.md` for completed features.
+
+If you’re browsing the code: it follows a simple SwiftUI + Managers pattern. Views are thin; logic lives in `Managers` and `ViewModels`. Photos export is resilient, avoids overwriting, and resumes after interruptions.
 
 ---
 
@@ -148,4 +152,4 @@ xcodebuild -list -project photo-export.xcodeproj
 
 ## License
 
-Internal project. No public license specified.
+This project is licensed under the MIT License. See `LICENSE` for details.

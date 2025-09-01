@@ -20,23 +20,24 @@ Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the rema
 
 ### New feature
 
-- [ ] Implement export actions:
-  - [ ] Allow user to export all assets in a year, or custom selection.
+- [x] Implement export actions:
+  - [x] Allow user to export all assets in a year
+  - [ ] Allow user to export a custom selection
 - [x] On app launch, rescan Photos library and cross-check with existing exports.
 - [ ] Manual refresh to rescan library on demand.
 - [x] Support incremental export, exporting only the new assets for any selected month.
-- [ ] Adopt `PHPhotoLibraryChangeObserver` to live-update when the Photos library changes during app use.
+- [ ] Adopt `PHPhotoLibraryChangeObserver` to live-update when the Photos library changes during app use. (Planned)
 
 ---
 
 ### Performance
 
-- [ ] Concurrency: keep serial for MVP; add bounded parallel exports post-MVP.
+- [x] Concurrency: keep serial for MVP; add bounded parallel exports post-MVP.
 - [x] Implement fast thumbnail loading and in-memory caching for asset grids.
 - [x] Reduce contention: pause/disable thumbnail networking during export (use non-network thumbnails while exporting)
 - [x] Ensure image previews display quickly and at suitable size.
 - [ ] Ensure video previews display quickly and at suitable size.
-- [ ] Add bounded concurrent export queue (2–3 workers) with a configurable limit.
+- [ ] Add bounded concurrent export queue (2–3 workers) with a configurable limit. (Planned)
 
 ---
 

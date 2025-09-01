@@ -62,12 +62,14 @@ Below are the features that have been completed and verified as implemented. The
 
 ### 7. Export Functionality (Completed parts)
 
-- [x] Implement export actions: Allow user to export all assets in a month (MVP).
+- [x] Implement export actions: Allow user to export all assets in a month or a year (MVP).
 - [x] Only copy assets which have not yet been exported (based on export records).
 - [x] Copy asset files into the correct export subfolder.
   - [x] Handle both images and videos.
 - [x] Update the export records after a successful export.
 - [x] Track and display export progress and status in the UI.
+  - [x] Sidebar controls: pause/resume, clear pending, cancel & clear
+  - [x] Queue status indicator in sidebar (Export Process section)
 
 ---
 

@@ -315,6 +315,7 @@ final class PhotoLibraryManager: ObservableObject {
     }
 
     /// Request a full-size image for an asset
+    @MainActor
     func requestFullImage(for asset: PHAsset) async throws -> NSImage {
         return try await withCheckedThrowingContinuation { continuation in
             let options = PHImageRequestOptions()

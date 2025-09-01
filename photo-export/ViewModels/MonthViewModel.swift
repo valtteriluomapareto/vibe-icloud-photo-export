@@ -68,13 +68,7 @@ final class MonthViewModel: ObservableObject {
             Task { [weak self] in
                 guard let self else { return }
                 for asset in monthAssets.dropFirst(self.initialThumbnailBatchSize) {
-                    if let thumb = await self.photoLibraryManager.loadThumbnail(
-                        for: asset, allowNetwork: !self.isExportRunning)
-                    {
-                        await MainActor.run {
-                            self.thumbnailsById[asset.localIdentifier] = thumb
-                        }
-                    }
+                    await self.loadAndStoreThumbnail(for: asset)
                 }
             }
         } catch {
@@ -95,5 +89,13 @@ final class MonthViewModel: ObservableObject {
         isExportRunning = running
         // Stop background thumbnail network during export; caching stays but can be paused here if needed
         // If desired, we could call stopCachingThumbnails(for:) to reduce IO further
+    }
+
+    private func loadAndStoreThumbnail(for asset: PHAsset) async {
+        if let thumb = await photoLibraryManager.loadThumbnail(
+            for: asset, allowNetwork: !isExportRunning)
+        {
+            thumbnailsById[asset.localIdentifier] = thumb
+        }
     }
 }

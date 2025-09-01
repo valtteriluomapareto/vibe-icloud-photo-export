@@ -4,16 +4,16 @@ import Foundation
 // SwiftUI apps can use this approach alongside the existing Info.plist or as a replacement
 
 enum PhotoExportInfoPlist {
-    static let infoDictionary: [String: Any] = [
-        // The key we need for Photos access
-        "NSPhotoLibraryUsageDescription":
-            "This app needs access to your Photos library to back up your photos and videos to external storage."
-    ]
+  static let infoDictionary: [String: Any] = [
+    // The key we need for Photos access
+    "NSPhotoLibraryUsageDescription":
+      "This app needs access to your Photos library to back up your photos and videos to external storage."
+  ]
 
-    static func register() {
-        // Add our values to the existing Info.plist at runtime
-        for (_, _) in infoDictionary {
-            // Bundle.main.infoDictionary?[key] = value
-        }
+  static func register() {
+    // Add our values to the existing Info.plist at runtime
+    for (_, _) in infoDictionary {
+      // Bundle.main.infoDictionary?[key] = value
     }
+  }
 }

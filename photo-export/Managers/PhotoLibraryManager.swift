@@ -287,12 +287,13 @@ final class PhotoLibraryManager: ObservableObject {
     /// Load thumbnail for an asset
     func loadThumbnail(
         for asset: PHAsset, size: CGSize = CGSize(width: 200, height: 200),
-        contentMode: PHImageContentMode = .aspectFill
+        contentMode: PHImageContentMode = .aspectFill,
+        allowNetwork: Bool = true
     ) async -> NSImage? {
         return await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .opportunistic
-            options.isNetworkAccessAllowed = true
+            options.isNetworkAccessAllowed = allowNetwork
             options.resizeMode = .fast
 
             // Add a flag to track whether we've already resumed

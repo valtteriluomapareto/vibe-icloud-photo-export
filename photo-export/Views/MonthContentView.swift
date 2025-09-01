@@ -5,6 +5,7 @@ import SwiftUI
 struct MonthContentView: View {
     @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
     @EnvironmentObject private var exportRecordStore: ExportRecordStore
+    @EnvironmentObject private var exportManager: ExportManager
 
     @StateObject private var viewModel: MonthViewModel
 
@@ -70,6 +71,9 @@ struct MonthContentView: View {
             {
                 selectedAsset = asset
             }
+        }
+        .onChange(of: exportManager.isRunning) { _, newValue in
+            viewModel.setExportRunning(newValue)
         }
         .onAppear {
             // Ensure the view model uses the environment manager instance

@@ -12,6 +12,7 @@ final class MonthViewModel: ObservableObject {
 
     // Selection is tracked via id to avoid retaining PHAsset strongly across updates
     @Published var selectedAssetId: String?
+    @Published private(set) var isExportRunning: Bool = false
 
     private let photoLibraryManager: PhotoLibraryManager
 
@@ -49,7 +50,9 @@ final class MonthViewModel: ObservableObject {
             var initialThumbs: [String: NSImage] = [:]
 
             for asset in initialBatch {
-                if let thumb = await photoLibraryManager.loadThumbnail(for: asset) {
+                if let thumb = await photoLibraryManager.loadThumbnail(
+                    for: asset, allowNetwork: !isExportRunning)
+                {
                     initialThumbs[asset.localIdentifier] = thumb
                 }
             }
@@ -65,7 +68,9 @@ final class MonthViewModel: ObservableObject {
             Task { [weak self] in
                 guard let self else { return }
                 for asset in monthAssets.dropFirst(self.initialThumbnailBatchSize) {
-                    if let thumb = await self.photoLibraryManager.loadThumbnail(for: asset) {
+                    if let thumb = await self.photoLibraryManager.loadThumbnail(
+                        for: asset, allowNetwork: !self.isExportRunning)
+                    {
                         await MainActor.run {
                             self.thumbnailsById[asset.localIdentifier] = thumb
                         }
@@ -84,5 +89,11 @@ final class MonthViewModel: ObservableObject {
 
     func select(asset: PHAsset?) {
         selectedAssetId = asset?.localIdentifier
+    }
+
+    func setExportRunning(_ running: Bool) {
+        isExportRunning = running
+        // Stop background thumbnail network during export; caching stays but can be paused here if needed
+        // If desired, we could call stopCachingThumbnails(for:) to reduce IO further
     }
 }

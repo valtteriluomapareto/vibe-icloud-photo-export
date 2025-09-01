@@ -79,7 +79,20 @@ struct ContentView: View {
                                             .tag(YearMonth(year: year, month: month))
                                         }
                                     } label: {
-                                        Text(verbatim: String(year))
+                                        HStack {
+                                            Text(verbatim: String(year))
+                                            Spacer()
+                                            Button("Export Year") {
+                                                exportManager.startExportYear(year: year)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(!exportDestinationManager.canExportNow)
+                                            .help(
+                                                exportDestinationManager.canExportNow
+                                                    ? "Export all unexported assets for \(year)"
+                                                    : "Select a writable export folder first"
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -192,6 +205,25 @@ struct ContentView: View {
                     .foregroundColor(exportManager.isRunning ? .orange : .secondary)
                     Spacer()
                     if exportManager.isRunning { ProgressView().scaleEffect(0.6) }
+                }
+                .font(.caption)
+
+                HStack(spacing: 8) {
+                    if exportManager.isPaused {
+                        Button("Resume") { exportManager.resume() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(exportManager.queueCount == 0)
+                    } else {
+                        Button("Pause") { exportManager.pause() }
+                            .buttonStyle(.bordered)
+                            .disabled(exportManager.queueCount == 0)
+                    }
+                    Button("Clear Pending") { exportManager.clearPending() }
+                        .disabled(exportManager.queueCount == 0)
+                    Button("Cancel & Clear") { exportManager.cancelAndClear() }
+                        .foregroundColor(.red)
+                        .help("Abort current export and clear the queue")
+                    Spacer()
                 }
                 .font(.caption)
 

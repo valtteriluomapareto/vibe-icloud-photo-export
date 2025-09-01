@@ -3,7 +3,6 @@ import Photos
 import SwiftUI
 
 /// Manages access to the Photos library, including authorization and asset fetching
-@MainActor
 final class PhotoLibraryManager: ObservableObject {
     /// Published properties to track authorization status
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
@@ -15,6 +14,9 @@ final class PhotoLibraryManager: ObservableObject {
         case fetchFailed
         case assetUnavailable
     }
+
+    /// Shared caching image manager for thumbnails
+    private static let cachingImageManager = PHCachingImageManager()
 
     init() {
         // Check if Info.plist contains photos usage description
@@ -40,8 +42,10 @@ final class PhotoLibraryManager: ObservableObject {
     func requestAuthorization() async -> Bool {
         let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
 
-        self.authorizationStatus = status
-        self.isAuthorized = status == .authorized
+        await MainActor.run {
+            self.authorizationStatus = status
+            self.isAuthorized = status == .authorized
+        }
 
         return status == .authorized
     }
@@ -158,7 +162,7 @@ final class PhotoLibraryManager: ObservableObject {
                 assets.append(fetchResult.object(at: index))
             }
 
-        	// Yield to main thread periodically
+            // Yield to main thread periodically
             if index % batchSize == 0 && index > 0 {
                 try? await Task.sleep(nanoseconds: 1_000_000)  // 1ms
             }
@@ -171,13 +175,22 @@ final class PhotoLibraryManager: ObservableObject {
     func countAssets(year: Int, month: Int) throws -> Int {
         guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
         let calendar = Calendar.current
-        var start = DateComponents(); start.year = year; start.month = month; start.day = 1
-        var end = DateComponents(); end.year = year; end.month = month + 1; end.day = 1
-        guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end) else {
+        var start = DateComponents()
+        start.year = year
+        start.month = month
+        start.day = 1
+        var end = DateComponents()
+        end.year = year
+        end.month = month + 1
+        end.day = 1
+        guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end)
+        else {
             throw PhotoLibraryError.fetchFailed
         }
         let opts = PHFetchOptions()
-        opts.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate, endDate as NSDate)
+        opts.predicate = NSPredicate(
+            format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate,
+            endDate as NSDate)
         let result = PHAsset.fetchAssets(with: opts)
         return result.count
     }
@@ -186,13 +199,22 @@ final class PhotoLibraryManager: ObservableObject {
     func countAssets(year: Int) throws -> Int {
         guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
         let calendar = Calendar.current
-        var start = DateComponents(); start.year = year; start.month = 1; start.day = 1
-        var end = DateComponents(); end.year = year + 1; end.month = 1; end.day = 1
-        guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end) else {
+        var start = DateComponents()
+        start.year = year
+        start.month = 1
+        start.day = 1
+        var end = DateComponents()
+        end.year = year + 1
+        end.month = 1
+        end.day = 1
+        guard let startDate = calendar.date(from: start), let endDate = calendar.date(from: end)
+        else {
             throw PhotoLibraryError.fetchFailed
         }
         let opts = PHFetchOptions()
-        opts.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate, endDate as NSDate)
+        opts.predicate = NSPredicate(
+            format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate,
+            endDate as NSDate)
         let result = PHAsset.fetchAssets(with: opts)
         return result.count
     }
@@ -208,7 +230,8 @@ final class PhotoLibraryManager: ObservableObject {
         guard count > 0 else { return [] }
 
         guard let firstDate = result.object(at: 0).creationDate,
-              let lastDate = result.object(at: count - 1).creationDate else {
+            let lastDate = result.object(at: count - 1).creationDate
+        else {
             return []
         }
 
@@ -235,7 +258,34 @@ final class PhotoLibraryManager: ObservableObject {
         )
     }
 
+    /// Start caching thumbnails for assets
+    func startCachingThumbnails(
+        for assets: [PHAsset], size: CGSize = CGSize(width: 200, height: 200),
+        contentMode: PHImageContentMode = .aspectFill
+    ) {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        PhotoLibraryManager.cachingImageManager.startCachingImages(
+            for: assets, targetSize: size, contentMode: contentMode, options: options)
+    }
+
+    /// Stop caching thumbnails for assets
+    func stopCachingThumbnails(
+        for assets: [PHAsset], size: CGSize = CGSize(width: 200, height: 200),
+        contentMode: PHImageContentMode = .aspectFill
+    ) {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        PhotoLibraryManager.cachingImageManager.stopCachingImages(
+            for: assets, targetSize: size, contentMode: contentMode, options: options)
+    }
+
     /// Load thumbnail for an asset
+    @MainActor
     func loadThumbnail(
         for asset: PHAsset, size: CGSize = CGSize(width: 200, height: 200),
         contentMode: PHImageContentMode = .aspectFill
@@ -249,7 +299,7 @@ final class PhotoLibraryManager: ObservableObject {
             // Add a flag to track whether we've already resumed
             var hasResumed = false
 
-            PHImageManager.default().requestImage(
+            PhotoLibraryManager.cachingImageManager.requestImage(
                 for: asset,
                 targetSize: size,
                 contentMode: contentMode,
@@ -258,12 +308,13 @@ final class PhotoLibraryManager: ObservableObject {
                 // Only resume once
                 guard !hasResumed else { return }
                 hasResumed = true
-                continuation.resume(returning: image as? NSImage)
+                continuation.resume(returning: image)
             }
         }
     }
 
     /// Request a full-size image for an asset
+    @MainActor
     func requestFullImage(for asset: PHAsset) async throws -> NSImage {
         return try await withCheckedThrowingContinuation { continuation in
             let options = PHImageRequestOptions()
@@ -282,7 +333,7 @@ final class PhotoLibraryManager: ObservableObject {
                     return
                 }
 
-                guard let image = image as? NSImage else {
+                guard let image = image else {
                     continuation.resume(throwing: PhotoLibraryError.assetUnavailable)
                     return
                 }

@@ -18,6 +18,9 @@ final class MonthViewModel: ObservableObject {
     // Control initial thumbnail batch size
     private let initialThumbnailBatchSize: Int = 40
 
+    // Track cached assets to manage PHCachingImageManager preheating
+    private var cachedAssets: [PHAsset] = []
+
     init(photoLibraryManager: PhotoLibraryManager) {
         self.photoLibraryManager = photoLibraryManager
     }
@@ -25,6 +28,11 @@ final class MonthViewModel: ObservableObject {
     func loadAssets(forYear year: Int, month: Int) async {
         isLoading = true
         errorMessage = nil
+        // Stop caching for previous month
+        if !cachedAssets.isEmpty {
+            photoLibraryManager.stopCachingThumbnails(for: cachedAssets)
+            cachedAssets = []
+        }
         assets = []
         thumbnailsById = [:]
         selectedAssetId = nil
@@ -32,6 +40,9 @@ final class MonthViewModel: ObservableObject {
         do {
             let monthAssets = try await photoLibraryManager.fetchAssets(year: year, month: month)
             assets = monthAssets
+            // Start caching for new month
+            photoLibraryManager.startCachingThumbnails(for: monthAssets)
+            cachedAssets = monthAssets
 
             // Preload an initial batch of thumbnails
             let initialBatch = Array(monthAssets.prefix(initialThumbnailBatchSize))

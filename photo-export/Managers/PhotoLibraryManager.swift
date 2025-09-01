@@ -285,7 +285,6 @@ final class PhotoLibraryManager: ObservableObject {
     }
 
     /// Load thumbnail for an asset
-    @MainActor
     func loadThumbnail(
         for asset: PHAsset, size: CGSize = CGSize(width: 200, height: 200),
         contentMode: PHImageContentMode = .aspectFill
@@ -314,7 +313,6 @@ final class PhotoLibraryManager: ObservableObject {
     }
 
     /// Request a full-size image for an asset
-    @MainActor
     func requestFullImage(for asset: PHAsset) async throws -> NSImage {
         return try await withCheckedThrowingContinuation { continuation in
             let options = PHImageRequestOptions()

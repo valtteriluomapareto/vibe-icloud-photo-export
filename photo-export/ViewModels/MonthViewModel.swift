@@ -66,7 +66,9 @@ final class MonthViewModel: ObservableObject {
                 guard let self else { return }
                 for asset in monthAssets.dropFirst(self.initialThumbnailBatchSize) {
                     if let thumb = await self.photoLibraryManager.loadThumbnail(for: asset) {
-                        self.thumbnailsById[asset.localIdentifier] = thumb
+                        await MainActor.run {
+                            self.thumbnailsById[asset.localIdentifier] = thumb
+                        }
                     }
                 }
             }

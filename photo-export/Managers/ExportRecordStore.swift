@@ -23,10 +23,12 @@ final class ExportRecordStore: ObservableObject {
         label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
 
     private(set) var recordsById: [String: ExportRecord] = [:]
+    private(set) var doneCountByYearMonth: [String: Int] = [:]
     private var mutationCountSinceCompact: Int = 0
 
     // Published bump used to notify SwiftUI of logical changes
     @Published private(set) var mutationCounter: Int = 0
+    private var notifyWorkItem: DispatchWorkItem?
 
     private let fileManager = FileManager.default
     private let storeRootURL: URL
@@ -64,6 +66,7 @@ final class ExportRecordStore: ObservableObject {
     func configure(for destinationId: String?) {
         // Reset in-memory state
         recordsById = [:]
+        doneCountByYearMonth = [:]
         mutationCountSinceCompact = 0
 
         guard let destinationId else {
@@ -84,6 +87,7 @@ final class ExportRecordStore: ObservableObject {
     private func loadFromCurrentDirectory() {
         guard let snapshotURL = snapshotFileURL, let logURL = logFileURL else { return }
         recordsById = [:]
+        doneCountByYearMonth = [:]
         // Prefer snapshot if available, then apply log mutations after
         if fileManager.fileExists(atPath: snapshotURL.path) {
             do {
@@ -92,6 +96,7 @@ final class ExportRecordStore: ObservableObject {
                 decoder.dateDecodingStrategy = .iso8601
                 let decoded = try decoder.decode([String: ExportRecord].self, from: data)
                 recordsById = decoded
+                rebuildDoneCountsFromRecords()
             } catch {
                 logger.error(
                     "Failed to read snapshot: \(String(describing: error), privacy: .public)")
@@ -181,9 +186,7 @@ final class ExportRecordStore: ObservableObject {
     }
 
     func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
-        let exportedCount = recordsById.values.reduce(0) { partial, rec in
-            partial + ((rec.year == year && rec.month == month && rec.status == .done) ? 1 : 0)
-        }
+        let exportedCount = doneCountByYearMonth[ymKey(year: year, month: month)] ?? 0
         let status: MonthExportStatus
         if exportedCount == 0 {
             status = .notExported
@@ -200,8 +203,8 @@ final class ExportRecordStore: ObservableObject {
     // MARK: - Internals
     private func append(_ mutation: ExportRecordMutation) {
         apply(mutation)
-        // Notify observers immediately on logical change
-        mutationCounter &+= 1
+        // Coalesce notifications to avoid excessive UI churn during exports
+        scheduleCoalescedNotify()
 
         // If not configured to any destination, do not persist
         guard let logURL = self.logFileURL, let snapshotURL = self.snapshotFileURL else { return }
@@ -231,26 +234,21 @@ final class ExportRecordStore: ObservableObject {
                 self.mutationCountSinceCompact += 1
                 if self.mutationCountSinceCompact >= Constants.compactEveryNMutations {
                     self.mutationCountSinceCompact = 0
-                    do {
-                        let snapshotData = try encoder.encode(currentRecords)
-                        let snapURL = snapshotURL
-                        let logFile = logURL
-                        self.ioQueue.async { [weak self] in
-                            guard let self else { return }
-                            do {
-                                try writeSnapshotAndTruncate(
-                                    snapshotData: snapshotData, snapshotFileURL: snapURL,
-                                    logFileURL: logFile)
-                            } catch {
-                                self.logger.error(
-                                    "Failed to compact snapshot: \(String(describing: error), privacy: .public)"
-                                )
-                            }
+                    let recordsSnapshot = currentRecords
+                    let snapURL = snapshotURL
+                    let logFile = logURL
+                    self.ioQueue.async { [weak self] in
+                        guard let self else { return }
+                        do {
+                            let snapshotData = try encoder.encode(recordsSnapshot)
+                            try writeSnapshotAndTruncate(
+                                snapshotData: snapshotData, snapshotFileURL: snapURL,
+                                logFileURL: logFile)
+                        } catch {
+                            self.logger.error(
+                                "Failed to compact snapshot: \(String(describing: error), privacy: .public)"
+                            )
                         }
-                    } catch {
-                        self.logger.error(
-                            "Failed to encode snapshot: \(String(describing: error), privacy: .public)"
-                        )
                     }
                 }
             }
@@ -260,9 +258,20 @@ final class ExportRecordStore: ObservableObject {
     private func apply(_ mutation: ExportRecordMutation) {
         switch mutation.op {
         case .upsert:
-            if let record = mutation.record { recordsById[mutation.id] = record }
+            let old = recordsById[mutation.id]
+            if let oldRec = old, oldRec.status == .done {
+                adjustDoneCount(year: oldRec.year, month: oldRec.month, delta: -1)
+            }
+            if let record = mutation.record {
+                recordsById[mutation.id] = record
+                if record.status == .done {
+                    adjustDoneCount(year: record.year, month: record.month, delta: 1)
+                }
+            }
         case .delete:
-            recordsById.removeValue(forKey: mutation.id)
+            if let oldRec = recordsById.removeValue(forKey: mutation.id), oldRec.status == .done {
+                adjustDoneCount(year: oldRec.year, month: oldRec.month, delta: -1)
+            }
         }
     }
 
@@ -275,6 +284,32 @@ final class ExportRecordStore: ObservableObject {
                 )
             }
         }
+    }
+
+    private func rebuildDoneCountsFromRecords() {
+        doneCountByYearMonth = [:]
+        for rec in recordsById.values where rec.status == .done {
+            adjustDoneCount(year: rec.year, month: rec.month, delta: 1)
+        }
+    }
+
+    private func ymKey(year: Int, month: Int) -> String { "\(year)-\(month)" }
+
+    private func adjustDoneCount(year: Int, month: Int, delta: Int) {
+        let key = ymKey(year: year, month: month)
+        let current = doneCountByYearMonth[key] ?? 0
+        let next = max(0, current + delta)
+        doneCountByYearMonth[key] = next
+    }
+
+    private func scheduleCoalescedNotify() {
+        notifyWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.mutationCounter &+= 1
+        }
+        notifyWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
     }
 
     // MARK: - Testing helpers

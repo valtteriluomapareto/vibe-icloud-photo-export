@@ -162,12 +162,12 @@ final class ExportManager: ObservableObject {
 
             try await writeResource(resource, to: tempURL)
 
-            // Atomic move to final location
-            try moveItem(from: tempURL, to: finalURL)
+            // Atomic move to final location (off main)
+            try await moveItemAsync(from: tempURL, to: finalURL)
 
-            // Apply timestamps based on asset creation date
+            // Apply timestamps based on asset creation date (off main)
             if let createdAt = asset.creationDate {
-                applyTimestamps(creationDate: createdAt, to: finalURL)
+                await applyTimestampsAsync(creationDate: createdAt, to: finalURL)
             }
 
             exportRecordStore.markExported(
@@ -268,6 +268,28 @@ final class ExportManager: ObservableObject {
             logger.error(
                 "Failed setting FileManager attributes timestamps: \(error.localizedDescription, privacy: .public)"
             )
+        }
+    }
+
+    private func moveItemAsync(from src: URL, to dst: URL) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    try self.moveItem(from: src, to: dst)
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func applyTimestampsAsync(creationDate: Date, to url: URL) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                self.applyTimestamps(creationDate: creationDate, to: url)
+                continuation.resume()
+            }
         }
     }
 }

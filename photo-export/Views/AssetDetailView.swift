@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import Photos
+import SwiftUI
 
 struct AssetDetailView: View {
     @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
@@ -64,11 +64,15 @@ struct AssetDetailView: View {
         fullImage = nil
         do {
             let image = try await photoLibraryManager.requestFullImage(for: asset)
-            fullImage = image
-            isLoading = false
+            await MainActor.run {
+                fullImage = image
+                isLoading = false
+            }
         } catch {
-            isLoading = false
-            errorMessage = "Failed to load image: \(error.localizedDescription)"
+            await MainActor.run {
+                isLoading = false
+                errorMessage = "Failed to load image: \(error.localizedDescription)"
+            }
         }
     }
 

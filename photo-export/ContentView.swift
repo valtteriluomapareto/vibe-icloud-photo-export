@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var years: [Int] = []
     @State private var expandedYears: Set<Int> = []
     @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
+    @State private var assetCountsByYearMonth: [String: Int] = [:]
 
     // Detail selection
     @State private var selectedAsset: PHAsset?
@@ -67,14 +68,8 @@ struct ContentView: View {
                                             MonthRow(
                                                 year: year,
                                                 month: month,
-                                                totalProvider: { [weak photoLibraryManager] in
-                                                    guard let mgr = photoLibraryManager else {
-                                                        return 0
-                                                    }
-                                                    return
-                                                        (try? mgr.countAssets(
-                                                            year: year, month: month)) ?? 0
-                                                },
+                                                total: assetCountsByYearMonth["\(year)-\(month)"]
+                                                    ?? 0,
                                                 exportAction: {
                                                     exportManager.startExportMonth(
                                                         year: year, month: month)
@@ -240,9 +235,15 @@ struct ContentView: View {
     }
 
     private func computeMonthsWithAssets(for year: Int) -> [Int] {
-        (1...12).filter { month in
-            ((try? photoLibraryManager.countAssets(year: year, month: month)) ?? 0) > 0
+        var months: [Int] = []
+        for month in 1...12 {
+            let count = (try? photoLibraryManager.countAssets(year: year, month: month)) ?? 0
+            assetCountsByYearMonth["\(year)-\(month)"] = count
+            if count > 0 {
+                months.append(month)
+            }
         }
+        return months
     }
 }
 
@@ -323,12 +324,11 @@ struct MonthRow: View {
 
     let year: Int
     let month: Int
-    let totalProvider: () -> Int
+    let total: Int
     let exportAction: () -> Void
     let canExportNow: Bool
 
     var body: some View {
-        let total = totalProvider()
         let summary = exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
         return HStack(spacing: 8) {
             Text("\(String(year)) \(monthName(month))")

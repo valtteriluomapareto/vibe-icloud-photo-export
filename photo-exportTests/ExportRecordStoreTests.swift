@@ -166,6 +166,47 @@ struct ExportRecordStoreTests {
         #expect(!store.isExported(assetId: "a1"))
         #expect(store.monthSummary(year: 2025, month: 7, totalAssets: 1).exportedCount == 0)
     }
+
+    @Test func testMutationCounterCoalescedNotifications() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destC")
+        let baseline = store.mutationCounter
+        // Burst of mutations
+        for i in 0..<5 {
+            store.markInProgress(
+                assetId: "c\(i)", year: 2025, month: 8, relPath: "2025/08/", filename: nil)
+        }
+        // Wait for debounce (200ms) to fire once
+        try await Task.sleep(nanoseconds: 600_000_000)
+        let delta = store.mutationCounter - baseline
+        #expect(delta == 1)
+    }
+
+    @Test func testDoneCountTracksTransitionsAndMoves() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destD")
+        // Export to month 9
+        store.markExported(
+            assetId: "t", year: 2025, month: 9, relPath: "2025/09/", filename: "A.jpg",
+            exportedAt: Date())
+        store.flushForTesting()
+        #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 1)
+        // Mark failed -> should decrement month 9
+        store.markFailed(assetId: "t", error: "oops", at: Date())
+        store.flushForTesting()
+        #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
+        // Re-export same id to month 10 -> counts move
+        store.markExported(
+            assetId: "t", year: 2025, month: 10, relPath: "2025/10/", filename: "B.jpg",
+            exportedAt: Date())
+        store.flushForTesting()
+        #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
+        #expect(store.monthSummary(year: 2025, month: 10, totalAssets: 10).exportedCount == 1)
+    }
 }
 
 extension Data {

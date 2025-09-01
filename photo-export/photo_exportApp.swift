@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct photo_exportApp: App {
+struct PhotoExportApp: App {
     @StateObject private var exportDestinationManager: ExportDestinationManager
     @StateObject private var photoLibraryManager: PhotoLibraryManager
     @StateObject private var exportRecordStore: ExportRecordStore

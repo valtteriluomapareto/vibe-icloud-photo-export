@@ -25,6 +25,7 @@ Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the rema
 - [x] On app launch, rescan Photos library and cross-check with existing exports.
 - [ ] Manual refresh to rescan library on demand.
 - [x] Support incremental export, exporting only the new assets for any selected month.
+- [ ] Adopt `PHPhotoLibraryChangeObserver` to live-update when the Photos library changes during app use.
 
 ---
 
@@ -35,6 +36,7 @@ Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the rema
 - [x] Reduce contention: pause/disable thumbnail networking during export (use non-network thumbnails while exporting)
 - [x] Ensure image previews display quickly and at suitable size.
 - [ ] Ensure video previews display quickly and at suitable size.
+- [ ] Add bounded concurrent export queue (2–3 workers) with a configurable limit.
 
 ---
 

@@ -3,26 +3,26 @@
 This document outlines potential improvements to evolve the Apple Photos backup/export app. Each item includes a short rationale to clarify the value.
 
 ### Export Pipeline, Reliability, and Performance
-- **Bounded concurrent export queue**: Implement an async semaphore–backed task queue to export multiple assets in parallel with a configurable limit. Improves throughput while keeping memory and I/O under control. Keep MVP serial to reduce complexity; enable concurrency under a preference later.
-- **Atomic writes with robust temp handling**: Always write to a temporary file and atomically move to the final location; add verification of file size/date to reduce risk of partial or corrupt files after interruptions.
+- **Bounded concurrent export queue** (Promoted to Implementation Tasks): Implement an async semaphore–backed task queue to export multiple assets in parallel with a configurable limit. Improves throughput while keeping memory and I/O under control. Keep MVP serial to reduce complexity; enable concurrency under a preference later.
+- **Atomic writes with robust temp handling** (Partially implemented): Always write to a temporary file and atomically move to the final location (implemented). Add verification of file size/date to reduce risk of partial or corrupt files after interruptions (pending).
 - **Crash-resume semantics**: Persist in-progress states more granularly (e.g., “copying”, “verifying”, “done”) to resume precisely where the app left off after a crash or power loss.
 - **Progress UI with pause/cancel**: Add user controls to pause/resume/cancel export jobs and show per-asset and overall progress. Improves transparency and control for long-running exports.
 - **Preflight destination checks**: Before starting a job, verify available space, permissions, and mount status to fail fast with actionable guidance.
 
 ### Data & Persistence
 - **Migrate `ExportRecordStore` to SQLite**: Switch from JSONL to SQLite when scaling to very large libraries (10k–100k+). Gains efficient queries (e.g., month aggregations), transactional updates, and better long-term performance.
-- **Snapshot/compaction cadence & health checks**: Add background scheduling for compaction and store integrity verification to keep JSONL logs small and healthy.
-- **Monthly asset count cache**: Cache per-month totals to avoid repeated Photos count queries, improving sidebar performance on large libraries.
+- **Snapshot/compaction cadence & health checks** (Partially implemented): Compaction is performed based on mutation count (implemented). Add background scheduling and store integrity verification to keep JSONL logs small and healthy (pending).
+- **Monthly asset count cache** (Partially implemented): Cache per-month totals to avoid repeated Photos count queries, improving sidebar performance on large libraries. Currently cached in-memory for the selected year; consider persisting or broadening scope (pending).
 
 ### Photos Integration & Media Support
 - **Live Photos and paired assets**: Ensure image+video pairs (Live Photos) export together coherently; use `PHAssetResourceManager` for original resources where appropriate for fidelity.
 - **iCloud originals handling**: Expose settings to allow network downloads of originals (with progress) or skip remote-only assets when offline, avoiding export stalls.
-- **Library change observation**: Adopt `PHPhotoLibraryChangeObserver` to live-update month lists and badges when the Photos library changes during app use.
+- **Library change observation** (Promoted to Implementation Tasks): Adopt `PHPhotoLibraryChangeObserver` to live-update month lists and badges when the Photos library changes during app use.
 
 ### File System & Naming
 - **Flexible naming scheme**: Allow user-configurable naming (e.g., `YYYYMMDD_HHMMSS_originalName.ext`), sanitize characters, and ensure collision-safe unique suffixing. Increases portability and predictability.
 - **Folder manifests**: Optionally emit a small JSON/CSV manifest per month folder listing asset IDs → exported filenames. Aids auditing and external processing.
-- **Path length and invalid name defenses**: Centralize and harden path validation with fallbacks for long/invalid names to prevent export failures on edge cases.
+- **Path length and invalid name defenses**: Centralize and harden path validation with fallbacks for long/invalid names to prevent export failures on edge cases. (Temp write + atomic move already implemented; this item expands validation.)
 
 ### Metadata & Privacy
 - **Optional metadata sidecars**: Export per-asset sidecar JSON or XMP with EXIF/IPTC/timezone/location (with a privacy toggle). Enables richer offline usage and external tooling.

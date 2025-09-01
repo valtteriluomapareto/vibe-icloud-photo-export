@@ -163,11 +163,25 @@ final class ExportManager: ObservableObject {
             try await writeResource(resource, to: tempURL)
 
             // Atomic move to final location (off main)
-            try await moveItemAsync(from: tempURL, to: finalURL)
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    do {
+                        try FileIOService.moveItemAtomically(from: tempURL, to: finalURL)
+                        continuation.resume(returning: ())
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
 
             // Apply timestamps based on asset creation date (off main)
             if let createdAt = asset.creationDate {
-                await applyTimestampsAsync(creationDate: createdAt, to: finalURL)
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global(qos: .utility).async {
+                        FileIOService.applyTimestamps(creationDate: createdAt, to: finalURL)
+                        continuation.resume()
+                    }
+                }
             }
 
             exportRecordStore.markExported(
@@ -227,68 +241,6 @@ final class ExportManager: ObservableObject {
                 } else {
                     continuation.resume(returning: ())
                 }
-            }
-        }
-    }
-
-    private func moveItem(from src: URL, to dst: URL) throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: dst.path) {
-            // Should not happen due to uniqueFileURL, but double-check
-            throw NSError(
-                domain: "Export", code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
-        }
-        // Ensure parent exists
-        try fm.createDirectory(
-            at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try fm.moveItem(at: src, to: dst)
-    }
-
-    private func applyTimestamps(creationDate: Date, to url: URL) {
-        // Best effort: set both creation and modification dates via URLResourceValues and FileManager
-        do {
-            var values = URLResourceValues()
-            values.creationDate = creationDate
-            values.contentModificationDate = creationDate
-            var mutableURL = url
-            try mutableURL.setResourceValues(values)
-        } catch {
-            logger.error(
-                "Failed setting URLResourceValues timestamps: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-        do {
-            try FileManager.default.setAttributes(
-                [
-                    .creationDate: creationDate,
-                    .modificationDate: creationDate,
-                ], ofItemAtPath: url.path)
-        } catch {
-            logger.error(
-                "Failed setting FileManager attributes timestamps: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-    }
-
-    private func moveItemAsync(from src: URL, to dst: URL) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                do {
-                    try self.moveItem(from: src, to: dst)
-                    continuation.resume(returning: ())
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-
-    private func applyTimestampsAsync(creationDate: Date, to url: URL) async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                self.applyTimestamps(creationDate: creationDate, to: url)
-                continuation.resume()
             }
         }
     }

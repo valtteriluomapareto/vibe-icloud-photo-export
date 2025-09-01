@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import Photos
+import SwiftUI
 
 struct MonthContentView: View {
     @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
@@ -12,13 +12,18 @@ struct MonthContentView: View {
     let month: Int
     @Binding var selectedAsset: PHAsset?
 
-    init(year: Int, month: Int, selectedAsset: Binding<PHAsset?>, photoLibraryManager: PhotoLibraryManager? = nil) {
+    init(
+        year: Int, month: Int, selectedAsset: Binding<PHAsset?>,
+        photoLibraryManager: PhotoLibraryManager? = nil
+    ) {
         self.year = year
         self.month = month
         self._selectedAsset = selectedAsset
         // Defer creation of StateObject; we need a manager instance at runtime from Environment
         // We create a temporary placeholder; it will be replaced in body using .onAppear if needed
-        _viewModel = StateObject(wrappedValue: MonthViewModel(photoLibraryManager: photoLibraryManager ?? PhotoLibraryManager()))
+        _viewModel = StateObject(
+            wrappedValue: MonthViewModel(
+                photoLibraryManager: photoLibraryManager ?? PhotoLibraryManager()))
     }
 
     var body: some View {
@@ -58,16 +63,18 @@ struct MonthContentView: View {
         }
         .padding(.horizontal)
         .overlay(overlayViews)
-        .task(id: "\(year)-\(month)-\(exportRecordStore.mutationCounter)") {
+        .task(id: "\(year)-\(month)") {
             await viewModel.loadAssets(forYear: year, month: month)
-            if selectedAsset == nil, let id = viewModel.selectedAssetId, let asset = viewModel.assets.first(where: { $0.localIdentifier == id }) {
+            if selectedAsset == nil, let id = viewModel.selectedAssetId,
+                let asset = viewModel.assets.first(where: { $0.localIdentifier == id })
+            {
                 selectedAsset = asset
             }
         }
         .onAppear {
             // Ensure the view model uses the environment manager instance
             // Only do this once when created with placeholder
-            if (Mirror(reflecting: viewModel).children.isEmpty) {
+            if Mirror(reflecting: viewModel).children.isEmpty {
                 // no reliable way; but we already constructed with a placeholder manager. Accept it.
             }
         }
@@ -100,11 +107,17 @@ struct MonthContentView: View {
             if let summary {
                 switch summary.status {
                 case .complete:
-                    Label("\(summary.exportedCount)/\(summary.totalCount) exported", systemImage: "checkmark.seal.fill")
-                        .foregroundColor(.green)
+                    Label(
+                        "\(summary.exportedCount)/\(summary.totalCount) exported",
+                        systemImage: "checkmark.seal.fill"
+                    )
+                    .foregroundColor(.green)
                 case .partial:
-                    Label("\(summary.exportedCount)/\(summary.totalCount) exported", systemImage: "arrow.triangle.2.circlepath")
-                        .foregroundColor(.orange)
+                    Label(
+                        "\(summary.exportedCount)/\(summary.totalCount) exported",
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                    .foregroundColor(.orange)
                 case .notExported:
                     Label("0/\(summary.totalCount) exported", systemImage: "circle")
                         .foregroundColor(.secondary)

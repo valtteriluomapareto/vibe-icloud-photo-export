@@ -1,4 +1,4 @@
-# Photo Export — Refactoring Plan (v5)
+# Photo Export — Refactoring Plan (v7)
 
 ## Context
 
@@ -9,9 +9,19 @@ Code review identified critical bugs, dead code, missing test coverage, and arch
 **Decisions made**:
 - `TestPhotoAccessView` is a dev-only debug view → **delete it** with dead code.
 - Protocols will use **domain wrapper types** (not raw PHAsset) for true unit test isolation.
-- `PhotoLibraryProviding` is **non-`@MainActor`** — only UI state updates are actor-isolated, not the protocol contract. Expensive fetch/write operations must not be forced onto MainActor by the protocol.
+- `PhotoLibraryProviding` is **non-`@MainActor`** — only UI state updates are actor-isolated, not the protocol contract. To satisfy Swift 6 conformance rules, the `@MainActor` UI manager and the nonisolated protocol are implemented by **separate types** (split architecture).
+- `ExportDestinationProviding` is **`@MainActor`** and conformed to by `@MainActor ExportDestinationManager` to avoid Swift 6 conformance-isolation errors.
 - File **timestamps must be preserved** after protocol migration — `creationDate` is carried on `ExportJob`, populated from `ExportableAsset` during enqueue.
-- Destination tests use **dependency injection via `convenience init`** on the production type (accessible via `@testable import`), not preprocessor-guarded mutators or separate test doubles for the manager itself.
+- `ExportManager` authorization has a **single source of truth**: injected `@MainActor isAuthorized` closure. No secondary manager coupling.
+- `fetchResources(for:)` is **async** in `PhotoLibraryProviding` so export pipeline does not force synchronous resource lookups on MainActor.
+- Destination tests use **dependency injection** (injected `UserDefaults` suite + init flags to skip bookmark restore and volume observers), not preprocessor guards.
+- Domain wrapper enums use **explicit `init(from:)` mappers** with `switch` statements, not raw `Int` values, to prevent silent mis-mapping from Photos framework enums.
+- `PhotoLibraryService` methods that return Photos reference types (`[PHAsset]`) use a dedicated background `DispatchQueue` + continuation, not `Task.detached`, to avoid Swift 6 `Sendable` violations.
+- `ExportableResource.resourceToken` has a strict invariant: **unique within an asset and reversible** by `PhotoLibraryService.writeResource` (no best-effort matching).
+- Async year/month loading in `ContentView` uses **cancellation + stale-result guards** to prevent out-of-order task completions from overwriting newer state.
+- Export auth revocation has explicit policy: if authorization is lost while queue is active, **cancel queue immediately**, mark in-progress job as failed (`"Authorization revoked"`), and drop pending jobs.
+- `ExportManager` event stream has explicit per-run lifecycle: start of each export run creates a fresh stream; drain/cancel finishes that run’s stream.
+- `PhotoLibraryService` uses separate queues for long fetches vs quick stats queries to avoid starvation.
 
 ---
 
@@ -57,9 +67,9 @@ The first-ever compaction uses `moveItem` (safe — no prior snapshot to lose). 
 ### 1.4 — Fix AssetDetailView export status (always nil)
 **File**: `photo-export/Views/AssetDetailView.swift:8`
 **Problem**: Uses `@Environment(\.exportRecordStore)` but the custom key is never injected via `.environment(...)`.
-**Resolution**: Delete TestPhotoAccessView first (reorder: do 2.1 before 1.4), then do a single clean migration to `@EnvironmentObject`. This avoids the two-step churn of temporarily adding `.environment(\.exportRecordStore, ...)` then removing it.
+**Resolution**: Delete TestPhotoAccessView first, then do a single clean migration to `@EnvironmentObject`.
 **Reordered steps**:
-1. Delete `TestPhotoAccessView.swift` (moved from 2.1 to here — it's dead code with no dependents in the main app).
+1. Delete `TestPhotoAccessView.swift` — it's dead code with no dependents in the main app.
 2. Change `AssetDetailView` line 8 to `@EnvironmentObject private var exportRecordStore: ExportRecordStore`.
 3. Remove the `ExportRecordStoreKey` + extension from `ContentView.swift:13-22`.
 
@@ -71,7 +81,7 @@ Each deletion is verified unreferenced before removing. Build after each.
 
 ### 2.1 — Delete `fetchAssetsByYearAndMonth()`
 **File**: `photo-export/Managers/PhotoLibraryManager.swift:57-104`
-**Why**: After 1.4 deleted TestPhotoAccessView, this method has zero callers. It loaded the entire library into memory — the app uses per-month `fetchAssets(year:month:)` instead.
+**Why**: After 1.4 deleted TestPhotoAccessView, this method has zero callers.
 
 ### 2.2 — Delete `MainView` struct
 **File**: `photo-export/ContentView.swift:419-484`
@@ -79,7 +89,7 @@ Each deletion is verified unreferenced before removing. Build after each.
 
 ### 2.3 — Delete `InfoPlist.swift`
 **File**: `photo-export/InfoPlist.swift`
-**Why**: `register()` is a no-op (loop body commented out). Never imported or called. `NSPhotoLibraryUsageDescription` is in Xcode target build settings.
+**Why**: `register()` is a no-op (loop body commented out). Never imported or called.
 
 ### 2.4 — Delete `AssetMetadata` model and `extractAssetMetadata()`
 **Files**: `photo-export/Models/AssetMetadata.swift` (entire file), `photo-export/Managers/PhotoLibraryManager.swift:252-262`
@@ -87,7 +97,7 @@ Each deletion is verified unreferenced before removing. Build after each.
 
 ### 2.5 — Remove unused `isShowingAuthorizationView` state
 **File**: `photo-export/ContentView.swift:27`
-**Why**: Set on line 134, never read. Auth gate uses `photoLibraryManager.isAuthorized` directly.
+**Why**: Set on line 134, never read.
 
 **Verify entire phase**: Build succeeds, all tests pass.
 
@@ -112,40 +122,173 @@ func monthName(for month: Int) -> String {
 ```
 Uses guard-let (not force unwrap) matching the safer pattern from `ContentView.swift:272-276`. Replace all 3 call sites.
 
-### 3.2 — Concurrency cleanup for `PhotoLibraryManager`
-**File**: `photo-export/Managers/PhotoLibraryManager.swift:7`
-**Problem**: Has `@Published` properties read by SwiftUI but no class-level actor isolation. Individual methods annotated inconsistently.
+### 3.2 — Concurrency cleanup + split `PhotoLibraryManager`
+**File**: `photo-export/Managers/PhotoLibraryManager.swift`
 
-**Why NOT class-wide `@MainActor`**: The manager contains heavy fetch loops (`fetchAssets` at line 106-175, `countAssets` at 177-223, `availableYears` at 225-249) that do real work. Making the entire class `@MainActor` pins these to the main thread, risking UI hitches on large libraries.
+**Problem**: Has `@Published` properties read by SwiftUI but no class-level actor isolation. Individual methods annotated inconsistently. A class-wide `@MainActor` + nonisolated protocol conformance is a Swift 6 error.
 
-**Why NOT per-property `@MainActor`**: Fetch methods synchronously read `isAuthorized` in guard statements (lines 110, 179, 203, 227). If `isAuthorized` is `@MainActor`-isolated but the method is not, the compiler rejects the synchronous read. Splitting isolation at the property level creates a cascade of compile errors.
+**Fix** (split into two types):
 
-**Fix** (class-wide `@MainActor` + explicit background dispatch for heavy work):
-1. Add `@MainActor` to the class declaration. This is the only approach that keeps guard reads of `isAuthorized` valid while satisfying the compiler.
-2. For heavy fetch methods (`fetchAssets`, `countAssets`, `availableYears`): wrap the actual Photos framework query + loop in an explicit background dispatch to avoid main thread hitching:
+1. **`PhotoLibraryManager`** stays `@MainActor`, owns UI state only:
 ```swift
 @MainActor
-func fetchAssets(year: Int, month: Int? = nil, ...) async throws -> [PHAsset] {
-  guard isAuthorized else { throw ... }  // MainActor read — valid
-  // Heavy work on background
-  return try await withCheckedThrowingContinuation { continuation in
-    DispatchQueue.global(qos: .userInitiated).async {
-      let fetchResult = PHAsset.fetchAssets(with: fetchOptions)
-      // ... batch loop ...
-      continuation.resume(returning: assets)
+final class PhotoLibraryManager: ObservableObject {
+  @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
+  @Published var isAuthorized: Bool = false
+  @Published var isLimited: Bool = false  // added in Phase 5
+
+  let service: PhotoLibraryService  // nonisolated fetch/write operations
+
+  init() {
+    self.service = PhotoLibraryService()
+    verifyPhotoLibraryPermissions()
+    authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    isAuthorized = authorizationStatus == .authorized
+  }
+
+  func requestAuthorization() async -> Bool {
+    let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+    authorizationStatus = status
+    isAuthorized = status == .authorized
+    return status == .authorized
+  }
+
+  // Thumbnail/image loading stays here (UI-facing, uses PHCachingImageManager)
+  func loadThumbnail(for asset: PHAsset, ...) async -> NSImage? { ... }
+  func requestFullImage(for asset: PHAsset) async throws -> NSImage { ... }
+
+  // Delegation for data queries — these check isAuthorized then delegate
+  func fetchAssets(year: Int, month: Int?, ...) async throws -> [PHAsset] {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    return try await service.fetchAssets(year: year, month: month)
+  }
+  func countAssets(year: Int, month: Int) async throws -> Int {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    return try await service.countAssets(year: year, month: month)
+  }
+  func availableYears() async throws -> [Int] {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    return try await service.availableYears()
+  }
+}
+```
+
+2. **New file `photo-export/Managers/PhotoLibraryService.swift`** — nonisolated, does heavy Photos framework work off MainActor:
+```swift
+final class PhotoLibraryService {
+  private let fetchQueue = DispatchQueue(
+    label: "com.valtteriluoma.photo-export.photos.fetch",
+    qos: .userInitiated
+  )
+  private let statsQueue = DispatchQueue(
+    label: "com.valtteriluoma.photo-export.photos.stats",
+    qos: .utility
+  )
+
+  func fetchAssets(year: Int, month: Int?, ...) async throws -> [PHAsset] {
+    try await withCheckedThrowingContinuation { continuation in
+      fetchQueue.async {
+        do {
+          // PHFetchOptions setup, PHAsset.fetchAssets, batch loop
+          // ... existing logic from PhotoLibraryManager.fetchAssets ...
+          continuation.resume(returning: assets)
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+    }
+  }
+
+  func countAssets(year: Int, month: Int) async throws -> Int {
+    try await withCheckedThrowingContinuation { continuation in
+      statsQueue.async {
+        do {
+          // ... existing logic ...
+          continuation.resume(returning: count)
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+    }
+  }
+
+  func availableYears() async throws -> [Int] {
+    try await withCheckedThrowingContinuation { continuation in
+      statsQueue.async {
+        do {
+          // ... existing logic ...
+          continuation.resume(returning: years)
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
     }
   }
 }
 ```
-This keeps the guard on MainActor (valid) while moving the expensive Photos query off-main.
-3. Remove redundant per-method `@MainActor` from `loadThumbnail` and `requestFullImage`.
-4. In `requestAuthorization()`, replace `await MainActor.run { ... }` with direct property assignment (already on MainActor).
+Why queue + continuation: `Task.detached` requires `Sendable` values and fails for `[PHAsset]` under Swift 6 strict checking. This approach keeps heavy work off-main without introducing `Sendable` violations.
+Why separate queues: long-running month fetches must not starve lightweight stats calls (`countAssets`, `availableYears`) used by sidebar rendering.
+
+3. **Migrate `countAssets` and `availableYears` from sync to async**. Current callers:
+   - `ContentView.swift:136` — `years = (try? photoLibraryManager.availableYears()) ?? []`
+   - `ContentView.swift:146` — same
+   - `ContentView.swift:281` — `(try? photoLibraryManager.countAssets(year:month:)) ?? 0`
+
+   These are called in `.onAppear` and `.onChange` closures. Migrate to async with cancellation + stale guards:
+```swift
+@State private var yearsTask: Task<Void, Never>?
+@State private var yearsLoadToken: Int = 0
+@State private var monthTasksByYear: [Int: Task<Void, Never>] = [:]
+@State private var monthLoadTokenByYear: [Int: Int] = [:]
+
+func reloadYears() {
+  yearsTask?.cancel()
+  yearsLoadToken += 1
+  let token = yearsLoadToken
+  yearsTask = Task {
+    let fetched = (try? await photoLibraryManager.availableYears()) ?? []
+    guard !Task.isCancelled else { return }
+    guard yearsLoadToken == token else { return }  // stale completion guard
+    years = fetched
+  }
+}
+
+func computeMonthsWithAssets(for year: Int) async -> [Int] {
+  var months: [Int] = []
+  for month in 1...12 {
+    let count = (try? await photoLibraryManager.countAssets(year: year, month: month)) ?? 0
+    assetCountsByYearMonth["\(year)-\(month)"] = count
+    if count > 0 { months.append(month) }
+  }
+  return months
+}
+
+func loadMonths(for year: Int) {
+  monthTasksByYear[year]?.cancel()
+  let nextToken = (monthLoadTokenByYear[year] ?? 0) + 1
+  monthLoadTokenByYear[year] = nextToken
+
+  monthTasksByYear[year] = Task {
+    let months = await computeMonthsWithAssets(for: year)
+    guard !Task.isCancelled else { return }
+    guard monthLoadTokenByYear[year] == nextToken else { return }  // stale guard
+    monthsWithAssetsByYear[year] = months
+  }
+}
+
+// onDisappear cleanup
+.onDisappear {
+  yearsTask?.cancel()
+  monthTasksByYear.values.forEach { $0.cancel() }
+}
+```
+   Call sites in `.onAppear` / `.onChange` should call `reloadYears()` and `loadMonths(for:)`, not ad-hoc `Task {}` blocks.
 
 ### 3.3 — Break up `export(job:)` method and prepare helper visibility for Phase 4
 **File**: `photo-export/Managers/ExportManager.swift:173-281`
 **Fix**: Extract private helpers. Keep `export(job:)` as orchestrator:
-- `resolveAsset(id:) -> PHAsset?` — wraps `PHAsset.fetchAssets(withLocalIdentifiers:)`. Stays private for now (will become a protocol call in Phase 4.5).
-- `selectPrimaryResource(from:) -> PHAssetResource?` — already exists at line 284, change from `private` to `internal`. **Note**: In Phase 4.5, the signature will change to accept `[ExportableResource]` and return `ExportableResource?`. This is an explicit migration step in 4.5, not a conflict.
+- `resolveAsset(id:) -> PHAsset?` — wraps `PHAsset.fetchAssets(withLocalIdentifiers:)`. Stays private (becomes protocol call in 4.5).
+- `selectPrimaryResource(from:) -> PHAssetResource?` — change from `private` to `internal`. In Phase 4.5, signature migrates to `[ExportableResource] -> ExportableResource?` as an explicit step.
 - `uniqueFileURL(in:baseName:ext:) -> URL` — already non-private, already testable.
 
 ---
@@ -158,6 +301,7 @@ This keeps the guard on MainActor (valid) while moving the expensive Photos quer
 **New file**: `photo-export/Models/ExportableAsset.swift`
 ```swift
 import Foundation
+import Photos
 
 /// Lightweight value type decoupled from PHAsset for testability
 struct ExportableAsset: Identifiable, Equatable {
@@ -167,8 +311,18 @@ struct ExportableAsset: Identifiable, Equatable {
   let pixelWidth: Int
   let pixelHeight: Int
 
-  enum MediaKind: Int, Codable {
+  /// Explicit mapping from Photos framework type — no raw-value coupling
+  enum MediaKind: Codable, Equatable {
     case image, video, audio, unknown
+
+    init(from type: PHAssetMediaType) {
+      switch type {
+      case .image: self = .image
+      case .video: self = .video
+      case .audio: self = .audio
+      default:     self = .unknown
+      }
+    }
   }
 }
 
@@ -179,32 +333,74 @@ struct ExportableResource: Equatable {
   /// Opaque token that the PhotoLibraryProviding implementation uses to
   /// resolve the exact PHAssetResource. Treated as an opaque blob by
   /// ExportManager — never parsed, only passed back to writeResource().
-  /// The provider creates it; ExportManager stores and returns it.
   /// Tests can use any arbitrary string (e.g. "mock-token-1").
   let resourceToken: String
 
-  enum ResourceKind: Int {
+  /// Explicit mapping from Photos framework type — no raw-value coupling
+  enum ResourceKind: Equatable {
     case photo, video, alternatePhoto, fullSizePhoto, other
+
+    init(from type: PHAssetResourceType) {
+      switch type {
+      case .photo:          self = .photo
+      case .video:          self = .video
+      case .alternatePhoto: self = .alternatePhoto
+      case .fullSizePhoto:  self = .fullSizePhoto
+      default:              self = .other
+      }
+    }
   }
 }
 ```
-**Token design**: `resourceToken` is an **opaque passthrough** — ExportManager never inspects or parses it. Only the `PhotoLibraryProviding` implementation creates and consumes it. The real implementation can use any encoding it wants (index, UUID, serialized struct) without collision or parsing concerns. ExportManager just stores the token and passes it back to `writeResource`.
+**Token design**: `resourceToken` is an **opaque passthrough** — ExportManager never inspects or parses it. Only the `PhotoLibraryProviding` implementation creates and consumes it.
+Token invariant must be explicit and testable:
+- unique within an asset resource list
+- reversible without fuzzy matching
+- stable for the lifetime of the export run
+
+Concrete implementation rule:
+```swift
+// fetchResources(for:)
+let resources = PHAssetResource.assetResources(for: asset)
+return resources.enumerated().map { index, r in
+  ExportableResource(
+    type: .init(from: r.type),
+    originalFilename: r.originalFilename,
+    resourceToken: "\(asset.localIdentifier)#\(index)"
+  )
+}
+
+// writeResource(_:to:)
+let parts = resource.resourceToken.split(separator: "#", maxSplits: 1)
+guard parts.count == 2, let index = Int(parts[1]) else { throw TokenError.invalid }
+let assetId = String(parts[0])
+let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
+guard let asset = fetch.firstObject else { throw TokenError.assetNotFound }
+let resources = PHAssetResource.assetResources(for: asset)
+guard resources.indices.contains(index) else { throw TokenError.resourceNotFound }
+let resolved = resources[index]
+```
+`writeResource` must fail hard on invalid token / missing resource (no fallback by filename/type).
+**Enum design**: No `Int` raw values. Explicit `init(from:)` with exhaustive `switch` prevents silent mis-mapping from Photos enums.
 
 ### 4.2 — Extract `PhotoLibraryProviding` protocol
 **New file**: `photo-export/Protocols/PhotoLibraryProviding.swift`
 ```swift
 protocol PhotoLibraryProviding: AnyObject {
-  var isAuthorized: Bool { get }
   func fetchExportableAssets(year: Int, month: Int?) async throws -> [ExportableAsset]
-  func fetchResources(for assetId: String) -> [ExportableResource]
+  func fetchResources(for assetId: String) async throws -> [ExportableResource]
   func writeResource(_ resource: ExportableResource, to url: URL) async throws
 }
 ```
-**Not `@MainActor`**: The protocol is non-isolated. Fetch and write operations are potentially expensive and should not be forced onto MainActor by the protocol contract. The concrete `PhotoLibraryManager` implementation is `@MainActor` (from Phase 3.2) but its heavy work dispatches to background. Callers from ExportManager (itself `@MainActor`) will `await` these calls, which is correct.
+**Design**:
+- **Non-`@MainActor`**: Protocol is nonisolated. This is critical for Swift 6 compatibility — the concrete `PhotoLibraryService` is also nonisolated, so conformance has no actor-isolation conflict.
+- **Async `fetchResources`**: Resource lookup can perform Photos work and must not force synchronous execution on MainActor paths.
+- **No `isAuthorized`**: Auth state lives on `@MainActor PhotoLibraryManager`, not on the protocol. ExportManager receives an injected auth closure (single source of truth), keeping protocol responsibilities focused on data operations only.
 
 ### 4.3 — Extract `ExportDestinationProviding` protocol
 **New file**: `photo-export/Protocols/ExportDestinationProviding.swift`
 ```swift
+@MainActor
 protocol ExportDestinationProviding: AnyObject {
   var canExportNow: Bool { get }
   func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL
@@ -212,91 +408,211 @@ protocol ExportDestinationProviding: AnyObject {
   func endScopedAccess()
 }
 ```
-Also non-isolated. ExportManager calls these from `@MainActor` context anyway.
+`@MainActor` alignment with `ExportDestinationManager` avoids Swift 6 conformance-isolation errors for this UI-bound dependency.
 
-### 4.4 — Make existing managers conform
-- `PhotoLibraryManager`: Add `PhotoLibraryProviding` conformance. Implement:
-  - `fetchExportableAssets`: wraps existing `fetchAssets` + maps `PHAsset` → `ExportableAsset`
-  - `fetchResources`: wraps `PHAssetResource.assetResources(for:)`, maps to `ExportableResource`. Token creation is internal to this method — ExportManager never sees the encoding.
-  - `writeResource`: uses `resourceToken` (opaque to caller) to look up the `PHAssetResource`, then calls `PHAssetResourceManager.writeData`
-- `ExportDestinationManager`: Add `ExportDestinationProviding` conformance (existing methods already match the protocol).
+### 4.4 — Make service/managers conform
+- `PhotoLibraryService`: Add `PhotoLibraryProviding` conformance. Implement:
+  - `fetchExportableAssets`: wraps existing `fetchAssets` + maps `PHAsset` → `ExportableAsset` using `MediaKind(from:)`
+  - `fetchResources`: async wrapper around `PHAssetResource.assetResources(for:)`, mapped to `ExportableResource` using `ResourceKind(from:)`. Token creation is internal to this method.
+  - `writeResource`: uses `resourceToken` to look up the `PHAssetResource`, then calls `PHAssetResourceManager.writeData`
+- `ExportDestinationManager`: Add `ExportDestinationProviding` conformance (existing methods already match).
 
 ### 4.5 — Update `ExportManager` to depend on protocols + migrate helpers
 Replace concrete types with protocol types in stored properties and init:
 ```swift
-private let photoLibraryManager: any PhotoLibraryProviding
+private let photoLibraryService: any PhotoLibraryProviding
 private let exportDestinationManager: any ExportDestinationProviding
+private let exportRecordStore: ExportRecordStore
+private let isAuthorized: @MainActor () -> Bool
 ```
-Specific migrations in this step:
-1. Remove `resolveAsset(id:)` — replaced by `photoLibraryManager.fetchResources(for:)` and `photoLibraryManager.writeResource(_:to:)`
-2. Migrate `selectPrimaryResource(from: [PHAssetResource])` → `selectPrimaryResource(from: [ExportableResource]) -> ExportableResource?` using `ExportableResource.ResourceKind`
-3. Remove direct calls to `PHAsset.fetchAssets(withLocalIdentifiers:)` and `PHAssetResource.assetResources(for:)` — all Photos interaction goes through protocol
-4. **Timestamp preservation**: `ExportJob` already has `year` and `month`, but the current code uses `asset.creationDate` for file timestamps (ExportManager.swift:256). After migration, `PHAsset` is no longer available at export time. Fix: add `creationDate: Date?` to `ExportJob`. Populate it from `ExportableAsset.creationDate` during `enqueueMonth`/`enqueueYear`. The `export(job:)` method uses `job.creationDate` instead of `asset.creationDate` for `FileIOService.applyTimestamps`.
-
-### 4.6 — Add test infrastructure to `ExportManager`
-**Problem**: Queue processing is fire-and-forget `Task`-based (lines 41-53, 160-165). Tests cannot deterministically wait for the queue to drain without sleeping/polling, making assertions flaky.
-**Fix**: Add an internal `AsyncStream`-based notification:
+`ExportManager` does **not** keep a second manager reference. Auth checks use only the injected closure:
 ```swift
-// Internal: fires each time a job completes (success or failure)
-private var jobCompletionContinuation: AsyncStream<Void>.Continuation?
-private(set) var jobCompletionStream: AsyncStream<Void>?
-
-/// Call once before starting exports in tests.
-func enableJobCompletionStream() {
-  let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
-  jobCompletionStream = stream
-  jobCompletionContinuation = continuation
+init(
+  photoLibraryService: any PhotoLibraryProviding,
+  exportDestinationManager: any ExportDestinationProviding,
+  exportRecordStore: ExportRecordStore,
+  isAuthorized: @escaping @MainActor () -> Bool
+) {
+  self.photoLibraryService = photoLibraryService
+  self.exportDestinationManager = exportDestinationManager
+  self.exportRecordStore = exportRecordStore
+  self.isAuthorized = isAuthorized
 }
 ```
-In `processNext()`, after each job completes: `jobCompletionContinuation?.yield(())`. When queue drains: `jobCompletionContinuation?.finish()`.
+In `enqueueMonth`/`enqueueYear`: `guard isAuthorized() else { return }`.
+Composition root (`photo_exportApp.swift`) passes a single source of truth closure, e.g. `isAuthorized: { plm.isAuthorized }`.
 
-Tests consume the stream to wait for exactly N completions, with a timeout:
+Specific migrations:
+1. Remove `resolveAsset(id:)` — replaced by `await photoLibraryService.fetchResources(for:)` and `photoLibraryService.writeResource(_:to:)`
+2. Migrate `selectPrimaryResource(from: [PHAssetResource])` → `selectPrimaryResource(from: [ExportableResource]) -> ExportableResource?` using `ExportableResource.ResourceKind`
+3. Remove direct calls to `PHAsset.fetchAssets(withLocalIdentifiers:)` and `PHAssetResource.assetResources(for:)` — all Photos interaction goes through `PhotoLibraryProviding`
+4. **Timestamp preservation**: Add `creationDate: Date?` to `ExportJob`. Populate from `ExportableAsset.creationDate` during `enqueueMonth`/`enqueueYear`. `export(job:)` uses `job.creationDate` for `FileIOService.applyTimestamps`.
+5. **Auth revocation policy (explicit)**:
+   - Add `currentJob: ExportJob?` in `ExportManager` (set in `processNext`, clear after completion).
+   - Add method `handleAuthorizationRevoked()`:
 ```swift
-func awaitJobCompletions(_ count: Int, timeout: Duration = .seconds(5)) async throws {
-  guard let stream = exportManager.jobCompletionStream else { return }
-  var remaining = count
-  for await _ in stream {
-    remaining -= 1
-    if remaining <= 0 { break }
+@MainActor
+func handleAuthorizationRevoked() {
+  currentTask?.cancel()
+  currentTask = nil
+
+  if let currentJob {
+    exportRecordStore.markFailed(
+      assetId: currentJob.assetLocalIdentifier,
+      error: "Authorization revoked",
+      at: Date()
+    )
+  }
+
+  pendingJobs.removeAll()
+  currentJob = nil
+  isProcessing = false
+  isRunning = false
+  isPaused = false
+  updateQueueCount()
+  eventContinuation?.yield(.cancelled)
+  eventContinuation?.finish()
+}
+```
+   - Composition root (`photo_exportApp.swift`) hooks revocation:
+```swift
+.onChange(of: photoLibraryManager.isAuthorized) { _, newValue in
+  if !newValue { exportManager.handleAuthorizationRevoked() }
+}
+```
+
+### 4.6 — Add test infrastructure to `ExportManager`
+**Problem**: Queue processing is fire-and-forget `Task`-based (lines 41-53, 160-165). Tests cannot deterministically wait for queue events without sleeping.
+**Fix**: Add a typed `AsyncStream`-based event system with **per-run lifecycle**:
+```swift
+enum ExportQueueEvent: Equatable {
+  case jobFinished(String)  // asset ID
+  case paused
+  case cancelled
+  case drained
+}
+
+// Internal: fires for each queue lifecycle event
+private var eventContinuation: AsyncStream<ExportQueueEvent>.Continuation?
+private(set) var eventStream: AsyncStream<ExportQueueEvent>?
+
+/// Call before each test run. Closes previous stream (if any) and opens a fresh one.
+@discardableResult
+func prepareEventStreamForNextRun() -> AsyncStream<ExportQueueEvent> {
+  eventContinuation?.finish()
+  let (stream, continuation) = AsyncStream.makeStream(of: ExportQueueEvent.self)
+  eventStream = stream
+  eventContinuation = continuation
+  return stream
+}
+```
+Emit points in existing code:
+- `processNext()` after job completes: `eventContinuation?.yield(.jobFinished(job.assetLocalIdentifier))`
+- `processNext()` when queue empty: `eventContinuation?.yield(.drained)` then `eventContinuation?.finish()`
+- `pause()`: `eventContinuation?.yield(.paused)` (do NOT finish — stream stays open for resume)
+- `cancelAndClear()`: `eventContinuation?.yield(.cancelled)` then `eventContinuation?.finish()`
+- `resume()`: no event needed — next `jobFinished` confirms resumption
+- At start of each new export run in tests, call `prepareEventStreamForNextRun()` to avoid reusing a finished stream from prior runs.
+
+Test helper with **real timeout**:
+```swift
+enum ExportTestError: Error { case timedOut }
+
+func awaitEvents(
+  _ count: Int,
+  from stream: AsyncStream<ExportQueueEvent>,
+  timeout: UInt64 = 5_000_000_000
+) async throws -> [ExportQueueEvent] {
+  try await withThrowingTaskGroup(of: [ExportQueueEvent].self) { group in
+    group.addTask {
+      var collected: [ExportQueueEvent] = []
+      for await event in stream {
+        collected.append(event)
+        if collected.count >= count { break }
+      }
+      return collected
+    }
+    group.addTask {
+      try await Task.sleep(nanoseconds: timeout)
+      throw ExportTestError.timedOut
+    }
+    let result = try await group.next()!
+    group.cancelAll()
+    return result
   }
 }
 ```
-This handles the paused state correctly: no job completes → stream doesn't yield → test can assert queue state without hanging.
+This handles all states: paused (yields `.paused` event), cancelled (yields `.cancelled` + finishes), drained (yields `.drained` + finishes). Stream lifecycle is deterministic per run. Tests never hang because the timeout task races the stream consumer.
 
 ### 4.7 — Add `ExportManager` unit tests
 **New file**: `photo-exportTests/ExportManagerTests.swift`
-Create `MockPhotoLibrary: PhotoLibraryProviding` and `MockExportDestination: ExportDestinationProviding`. Tests:
-- Queue management: `startExportMonth` enqueues only unexported assets, `pause()` stops processing, `resume()` continues, `cancelAndClear()` resets all state. Use `jobCompletionStream` for deterministic assertions.
+Create mocks with explicit actor annotations:
+```swift
+final class MockPhotoLibrary: PhotoLibraryProviding { ... }   // nonisolated
+@MainActor
+final class MockExportDestination: ExportDestinationProviding { ... }
+```
+Mark test methods or the whole test type `@MainActor` when touching `ExportManager`/destination mocks.
+
+Tests:
+- Queue management: call `prepareEventStreamForNextRun()` per run; assert `pause()` → `.paused`, `resume()` → subsequent `.jobFinished`, `cancelAndClear()` → `.cancelled`
 - `uniqueFileURL()`: collision avoidance (create files in temp dir, verify suffixes)
 - `selectPrimaryResource()`: priority ordering with `[ExportableResource]` arrays (now `internal` with `ExportableResource` signature from 4.5)
 - Export flow: mock library returns assets, mock destination returns temp dir, verify `ExportRecordStore` gets `markExported` calls
 - Timestamp: verify `job.creationDate` is passed through to `FileIOService.applyTimestamps`
+- Auth revocation: simulate `handleAuthorizationRevoked()` while queue active; assert in-progress asset marked failed with `"Authorization revoked"`, pending jobs cleared, `.cancelled` event emitted
 
 ### 4.8 — Add `ExportDestinationManager` tests
 **New file**: `photo-exportTests/ExportDestinationManagerTests.swift`
-**Test seam**: Extract the validation and directory-creation logic that `urlForMonth` depends on into a testable path. The real class has these properties (from `ExportDestinationManager.swift`):
-- `selectedFolderURL: URL?` (private(set), line 10)
-- `isAvailable: Bool` (private(set), line 11)
-- `isWritable: Bool` (private(set), line 12)
-- `destinationId: String?` (private(set), line 14)
-- `bookmarkDefaultsKey: String` (private let, line 17)
-
-**Approach**: Add an `internal` convenience initializer for tests that bypasses NSOpenPanel/bookmark restoration:
+**Test seam**: Inject dependencies to bypass production side effects. Modify `ExportDestinationManager` to accept injected `UserDefaults` and init flags:
 ```swift
-/// Test-only initializer; bypasses bookmark restoration and volume observation.
-internal convenience init(testFolderURL: URL) {
-  self.init()
-  // Override state set by init()'s restoreBookmarkIfAvailable()
-  self.selectedFolderURL = testFolderURL
-  self.isAvailable = true
-  self.isWritable = true
-  self.destinationId = "test-destination"
-  self.statusMessage = nil
+@MainActor
+final class ExportDestinationManager: ObservableObject {
+  private let defaults: UserDefaults
+  private let bookmarkDefaultsKey = "ExportDestinationBookmark"
+  // ... existing @Published properties ...
+
+  init(
+    defaults: UserDefaults = .standard,
+    restoreBookmark: Bool = true,
+    observeVolumes: Bool = true
+  ) {
+    self.defaults = defaults
+    if restoreBookmark { restoreBookmarkIfAvailable() }
+    if observeVolumes { observeVolumeChanges() }
+  }
+
+  func clearSelection() {
+    selectedFolderURL = nil
+    isAvailable = false
+    isWritable = false
+    statusMessage = "No export folder selected"
+    destinationId = nil
+    defaults.removeObject(forKey: bookmarkDefaultsKey)  // uses injected defaults
+  }
+
+  // Test convenience init — no bookmark restore, no volume observers, isolated UserDefaults
+  internal convenience init(testFolderURL: URL, defaultsSuiteName: String = "test.\(UUID())") {
+    self.init(
+      defaults: UserDefaults(suiteName: defaultsSuiteName)!,
+      restoreBookmark: false,
+      observeVolumes: false
+    )
+    selectedFolderURL = testFolderURL
+    isAvailable = true
+    isWritable = true
+    destinationId = "test-destination"
+    statusMessage = nil
+  }
 }
 ```
-This works because the default `init()` already exists and sets up the properties. The convenience init calls it, then overrides the relevant state. `bookmarkDefaultsKey` stays as-is (unused in tests since we don't save/restore). `volumeObservers` are set by `init()` but harmless in tests.
+**Key changes from v5**:
+- `defaults` is injected, not hardcoded `UserDefaults.standard` — `clearSelection` writes to the injected suite, never touching production state.
+- `restoreBookmark: false` skips `restoreBookmarkIfAvailable()` — no production bookmark read.
+- `observeVolumes: false` skips `observeVolumeChanges()` — no NSWorkspace notification observers.
+- Default `init()` call site in `photo_exportApp.swift` passes no arguments, getting `.standard`/`true`/`true` defaults — zero change to production behavior.
 
-Tests: `urlForMonth` validation (invalid year → error, month 0 → error, month 13 → error, path too long → error), `ensureDirectoryExists` creates directories in temp folder, `clearSelection` resets all state to nil.
+Tests: `urlForMonth` validation (invalid year → error, month 0 → error, month 13 → error, path too long → error), `ensureDirectoryExists` creates directories in temp folder, `clearSelection` resets all state (writes only to test-suite `UserDefaults`).
 
 ---
 
@@ -305,10 +621,10 @@ Tests: `urlForMonth` validation (invalid year → error, month 0 → error, mont
 ### 5.1 — Handle `.limited` photo authorization
 **File**: `photo-export/Managers/PhotoLibraryManager.swift`
 **Fix**:
-1. Line 30: Change `isAuthorized = authorizationStatus == .authorized` to `isAuthorized = [.authorized, .limited].contains(authorizationStatus)`
+1. Change `isAuthorized = authorizationStatus == .authorized` to `isAuthorized = [.authorized, .limited].contains(authorizationStatus)`
 2. Add `@Published var isLimited: Bool = false` — set alongside `isAuthorized`.
-3. In `requestAuthorization()` (line 53): Update return value to `status == .authorized || status == .limited` to match the `isAuthorized` property contract. This prevents state/return divergence.
-**File**: `photo-export/ContentView.swift` — Add a subtle info banner below the navigation title when `photoLibraryManager.isLimited`, explaining only selected photos are available.
+3. In `requestAuthorization()`: Update return value to `status == .authorized || status == .limited` to match the `isAuthorized` property contract.
+**File**: `photo-export/ContentView.swift` — Add a subtle info banner when `photoLibraryManager.isLimited`, explaining only selected photos are available.
 
 ---
 
@@ -318,8 +634,8 @@ Tests: `urlForMonth` validation (invalid year → error, month 0 → error, mont
 |------|------|---------------------|----------|
 | Phase 1 (bug fixes) | Low | ExportRecordStoreTests for 1.3; others verified by build only | `git revert` per commit |
 | Phase 2 (dead code) | Very low | Build verification (deleting unreferenced code) | `git revert` |
-| Phase 3 (quality) | Low-Medium | Build + ExportRecordStoreTests. 3.2 changes async dispatch patterns — verify no UI regressions manually | `git revert` |
-| Phase 4 (protocols) | **High** — actor boundaries, type migration, constructor changes, new test infra | New tests validate protocol seams + ExportManager logic | Commit 4.1-4.5 (conformance) separate from 4.6-4.8 (tests) |
+| Phase 3 (quality) | **Medium** — split architecture + sync→async migration touches many call sites | Build + ExportRecordStoreTests + manual smoke test for UI responsiveness | `git revert` |
+| Phase 4 (protocols) | **High** — type migration, constructor changes, new test infra | New tests validate protocol seams + ExportManager logic | Commit 4.1-4.5 (conformance) separate from 4.6-4.8 (tests) |
 | Phase 5 (edge cases) | Low | Build verification; manual test with limited auth | `git revert` |
 
 **After each phase**: `xcodebuild clean build` + `xcodebuild test` + manual smoke test (browse library, view detail pane export status, export a month).
@@ -330,16 +646,18 @@ Tests: `urlForMonth` validation (invalid year → error, month 0 → error, mont
 
 | File | Phases |
 |------|--------|
-| `Managers/PhotoLibraryManager.swift` | 1.1, 2.1, 2.4, 3.2, 4.4, 5.1 |
+| `Managers/PhotoLibraryManager.swift` | 1.1, 2.1, 2.4, 3.2 (split), 5.1 |
 | `Managers/ExportManager.swift` | 1.2, 3.3, 4.5, 4.6 |
 | `Managers/ExportRecordStore.swift` | 1.3 |
-| `Managers/ExportDestinationManager.swift` | 4.4, 4.8 |
+| `Managers/ExportDestinationManager.swift` | 4.4, 4.8 (inject defaults + init flags) |
+| `photo_exportApp.swift` | 4.5 (ExportManager init/wiring + `isAuthorized` closure injection) |
 | `Views/AssetDetailView.swift` | 1.4 |
-| `ContentView.swift` | 1.4, 2.2, 2.5, 3.1, 5.1 |
+| `ContentView.swift` | 1.4, 2.2, 2.5, 3.1, 3.2 (async migration), 5.1 |
 | `Views/MonthContentView.swift` | 3.1 |
-| `Views/TestPhotoAccessView.swift` | 1.4 (delete — moved early to unblock AssetDetailView fix) |
+| `Views/TestPhotoAccessView.swift` | 1.4 (delete) |
 | `InfoPlist.swift` | 2.3 (delete) |
 | `Models/AssetMetadata.swift` | 2.4 (delete) |
+| **New**: `Managers/PhotoLibraryService.swift` | 3.2 |
 | **New**: `Models/ExportableAsset.swift` | 4.1 |
 | **New**: `Protocols/PhotoLibraryProviding.swift` | 4.2 |
 | **New**: `Protocols/ExportDestinationProviding.swift` | 4.3 |

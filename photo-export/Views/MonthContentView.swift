@@ -64,7 +64,8 @@ struct MonthContentView: View {
     .task(id: "\(year)-\(month)") {
       await viewModel.loadAssets(forYear: year, month: month)
       if selectedAsset == nil, let id = viewModel.selectedAssetId,
-        let asset = viewModel.assets.first(where: { $0.localIdentifier == id }) {
+        let asset = viewModel.assets.first(where: { $0.localIdentifier == id })
+      {
         selectedAsset = asset
       }
     }

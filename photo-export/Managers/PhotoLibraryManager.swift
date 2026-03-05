@@ -250,7 +250,13 @@ final class PhotoLibraryManager: ObservableObject {
         contentMode: contentMode,
         options: options
       ) { image, info in
-        guard resumed.withLock({ let was = $0; $0 = true; return !was }) else { return }
+        guard
+          resumed.withLock({
+            let was = $0
+            $0 = true
+            return !was
+          })
+        else { return }
         self.logger.debug(
           "thumbnail callback id: \(asset.localIdentifier, privacy: .public) imageNil: \((image == nil))"
         )
@@ -290,7 +296,13 @@ final class PhotoLibraryManager: ObservableObject {
         )
 
         if isCancelled || error != nil {
-          guard resumed.withLock({ let was = $0; $0 = true; return !was }) else { return }
+          guard
+            resumed.withLock({
+              let was = $0
+              $0 = true
+              return !was
+            })
+          else { return }
           if let error = error as? Error {
             continuation.resume(throwing: error)
           } else {
@@ -301,7 +313,13 @@ final class PhotoLibraryManager: ObservableObject {
 
         if isDegraded { return }
 
-        guard resumed.withLock({ let was = $0; $0 = true; return !was }) else { return }
+        guard
+          resumed.withLock({
+            let was = $0
+            $0 = true
+            return !was
+          })
+        else { return }
 
         guard let image = image else {
           continuation.resume(throwing: PhotoLibraryError.assetUnavailable)

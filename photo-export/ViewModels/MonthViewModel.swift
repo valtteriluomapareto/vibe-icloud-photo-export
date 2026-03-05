@@ -51,7 +51,8 @@ final class MonthViewModel: ObservableObject {
 
       for asset in initialBatch {
         if let thumb = await photoLibraryManager.loadThumbnail(
-          for: asset, allowNetwork: !isExportRunning) {
+          for: asset, allowNetwork: !isExportRunning)
+        {
           initialThumbs[asset.localIdentifier] = thumb
         }
       }
@@ -92,7 +93,8 @@ final class MonthViewModel: ObservableObject {
 
   private func loadAndStoreThumbnail(for asset: PHAsset) async {
     if let thumb = await photoLibraryManager.loadThumbnail(
-      for: asset, allowNetwork: !isExportRunning) {
+      for: asset, allowNetwork: !isExportRunning)
+    {
       thumbnailsById[asset.localIdentifier] = thumb
     }
   }

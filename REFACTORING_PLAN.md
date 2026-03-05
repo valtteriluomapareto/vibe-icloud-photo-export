@@ -40,23 +40,47 @@ All bug fixes in this phase are independent and can be done in any order. Each i
 
 **Problem**: `requestFullImage` uses `withCheckedThrowingContinuation` but has NO resume guard. Despite requesting `.highQualityFormat`, the Photos framework can still invoke the handler multiple times (e.g., error then callback, or on cancellation). A double resume crashes the app.
 
-**Fix**:
+**Fix**: Use `OSAllocatedUnfairLock<Bool>` but only flip it at the **terminal resume point** — not at callback entry. Non-terminal (degraded) callbacks must pass through so the final high-quality result is not ignored:
 ```swift
 import os  // for OSAllocatedUnfairLock
 
 // Inside requestFullImage:
 let resumed = OSAllocatedUnfairLock(initialState: false)
 PHImageManager.default().requestImage(...) { image, info in
+    let isDegraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
+    let isCancelled = (info?[PHImageCancelledKey] as? NSNumber)?.boolValue ?? false
+    let error = info?[PHImageErrorKey] as? Error
+
+    // Handle error/cancel BEFORE the degraded early-return.
+    // A degraded callback can carry an error or cancellation flag —
+    // if we returned early on isDegraded we'd silently swallow it.
+    if isCancelled || error != nil {
+        guard resumed.withLock({
+            let was = $0; $0 = true; return !was
+        }) else { return }
+        if let error {
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume(throwing: PhotoLibraryError.assetUnavailable)
+        }
+        return
+    }
+
+    // Skip degraded non-error callbacks — wait for the final image.
+    if isDegraded { return }
+
     guard resumed.withLock({
         let was = $0; $0 = true; return !was
     }) else { return }
-    // ... existing resume logic
+    // ... resume with image or throw assetUnavailable if nil
 }
 ```
 
-**Test**: `photo-exportTests/ContinuationResumeTests.swift`
-- Verify that wrapping a multi-callback scenario in the lock pattern produces exactly one resume.
-- This is a unit test of the lock pattern itself (the PHImageManager callback is not injectable without disproportionate seam work).
+The ordering matters: error/cancel is checked first so terminal error paths are never skipped by the degraded early-return. The lock prevents double-resume regardless of which terminal path fires first.
+
+**Test**: `photo-exportTests/ContinuationResumeTests.swift` (pattern-level test)
+- Verify that the lock pattern produces exactly one resume across multi-callback scenarios (degraded-then-final, error-then-final, double-final).
+- This tests the gating logic in isolation. It does not exercise the real PHImageManager callback path — that requires a live Photos library. The pattern test reduces risk but does not fully prove runtime behavior. See Phase 4 for integration-level coverage.
 
 ### 1.2 — Fix `loadThumbnail` thread-unsafe resume guard
 
@@ -64,9 +88,20 @@ PHImageManager.default().requestImage(...) { image, info in
 
 **Problem**: `var hasResumed = false` is a plain local Bool. PHImageManager delivers `.opportunistic` callbacks on arbitrary threads. Two callbacks on different threads can both read `false` before either writes `true`.
 
-**Fix**: Same `OSAllocatedUnfairLock<Bool>` pattern as 1.1.
+**Fix**: Same `OSAllocatedUnfairLock<Bool>` pattern as 1.1, but adapted for `.opportunistic` delivery. Here the first callback (even if degraded) is the one we want to resume with — `loadThumbnail` intentionally accepts whatever comes first. So the lock flips on every terminal resume attempt (any non-cancelled callback):
+```swift
+let resumed = OSAllocatedUnfairLock(initialState: false)
+PhotoLibraryManager.cachingImageManager.requestImage(...) { image, info in
+    guard resumed.withLock({
+        let was = $0; $0 = true; return !was
+    }) else { return }
+    continuation.resume(returning: image)
+}
+```
 
-**Test**: Covered by the same `ContinuationResumeTests.swift`.
+This differs from 1.1: for thumbnails we accept the first result (opportunistic), for full images we skip degraded and wait for the final.
+
+**Test**: Covered by the same `ContinuationResumeTests.swift` (pattern-level — see 1.1 note).
 
 ### 1.3 — Fix temp file leak on export failure
 
@@ -86,8 +121,9 @@ defer {
 
 Place this inside the `do` block, after `tempURL` is computed but before the write begins.
 
-**Test**: `photo-exportTests/TempFileCleanupTests.swift`
-- Create a temp file at a known path, simulate the cleanup logic, assert the file is gone.
+**Test**: `photo-exportTests/TempFileCleanupTests.swift` (pattern-level test)
+- Create a temp file at a known path, simulate the defer-cleanup logic, assert the file is gone.
+- This validates the cleanup pattern in isolation. It does not exercise the full ExportManager.export() code path (that requires the seams from Phase 4). See 4.3 for end-to-end failure path tests.
 
 ### 1.4 — Fix `.limited` authorization mapping
 
@@ -104,9 +140,9 @@ isAuthorized = authorizationStatus == .authorized || authorizationStatus == .lim
 self.isAuthorized = status == .authorized || status == .limited
 ```
 
-**Test**: `photo-exportTests/AuthorizationMappingTests.swift`
-- Test the mapping logic directly: given each `PHAuthorizationStatus` value, assert the expected `isAuthorized` result.
-- Note: This requires extracting the mapping to a pure function since `PHPhotoLibrary.authorizationStatus` is not injectable. The test validates the mapping logic, not the Photos framework call.
+**Test**: `photo-exportTests/AuthorizationMappingTests.swift` (pattern-level test)
+- Extract the status-to-bool mapping into a pure function and test it directly: given each `PHAuthorizationStatus` raw value, assert the expected `isAuthorized` result.
+- This does not test the actual `PHPhotoLibrary.requestAuthorization` call (not injectable without disproportionate seam work). The pattern test confirms the mapping logic is correct for all status values including `.limited`.
 
 ### 1.5 — Fix double security-scope in `urlForMonth`
 
@@ -114,7 +150,9 @@ self.isAuthorized = status == .authorized || status == .limited
 
 **Problem**: `urlForMonth()` internally calls `beginScopedAccess()`/`endScopedAccess()` for directory creation. But its only caller (`ExportManager.export`, line 220) also calls `beginScopedAccess()` separately. Security scope is started twice and stopped in overlapping defers.
 
-**Fix**: Remove the scope management from inside `urlForMonth()`. The caller already owns the scope:
+**Fix**: Two coordinated changes — removing scope from `urlForMonth()` alone would break directory creation, because today `ExportManager.export()` calls `urlForMonth()` (line 190) *before* it calls `beginScopedAccess()` (line 220).
+
+**In `ExportDestinationManager.urlForMonth()`** — remove internal scope management:
 ```swift
 // Remove these lines from urlForMonth():
 // let didStart = beginScopedAccess()
@@ -122,9 +160,30 @@ self.isAuthorized = status == .authorized || status == .limited
 // guard didStart else { throw ExportDestinationError.scopeAccessDenied }
 ```
 
-The caller (`ExportManager.export`) already starts scope at line 220 and ends it via defer at line 222. After this change, `urlForMonth` is a pure path-construction + directory-creation method that assumes the caller has already acquired scope access.
+**In `ExportManager.export(job:)`** — move scope acquisition to *before* the `urlForMonth()` call. The current order is:
+```
+urlForMonth()    // line 190 — needs scope for directory creation
+beginScopedAccess() // line 220 — too late
+```
 
-**Exit criteria**: Build passes. Export still writes to the correct directory.
+Change to:
+```swift
+// Acquire scope FIRST, before any filesystem work
+let didStart = exportDestinationManager.beginScopedAccess()
+defer { if didStart { exportDestinationManager.endScopedAccess() } }
+guard didStart else {
+    throw NSError(domain: "Export", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"])
+}
+
+// Now safe to call urlForMonth, which creates directories under scope
+let destDir = try exportDestinationManager.urlForMonth(
+    year: job.year, month: job.month, createIfNeeded: true)
+```
+
+This moves the scope start from after `urlForMonth` to before it, so directory creation runs under active scope. The single scope/defer pair now covers the entire export operation.
+
+**Exit criteria**: Build passes. Export still writes to the correct directory. Security scope is acquired exactly once per export.
 
 ### 1.6 — Remove fallback `PhotoLibraryManager()` in MonthContentView
 
@@ -262,7 +321,7 @@ Replace all three `monthName()` implementations with `MonthFormatting.name(for:)
 
 ## Phase 4: Test Infrastructure (Optional)
 
-These steps add test seams for the export path. Only pursue if you want meaningful unit test coverage of ExportManager.
+These steps add test seams for the export path. Phase 1 tests are pattern-level (they validate the fix logic in isolation). Phase 4 provides end-to-end coverage through the actual ExportManager code paths by making dependencies injectable.
 
 ### 4.1 — Add `FileIOProviding` protocol
 
@@ -297,20 +356,27 @@ With the seams from 4.1 and 4.2, test:
 
 ## Verification
 
-All steps use the standard test invocation:
+**Run all tests:**
 ```bash
 xcodebuild -project photo-export.xcodeproj -scheme "photo-export" \
   -destination 'platform=macOS' test
 ```
 
-For running specific test files:
+**Discover exact test identifiers** (do this once before using `-only-testing`):
 ```bash
 xcodebuild -project photo-export.xcodeproj -scheme "photo-export" \
   -destination 'platform=macOS' \
-  -only-testing photo-exportTests/ContinuationResumeTests test
+  -enumerate-tests test 2>&1 | grep -E '^\s'
 ```
 
-Note: The project uses Swift Testing (`@Test`), not XCTest. Test filtering with `-only-testing` uses the target/suite format.
+The project uses Swift Testing (`@Test`), not XCTest. Swift Testing identifier format may differ from file/struct names. Always use `-enumerate-tests` output to get exact IDs before filtering with `-only-testing`. Do not guess identifiers from file names.
+
+**Run a specific suite** (use exact ID from enumerate output):
+```bash
+xcodebuild -project photo-export.xcodeproj -scheme "photo-export" \
+  -destination 'platform=macOS' \
+  -only-testing '<exact-id-from-enumerate>' test
+```
 
 ---
 

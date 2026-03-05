@@ -7,6 +7,7 @@ import SwiftUI
 final class MonthViewModel: ObservableObject {
   @Published private(set) var assets: [PHAsset] = []
   @Published private(set) var thumbnailsById: [String: NSImage] = [:]
+  @Published private(set) var failedThumbnailIds: Set<String> = []
   @Published var isLoading: Bool = false
   @Published var errorMessage: String?
 
@@ -36,6 +37,7 @@ final class MonthViewModel: ObservableObject {
     }
     assets = []
     thumbnailsById = [:]
+    failedThumbnailIds = []
     selectedAssetId = nil
 
     do {
@@ -51,8 +53,11 @@ final class MonthViewModel: ObservableObject {
 
       for asset in initialBatch {
         if let thumb = await photoLibraryManager.loadThumbnail(
-          for: asset, allowNetwork: !isExportRunning) {
+          for: asset, allowNetwork: !isExportRunning)
+        {
           initialThumbs[asset.localIdentifier] = thumb
+        } else {
+          failedThumbnailIds.insert(asset.localIdentifier)
         }
       }
       thumbnailsById = initialThumbs
@@ -80,6 +85,17 @@ final class MonthViewModel: ObservableObject {
     thumbnailsById[asset.localIdentifier]
   }
 
+  func thumbnailState(for asset: PHAsset) -> ThumbnailState {
+    let id = asset.localIdentifier
+    if let image = thumbnailsById[id] {
+      return .loaded(image)
+    } else if failedThumbnailIds.contains(id) {
+      return .failed
+    } else {
+      return .loading
+    }
+  }
+
   func select(asset: PHAsset?) {
     selectedAssetId = asset?.localIdentifier
   }
@@ -92,8 +108,11 @@ final class MonthViewModel: ObservableObject {
 
   private func loadAndStoreThumbnail(for asset: PHAsset) async {
     if let thumb = await photoLibraryManager.loadThumbnail(
-      for: asset, allowNetwork: !isExportRunning) {
+      for: asset, allowNetwork: !isExportRunning)
+    {
       thumbnailsById[asset.localIdentifier] = thumb
+    } else {
+      failedThumbnailIds.insert(asset.localIdentifier)
     }
   }
 }

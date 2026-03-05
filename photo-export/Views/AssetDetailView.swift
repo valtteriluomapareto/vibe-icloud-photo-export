@@ -77,12 +77,31 @@ struct AssetDetailView: View {
   }
 
   private func metadataView(for asset: PHAsset) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
+    let resources = PHAssetResource.assetResources(for: asset)
+    let primaryResource = resources.first(where: { $0.type == .photo })
+      ?? resources.first(where: { $0.type == .video })
+      ?? resources.first
+    let originalFilename = primaryResource?.originalFilename
+    let fileSize: Int64? = {
+      guard let r = primaryResource,
+        let size = r.value(forKey: "fileSize") as? Int64, size > 0
+      else { return nil }
+      return size
+    }()
+
+    return VStack(alignment: .leading, spacing: 6) {
+      if let name = originalFilename {
+        Text(name)
+          .fontWeight(.medium)
+      }
       if let date = asset.creationDate {
         Text(dateFormatter.string(from: date))
       }
       Text(mediaTypeString(from: asset.mediaType))
-      Text("Size: \(asset.pixelWidth) × \(asset.pixelHeight)")
+      Text("Dimensions: \(asset.pixelWidth) \u{00d7} \(asset.pixelHeight)")
+      if let bytes = fileSize {
+        Text("File size: \(formattedFileSize(bytes))")
+      }
       if asset.mediaType == .video {
         let durationString = String(format: "%.0fs", asset.duration)
         Text("Duration: \(durationString)")
@@ -116,6 +135,13 @@ struct AssetDetailView: View {
     case .unknown: return "Unknown"
     @unknown default: return "Unknown"
     }
+  }
+
+  private func formattedFileSize(_ bytes: Int64) -> String {
+    let formatter = ByteCountFormatter()
+    formatter.allowedUnits = [.useKB, .useMB, .useGB]
+    formatter.countStyle = .file
+    return formatter.string(fromByteCount: bytes)
   }
 
   private var dateFormatter: DateFormatter {

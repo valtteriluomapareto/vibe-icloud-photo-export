@@ -16,6 +16,9 @@ final class ExportManager: ObservableObject {
   @Published private(set) var isRunning: Bool = false
   @Published private(set) var queueCount: Int = 0
   @Published private(set) var isPaused: Bool = false
+  @Published private(set) var totalJobsEnqueued: Int = 0
+  @Published private(set) var totalJobsCompleted: Int = 0
+  @Published private(set) var currentAssetFilename: String?
 
   // MARK: - Dependencies
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
@@ -66,6 +69,23 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  func startExportAll() {
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        let allYears = try photoLibraryManager.availableYears()
+        for year in allYears {
+          try await enqueueYear(year: year)
+        }
+        processQueueIfNeeded()
+      } catch {
+        logger.error(
+          "Failed to enqueue export-all: \(String(describing: error), privacy: .public)"
+        )
+      }
+    }
+  }
+
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
     pendingJobs.removeAll()
@@ -74,6 +94,9 @@ final class ExportManager: ObservableObject {
     isProcessing = false
     isRunning = false
     isPaused = false
+    totalJobsEnqueued = 0
+    totalJobsCompleted = 0
+    currentAssetFilename = nil
     updateQueueCount()
   }
 
@@ -108,6 +131,7 @@ final class ExportManager: ObservableObject {
       ExportJob(assetLocalIdentifier: $0.localIdentifier, year: year, month: month)
     }
     pendingJobs.append(contentsOf: newJobs)
+    totalJobsEnqueued += newJobs.count
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
   }
@@ -127,6 +151,7 @@ final class ExportManager: ObservableObject {
       }
     }
     pendingJobs.append(contentsOf: newJobs)
+    totalJobsEnqueued += newJobs.count
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
   }
@@ -160,9 +185,14 @@ final class ExportManager: ObservableObject {
     currentTask = Task { [weak self] in
       await self?.export(job: job)
       await MainActor.run { [weak self] in
+        self?.totalJobsCompleted += 1
         self?.processNext()
       }
     }
+  }
+
+  func queuedCount(year: Int, month: Int) -> Int {
+    pendingJobs.filter { $0.year == year && $0.month == month }.count
   }
 
   private func updateQueueCount() {
@@ -203,6 +233,7 @@ final class ExportManager: ObservableObject {
       let finalURL = uniqueFileURL(in: destDir, baseName: baseName, ext: ext)
       let tempURL = finalURL.appendingPathExtension("tmp")
 
+      currentAssetFilename = finalURL.lastPathComponent
       exportRecordStore.markInProgress(
         assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath,
         filename: finalURL.lastPathComponent)

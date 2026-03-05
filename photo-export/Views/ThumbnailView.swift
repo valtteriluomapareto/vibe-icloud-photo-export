@@ -2,25 +2,45 @@ import AppKit
 import Photos
 import SwiftUI
 
+enum ThumbnailState {
+  case loading
+  case loaded(NSImage)
+  case failed
+}
+
 struct ThumbnailView: View {
   let asset: PHAsset
-  let thumbnail: NSImage?
+  let state: ThumbnailState
   let isSelected: Bool
   let isExported: Bool
 
   var body: some View {
     ZStack {
-      if let thumbnail = thumbnail {
-        Image(nsImage: thumbnail)
+      switch state {
+      case .loaded(let image):
+        Image(nsImage: image)
           .resizable()
           .aspectRatio(contentMode: .fill)
           .frame(width: 100, height: 100)
           .clipped()
-      } else {
+      case .loading:
         Rectangle()
           .fill(Color.gray.opacity(0.3))
           .frame(width: 100, height: 100)
           .overlay(ProgressView())
+      case .failed:
+        Rectangle()
+          .fill(Color.gray.opacity(0.2))
+          .frame(width: 100, height: 100)
+          .overlay(
+            VStack(spacing: 4) {
+              Image(systemName: "exclamationmark.triangle")
+                .foregroundColor(.secondary)
+              Text("Failed")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            }
+          )
       }
 
       if !isExported {

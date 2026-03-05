@@ -1,0 +1,128 @@
+import SwiftUI
+
+struct ExportToolbarView: View {
+  @EnvironmentObject private var exportManager: ExportManager
+  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+
+  var body: some View {
+    HStack(spacing: 16) {
+      // Destination indicator
+      destinationIndicator
+
+      Divider().frame(height: 20)
+
+      // Primary actions
+      primaryActions
+
+      Divider().frame(height: 20)
+
+      // Progress
+      if exportManager.totalJobsEnqueued > 0 {
+        progressIndicator
+      }
+    }
+  }
+
+  // MARK: - Destination Indicator
+
+  @ViewBuilder
+  private var destinationIndicator: some View {
+    if let url = exportDestinationManager.selectedFolderURL {
+      HStack(spacing: 6) {
+        Image(
+          systemName: exportDestinationManager.isAvailable
+            && exportDestinationManager.isWritable
+            ? "externaldrive.fill" : "externaldrive.badge.exclamationmark"
+        )
+        .foregroundColor(
+          exportDestinationManager.isAvailable && exportDestinationManager.isWritable
+            ? .green : .yellow)
+
+        Text(url.lastPathComponent)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(url.path)
+
+        Button("Change\u{2026}") {
+          exportDestinationManager.selectFolder()
+        }
+        .buttonStyle(.borderless)
+        .font(.caption)
+      }
+    } else {
+      Button("Select Export Folder\u{2026}") {
+        exportDestinationManager.selectFolder()
+      }
+      .buttonStyle(.bordered)
+    }
+  }
+
+  // MARK: - Primary Actions
+
+  private var primaryActions: some View {
+    HStack(spacing: 8) {
+      Button("Export All") {
+        exportManager.startExportAll()
+      }
+      .buttonStyle(.borderedProminent)
+      .disabled(!exportDestinationManager.canExportNow)
+      .help(
+        exportDestinationManager.canExportNow
+          ? "Export all unexported photos and videos"
+          : "Select a writable export folder first"
+      )
+
+      if exportManager.isRunning || exportManager.queueCount > 0 {
+        if exportManager.isPaused {
+          Button {
+            exportManager.resume()
+          } label: {
+            Image(systemName: "play.fill")
+          }
+          .help("Resume export")
+        } else {
+          Button {
+            exportManager.pause()
+          } label: {
+            Image(systemName: "pause.fill")
+          }
+          .help("Pause export")
+        }
+
+        Button {
+          exportManager.cancelAndClear()
+        } label: {
+          Image(systemName: "xmark.circle")
+        }
+        .help("Cancel and clear queue")
+      }
+    }
+  }
+
+  // MARK: - Progress Indicator
+
+  private var progressIndicator: some View {
+    let total = exportManager.totalJobsEnqueued
+    let done = exportManager.totalJobsCompleted
+    let fraction = total > 0 ? Double(done) / Double(total) : 0
+
+    return HStack(spacing: 8) {
+      ProgressView(value: fraction)
+        .progressViewStyle(.linear)
+        .frame(width: 120)
+
+      Text("\(done)/\(total)")
+        .font(.caption)
+        .monospacedDigit()
+
+      if let filename = exportManager.currentAssetFilename, exportManager.isRunning {
+        Text(filename)
+          .font(.caption2)
+          .foregroundColor(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .frame(maxWidth: 140)
+      }
+    }
+  }
+}

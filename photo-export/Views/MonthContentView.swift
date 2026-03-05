@@ -6,6 +6,7 @@ struct MonthContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
+  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   @StateObject private var viewModel: MonthViewModel
 
@@ -35,8 +36,21 @@ struct MonthContentView: View {
         .fontWeight(.semibold)
         .padding(.top, 8)
 
-      // Export summary
-      exportSummaryView
+      // Export summary with action
+      HStack {
+        exportSummaryView
+        Spacer()
+        Button("Export Month") {
+          exportManager.startExportMonth(year: year, month: month)
+        }
+        .buttonStyle(.bordered)
+        .disabled(!exportDestinationManager.canExportNow)
+        .help(
+          exportDestinationManager.canExportNow
+            ? "Export unexported assets for this month"
+            : "Select a writable export folder first"
+        )
+      }
 
       // Grid of thumbnails
       ScrollView {
@@ -45,10 +59,9 @@ struct MonthContentView: View {
         ]
         LazyVGrid(columns: columns, spacing: 10) {
           ForEach(viewModel.assets, id: \.localIdentifier) { asset in
-            let thumb = viewModel.thumbnail(for: asset)
             ThumbnailView(
               asset: asset,
-              thumbnail: thumb,
+              state: viewModel.thumbnailState(for: asset),
               isSelected: asset.localIdentifier == selectedAsset?.localIdentifier,
               isExported: exportRecordStore.isExported(assetId: asset.localIdentifier)
             )

@@ -95,16 +95,16 @@ final class ExportDestinationManager: ObservableObject {
     logger.info("Cleared export destination selection")
   }
 
-  /// Call before performing file operations that require access
-  /// The caller is responsible for calling `endScopedAccess()` afterwards
-  /// when the operation is complete.
-  func beginScopedAccess() -> Bool {
-    guard let url = selectedFolderURL else { return false }
-    return url.startAccessingSecurityScopedResource()
+  /// Call before performing file operations that require access.
+  /// Returns the URL that was scoped, or nil if access could not be acquired.
+  /// The caller MUST pass the returned URL to `endScopedAccess(for:)` when done.
+  func beginScopedAccess() -> URL? {
+    guard let url = selectedFolderURL else { return nil }
+    return url.startAccessingSecurityScopedResource() ? url : nil
   }
 
-  func endScopedAccess() {
-    selectedFolderURL?.stopAccessingSecurityScopedResource()
+  func endScopedAccess(for url: URL) {
+    url.stopAccessingSecurityScopedResource()
   }
 
   /// Returns the URL for the <root>/<year>/<month>/ folder, optionally creating it.

@@ -1,30 +1,26 @@
 import Photos
 import Testing
+@testable import photo_export
 
 struct AuthorizationMappingTests {
 
-  /// Pure function that mirrors the authorization mapping logic in PhotoLibraryManager
-  private func isAuthorized(for status: PHAuthorizationStatus) -> Bool {
-    status == .authorized || status == .limited
-  }
-
   @Test func authorizedMapsToTrue() {
-    #expect(isAuthorized(for: .authorized))
+    #expect(PhotoLibraryManager.isAuthorizationSufficient(.authorized))
   }
 
   @Test func limitedMapsToTrue() {
-    #expect(isAuthorized(for: .limited))
+    #expect(PhotoLibraryManager.isAuthorizationSufficient(.limited))
   }
 
   @Test func deniedMapsToFalse() {
-    #expect(!isAuthorized(for: .denied))
+    #expect(!PhotoLibraryManager.isAuthorizationSufficient(.denied))
   }
 
   @Test func restrictedMapsToFalse() {
-    #expect(!isAuthorized(for: .restricted))
+    #expect(!PhotoLibraryManager.isAuthorizationSufficient(.restricted))
   }
 
   @Test func notDeterminedMapsToFalse() {
-    #expect(!isAuthorized(for: .notDetermined))
+    #expect(!PhotoLibraryManager.isAuthorizationSufficient(.notDetermined))
   }
 }

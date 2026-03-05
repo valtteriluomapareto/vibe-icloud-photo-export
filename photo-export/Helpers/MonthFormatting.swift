@@ -8,7 +8,9 @@ enum MonthFormatting {
   }()
 
   static func name(for month: Int) -> String {
-    let date = Calendar.current.date(from: DateComponents(year: 2023, month: month))!
+    guard let date = Calendar.current.date(from: DateComponents(year: 2023, month: month)) else {
+      return "\(month)"
+    }
     return formatter.string(from: date)
   }
 }

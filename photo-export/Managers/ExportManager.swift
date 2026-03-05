@@ -27,6 +27,7 @@ final class ExportManager: ObservableObject {
   private var pendingJobs: [ExportJob] = []
   private var isProcessing: Bool = false
   private var currentTask: Task<Void, Never>?
+  private var currentJobAssetId: String?
   private var generation: Int = 0
 
   init(
@@ -40,10 +41,12 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
+    let gen = generation
     Task { [weak self] in
-      guard let self else { return }
+      guard let self, self.generation == gen else { return }
       do {
-        try await enqueueMonth(year: year, month: month)
+        try await enqueueMonth(year: year, month: month, generation: gen)
+        guard self.generation == gen else { return }
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -54,10 +57,12 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportYear(year: Int) {
+    let gen = generation
     Task { [weak self] in
-      guard let self else { return }
+      guard let self, self.generation == gen else { return }
       do {
-        try await enqueueYear(year: year)
+        try await enqueueYear(year: year, generation: gen)
+        guard self.generation == gen else { return }
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -69,6 +74,12 @@ final class ExportManager: ObservableObject {
 
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
+    if let inFlightId = currentJobAssetId,
+      exportRecordStore.exportInfo(assetId: inFlightId)?.status == .inProgress
+    {
+      exportRecordStore.remove(assetId: inFlightId)
+    }
+    currentJobAssetId = nil
     generation += 1
     pendingJobs.removeAll()
     currentTask?.cancel()
@@ -100,9 +111,11 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Queue Handling
-  private func enqueueMonth(year: Int, month: Int) async throws {
+  private func enqueueMonth(year: Int, month: Int, generation gen: Int) async throws {
+    try throwIfCancelledOrStale(gen)
     guard photoLibraryManager.isAuthorized else { return }
     let assets = try await photoLibraryManager.fetchAssets(year: year, month: month)
+    try throwIfCancelledOrStale(gen)
     let unexported = assets.filter { asset in
       !(exportRecordStore.isExported(assetId: asset.localIdentifier))
     }
@@ -114,9 +127,11 @@ final class ExportManager: ObservableObject {
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
   }
 
-  private func enqueueYear(year: Int) async throws {
+  private func enqueueYear(year: Int, generation gen: Int) async throws {
+    try throwIfCancelledOrStale(gen)
     guard photoLibraryManager.isAuthorized else { return }
     let assets = try await photoLibraryManager.fetchAssets(year: year, month: nil)
+    try throwIfCancelledOrStale(gen)
     let calendar = Calendar.current
     var newJobs: [ExportJob] = []
     newJobs.reserveCapacity(assets.count)
@@ -153,16 +168,19 @@ final class ExportManager: ObservableObject {
     guard !pendingJobs.isEmpty else {
       isProcessing = false
       isRunning = false
+      currentJobAssetId = nil
       updateQueueCount()
       logger.info("Export queue drained")
       return
     }
     let job = pendingJobs.removeFirst()
+    currentJobAssetId = job.assetLocalIdentifier
     updateQueueCount()
     let currentGen = generation
     currentTask = Task { [weak self] in
-      await self?.export(job: job)
+      await self?.export(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
+        self?.currentJobAssetId = nil
         guard let self, self.generation == currentGen else { return }
         self.processNext()
       }
@@ -174,12 +192,21 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Export Logic
-  private func export(job: ExportJob) async {
+  private func throwIfCancelledOrStale(_ gen: Int) throws {
+    try Task.checkCancellation()
+    guard self.generation == gen else { throw CancellationError() }
+  }
+
+  private func export(job: ExportJob, generation gen: Int) async {
+    var didMarkInProgress = false
     do {
+      try throwIfCancelledOrStale(gen)
+
       // Resolve PHAsset from local identifier
       let fetchResult = PHAsset.fetchAssets(
         withLocalIdentifiers: [job.assetLocalIdentifier], options: nil)
       guard let asset = fetchResult.firstObject else {
+        try throwIfCancelledOrStale(gen)
         exportRecordStore.markFailed(
           assetId: job.assetLocalIdentifier, error: "Asset not found", at: Date())
         logger.error(
@@ -191,16 +218,15 @@ final class ExportManager: ObservableObject {
       )
 
       // Ensure security-scoped access for destination during all filesystem work
-      let didStart = exportDestinationManager.beginScopedAccess()
-      logger.debug("Begin scoped access: \(didStart)")
-      defer { if didStart { exportDestinationManager.endScopedAccess() } }
-      guard didStart else {
+      guard let scopedURL = exportDestinationManager.beginScopedAccess() else {
         throw NSError(
           domain: "Export", code: 1,
           userInfo: [
             NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"
           ])
       }
+      logger.debug("Begin scoped access for: \(scopedURL.path, privacy: .public)")
+      defer { exportDestinationManager.endScopedAccess(for: scopedURL) }
 
       // Determine destination directory
       let destDir = try exportDestinationManager.urlForMonth(
@@ -213,6 +239,7 @@ final class ExportManager: ObservableObject {
         separator: ", ")
       logger.debug("Asset resources: \(resourceSummary, privacy: .public)")
       guard let resource = selectPrimaryResource(from: resources) else {
+        try throwIfCancelledOrStale(gen)
         exportRecordStore.markFailed(
           assetId: asset.localIdentifier, error: "No exportable resource", at: Date())
         logger.error(
@@ -233,9 +260,11 @@ final class ExportManager: ObservableObject {
         }
       }
 
+      try throwIfCancelledOrStale(gen)
       exportRecordStore.markInProgress(
         assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath,
         filename: finalURL.lastPathComponent)
+      didMarkInProgress = true
 
       // Clean up any stale temp file at destination
       if FileManager.default.fileExists(atPath: tempURL.path) {
@@ -243,6 +272,7 @@ final class ExportManager: ObservableObject {
       }
 
       try await writeResource(resource, to: tempURL)
+      try throwIfCancelledOrStale(gen)
 
       // Atomic move to final location (off main)
       try await withCheckedThrowingContinuation { continuation in
@@ -260,6 +290,7 @@ final class ExportManager: ObservableObject {
           }
         }
       }
+      try throwIfCancelledOrStale(gen)
 
       // Apply timestamps based on asset creation date (off main)
       if let createdAt = asset.creationDate {
@@ -271,6 +302,7 @@ final class ExportManager: ObservableObject {
             continuation.resume()
           }
         }
+        try throwIfCancelledOrStale(gen)
       }
 
       exportRecordStore.markExported(
@@ -279,8 +311,14 @@ final class ExportManager: ObservableObject {
       logger.info(
         "Exported \(finalURL.lastPathComponent, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
       )
+    } catch is CancellationError {
+      logger.info(
+        "Export cancelled for id: \(job.assetLocalIdentifier, privacy: .public)")
+      if didMarkInProgress, self.generation == gen {
+        exportRecordStore.remove(assetId: job.assetLocalIdentifier)
+      }
     } catch {
-      // Attempt cleanup of temp file if exists
+      guard self.generation == gen else { return }
       logger.error(
         "Export failed for id: \(job.assetLocalIdentifier, privacy: .public) error: \(String(describing: error), privacy: .public)"
       )

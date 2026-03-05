@@ -22,13 +22,17 @@ final class PhotoLibraryManager: ObservableObject {
   /// Shared caching image manager for thumbnails
   private static let cachingImageManager = PHCachingImageManager()
 
+  nonisolated static func isAuthorizationSufficient(_ status: PHAuthorizationStatus) -> Bool {
+    status == .authorized || status == .limited
+  }
+
   init() {
     // Check if Info.plist contains photos usage description
     verifyPhotoLibraryPermissions()
 
     // Initialize with current authorization status
     authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-    isAuthorized = authorizationStatus == .authorized || authorizationStatus == .limited
+    isAuthorized = Self.isAuthorizationSufficient(authorizationStatus)
   }
 
   /// Verify that Photos usage description is properly set in Info.plist
@@ -48,10 +52,10 @@ final class PhotoLibraryManager: ObservableObject {
 
     await MainActor.run {
       self.authorizationStatus = status
-      self.isAuthorized = status == .authorized || status == .limited
+      self.isAuthorized = Self.isAuthorizationSufficient(status)
     }
 
-    return status == .authorized || status == .limited
+    return Self.isAuthorizationSufficient(status)
   }
 
   /// Fetch assets for a specific year and month

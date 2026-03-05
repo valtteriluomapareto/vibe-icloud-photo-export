@@ -27,6 +27,7 @@ final class ExportManager: ObservableObject {
   private var pendingJobs: [ExportJob] = []
   private var isProcessing: Bool = false
   private var currentTask: Task<Void, Never>?
+  private var generation: Int = 0
 
   init(
     photoLibraryManager: PhotoLibraryManager,
@@ -68,6 +69,7 @@ final class ExportManager: ObservableObject {
 
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
+    generation += 1
     pendingJobs.removeAll()
     currentTask?.cancel()
     currentTask = nil
@@ -157,10 +159,12 @@ final class ExportManager: ObservableObject {
     }
     let job = pendingJobs.removeFirst()
     updateQueueCount()
+    let currentGen = generation
     currentTask = Task { [weak self] in
       await self?.export(job: job)
       await MainActor.run { [weak self] in
-        self?.processNext()
+        guard let self, self.generation == currentGen else { return }
+        self.processNext()
       }
     }
   }
@@ -185,6 +189,18 @@ final class ExportManager: ObservableObject {
       logger.debug(
         "Export begin id: \(asset.localIdentifier, privacy: .public) type: \(asset.mediaType.rawValue) created: \(String(describing: asset.creationDate), privacy: .public) dims: \(asset.pixelWidth)x\(asset.pixelHeight)"
       )
+
+      // Ensure security-scoped access for destination during all filesystem work
+      let didStart = exportDestinationManager.beginScopedAccess()
+      logger.debug("Begin scoped access: \(didStart)")
+      defer { if didStart { exportDestinationManager.endScopedAccess() } }
+      guard didStart else {
+        throw NSError(
+          domain: "Export", code: 1,
+          userInfo: [
+            NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"
+          ])
+      }
 
       // Determine destination directory
       let destDir = try exportDestinationManager.urlForMonth(
@@ -211,22 +227,15 @@ final class ExportManager: ObservableObject {
       let (baseName, ext) = splitFilename(resource.originalFilename)
       let finalURL = uniqueFileURL(in: destDir, baseName: baseName, ext: ext)
       let tempURL = finalURL.appendingPathExtension("tmp")
+      defer {
+        if FileManager.default.fileExists(atPath: tempURL.path) {
+          try? FileManager.default.removeItem(at: tempURL)
+        }
+      }
 
       exportRecordStore.markInProgress(
         assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath,
         filename: finalURL.lastPathComponent)
-
-      // Ensure security-scoped access for destination during write and move
-      let didStart = exportDestinationManager.beginScopedAccess()
-      logger.debug("Begin scoped access: \(didStart)")
-      defer { if didStart { exportDestinationManager.endScopedAccess() } }
-      guard didStart else {
-        throw NSError(
-          domain: "Export", code: 1,
-          userInfo: [
-            NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"
-          ])
-      }
 
       // Clean up any stale temp file at destination
       if FileManager.default.fileExists(atPath: tempURL.path) {

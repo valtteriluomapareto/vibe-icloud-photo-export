@@ -129,10 +129,6 @@ final class ExportDestinationManager: ObservableObject {
     // Guard against excessively long paths (PATH_MAX ~1024 on macOS)
     if target.path.utf8.count >= 1000 { throw ExportDestinationError.pathTooLong }
 
-    let didStart = beginScopedAccess()
-    defer { if didStart { endScopedAccess() } }
-    guard didStart else { throw ExportDestinationError.scopeAccessDenied }
-
     if createIfNeeded {
       try ensureDirectoryExists(at: target)
     } else {

@@ -10,21 +10,9 @@ import Foundation
 import Photos
 import SwiftUI
 
-private struct ExportRecordStoreKey: EnvironmentKey {
-  static let defaultValue: ExportRecordStore? = nil
-}
-
-extension EnvironmentValues {
-  var exportRecordStore: ExportRecordStore? {
-    get { self[ExportRecordStoreKey.self] }
-    set { self[ExportRecordStoreKey.self] = newValue }
-  }
-}
-
 struct ContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportManager: ExportManager
-  @State private var isShowingAuthorizationView = false
   @State private var selectedYearMonth: YearMonth? = YearMonth(
     year: Calendar.current.component(.year, from: Date()),
     month: Calendar.current.component(.month, from: Date()))
@@ -131,7 +119,6 @@ struct ContentView: View {
       }
     }
     .onAppear {
-      isShowingAuthorizationView = photoLibraryManager.authorizationStatus != .authorized
       if photoLibraryManager.isAuthorized {
         years = (try? photoLibraryManager.availableYears()) ?? []
         if let selected = selectedYearMonth {
@@ -261,20 +248,6 @@ struct ContentView: View {
     return String(start) + "…" + String(end)
   }
 
-  private func monthName(_ month: Int) -> String {
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "MMMM"
-
-    var components = DateComponents()
-    components.month = month
-    components.year = 2023  // Any year will do for getting month name
-
-    if let date = Calendar.current.date(from: components) {
-      return dateFormatter.string(from: date)
-    }
-    return "\(month)"
-  }
-
   private func computeMonthsWithAssets(for year: Int) -> [Int] {
     var months: [Int] = []
     for month in 1...12 {
@@ -373,7 +346,7 @@ struct MonthRow: View {
   var body: some View {
     let summary = exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
     return HStack(spacing: 8) {
-      Text("\(String(year)) \(monthName(month))")
+      Text("\(String(year)) \(MonthFormatting.name(for: month))")
       Spacer()
       if total > 0 {
         switch summary.status {
@@ -408,77 +381,8 @@ struct MonthRow: View {
     .contentShape(Rectangle())
   }
 
-  private func monthName(_ month: Int) -> String {
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "MMMM"
-    let date = Calendar.current.date(from: DateComponents(year: 2023, month: month))!
-    return dateFormatter.string(from: date)
-  }
-}
-
-struct MainView: View {
-  @EnvironmentObject var photoLibraryManager: PhotoLibraryManager
-  @Binding var selectedYear: Int
-  @Binding var selectedMonth: Int
-
-  var body: some View {
-    GeometryReader { geometry in
-      HStack(spacing: 0) {
-        // Left sidebar with navigation/selection options
-        VStack(alignment: .leading) {
-          Text("Library")
-            .font(.headline)
-            .padding()
-
-          List {
-            // Combined year/month selection
-            Section("Photos by Month") {
-              ForEach(2020...2025, id: \.self) { year in
-                ForEach(1...12, id: \.self) { month in
-                  HStack {
-                    Text("\(year) \(monthName(month))")
-                    Spacer()
-                  }
-                  .contentShape(Rectangle())
-                  .background(
-                    selectedYear == year && selectedMonth == month
-                      ? Color.blue.opacity(0.2) : Color.clear
-                  )
-                  .onTapGesture {
-                    selectedYear = year
-                    selectedMonth = month
-                  }
-                }
-              }
-            }
-          }
-        }
-        .frame(width: geometry.size.width * 0.25)
-
-        // Right side placeholder (legacy)
-        VStack { Text("Deprecated MainView") }
-          .frame(width: geometry.size.width * 0.75)
-      }
-    }
-  }
-
-  private func monthName(_ month: Int) -> String {
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "MMMM"
-
-    var components = DateComponents()
-    components.month = month
-    components.year = 2023  // Any year will do for getting month name
-
-    if let date = Calendar.current.date(from: components) {
-      return dateFormatter.string(from: date)
-    }
-    return "\(month)"
-  }
 }
 
 #Preview {
   ContentView()
 }
-
-// Removed inline MonthView; logic moved to MonthContentView and AssetDetailView.

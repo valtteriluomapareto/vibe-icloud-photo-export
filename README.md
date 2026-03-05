@@ -113,6 +113,30 @@ Optional pretty output:
 xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' test | xcpretty
 ```
 
+### Code Coverage
+
+Generate an LCOV coverage report in two steps:
+
+```bash
+# 1. Run tests with coverage (remove old bundle first — xcodebuild won't overwrite)
+rm -rf TestResults.xcresult
+xcodebuild \
+  -project photo-export.xcodeproj \
+  -scheme "photo-export" \
+  -destination 'platform=macOS' \
+  -enableCodeCoverage YES \
+  -resultBundlePath TestResults.xcresult \
+  CODE_SIGNING_ALLOWED=NO \
+  test
+
+# 2. Convert to LCOV
+./scripts/xccov2lcov.sh TestResults.xcresult lcov.info
+```
+
+The script reads line-level coverage from the `.xcresult` archive via `xcrun xccov` and writes standard LCOV output. Test target files are excluded automatically.
+
+To browse coverage in Xcode instead, open `TestResults.xcresult` directly — Xcode shows inline coverage annotations.
+
 ---
 
 ## Running the App

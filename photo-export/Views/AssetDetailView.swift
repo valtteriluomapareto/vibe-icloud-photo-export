@@ -1,6 +1,7 @@
 import AppKit
 import Photos
 import SwiftUI
+import os
 
 struct AssetDetailView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
@@ -11,6 +12,8 @@ struct AssetDetailView: View {
   @State private var fullImage: NSImage?
   @State private var isLoading: Bool = false
   @State private var errorMessage: String?
+
+  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
 
   var body: some View {
     VStack(spacing: 12) {
@@ -62,17 +65,26 @@ struct AssetDetailView: View {
     isLoading = true
     errorMessage = nil
     fullImage = nil
+    logger.debug(
+      "Preview start id: \(asset.localIdentifier, privacy: .public) dims: \(asset.pixelWidth)x\(asset.pixelHeight)"
+    )
     do {
       let image = try await photoLibraryManager.requestFullImage(for: asset)
       await MainActor.run {
         fullImage = image
         isLoading = false
       }
+      logger.debug(
+        "Preview loaded id: \(asset.localIdentifier, privacy: .public) size: \(Int(image.size.width))x\(Int(image.size.height))"
+      )
     } catch {
       await MainActor.run {
         isLoading = false
         errorMessage = "Failed to load image: \(error.localizedDescription)"
       }
+      logger.error(
+        "Preview failed id: \(asset.localIdentifier, privacy: .public) error: \(error.localizedDescription, privacy: .public)"
+      )
     }
   }
 

@@ -182,6 +182,9 @@ final class ExportManager: ObservableObject {
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
         return
       }
+      logger.debug(
+        "Export begin id: \(asset.localIdentifier, privacy: .public) type: \(asset.mediaType.rawValue) created: \(String(describing: asset.creationDate), privacy: .public) dims: \(asset.pixelWidth)x\(asset.pixelHeight)"
+      )
 
       // Determine destination directory
       let destDir = try exportDestinationManager.urlForMonth(
@@ -190,6 +193,9 @@ final class ExportManager: ObservableObject {
 
       // Select primary resource (prefer photo/video original)
       let resources = PHAssetResource.assetResources(for: asset)
+      let resourceSummary = resources.map { "\($0.type.rawValue):\($0.originalFilename)" }.joined(
+        separator: ", ")
+      logger.debug("Asset resources: \(resourceSummary, privacy: .public)")
       guard let resource = selectPrimaryResource(from: resources) else {
         exportRecordStore.markFailed(
           assetId: asset.localIdentifier, error: "No exportable resource", at: Date())
@@ -197,6 +203,9 @@ final class ExportManager: ObservableObject {
           "No exportable resource for id: \(asset.localIdentifier, privacy: .public)")
         return
       }
+      logger.debug(
+        "Selected resource type: \(resource.type.rawValue) filename: \(resource.originalFilename, privacy: .public)"
+      )
 
       // Prepare filename and target URLs
       let (baseName, ext) = splitFilename(resource.originalFilename)
@@ -209,6 +218,7 @@ final class ExportManager: ObservableObject {
 
       // Ensure security-scoped access for destination during write and move
       let didStart = exportDestinationManager.beginScopedAccess()
+      logger.debug("Begin scoped access: \(didStart)")
       defer { if didStart { exportDestinationManager.endScopedAccess() } }
       guard didStart else {
         throw NSError(
@@ -229,9 +239,14 @@ final class ExportManager: ObservableObject {
       try await withCheckedThrowingContinuation { continuation in
         DispatchQueue.global(qos: .utility).async {
           do {
+            self.logger.debug(
+              "Move begin: \(tempURL.lastPathComponent, privacy: .public) -> \(finalURL.lastPathComponent, privacy: .public)"
+            )
             try FileIOService.moveItemAtomically(from: tempURL, to: finalURL)
+            self.logger.debug("Move done -> \(finalURL.lastPathComponent, privacy: .public)")
             continuation.resume(returning: ())
           } catch {
+            self.logger.error("Move failed: \(error.localizedDescription, privacy: .public)")
             continuation.resume(throwing: error)
           }
         }
@@ -242,6 +257,8 @@ final class ExportManager: ObservableObject {
         await withCheckedContinuation { continuation in
           DispatchQueue.global(qos: .utility).async {
             FileIOService.applyTimestamps(creationDate: createdAt, to: finalURL)
+            self.logger.debug(
+              "Applied timestamps for id: \(asset.localIdentifier, privacy: .public)")
             continuation.resume()
           }
         }
@@ -255,7 +272,9 @@ final class ExportManager: ObservableObject {
       )
     } catch {
       // Attempt cleanup of temp file if exists
-      logger.error("Export failed: \(String(describing: error), privacy: .public)")
+      logger.error(
+        "Export failed for id: \(job.assetLocalIdentifier, privacy: .public) error: \(String(describing: error), privacy: .public)"
+      )
       exportRecordStore.markFailed(
         assetId: job.assetLocalIdentifier, error: error.localizedDescription, at: Date())
     }
@@ -293,15 +312,26 @@ final class ExportManager: ObservableObject {
   }
 
   private func writeResource(_ resource: PHAssetResource, to url: URL) async throws {
+    let start = Date()
+    logger.debug(
+      "writeResource begin type: \(resource.type.rawValue) filename: \(resource.originalFilename, privacy: .public) -> \(url.lastPathComponent, privacy: .public)"
+    )
     return try await withCheckedThrowingContinuation { continuation in
       let options = PHAssetResourceRequestOptions()
       options.isNetworkAccessAllowed = true
       // Write directly to the provided URL
       PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) {
         error in
+        let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
         if let error {
+          self.logger.error(
+            "writeResource failed after \(elapsedMs)ms: \(error.localizedDescription, privacy: .public)"
+          )
           continuation.resume(throwing: error)
         } else {
+          self.logger.debug(
+            "writeResource success after \(elapsedMs)ms -> \(url.lastPathComponent, privacy: .public)"
+          )
           continuation.resume(returning: ())
         }
       }

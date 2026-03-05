@@ -1,12 +1,15 @@
 import AppKit
 import Photos
 import SwiftUI
+import os
 
 /// Manages access to the Photos library, including authorization and asset fetching
 final class PhotoLibraryManager: ObservableObject {
   /// Published properties to track authorization status
   @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
   @Published var isAuthorized: Bool = false
+
+  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
 
   /// Errors that can occur in the Photo Library Manager
   enum PhotoLibraryError: Error {
@@ -102,7 +105,8 @@ final class PhotoLibraryManager: ObservableObject {
 
   /// Fetch assets for a specific year and month
   func fetchAssets(year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil) async throws
-    -> [PHAsset] {
+    -> [PHAsset]
+  {
     guard isAuthorized else {
       throw PhotoLibraryError.authorizationDenied
     }
@@ -139,7 +143,7 @@ final class PhotoLibraryManager: ObservableObject {
 
       if let existingPredicate = fetchOptions.predicate {
         fetchOptions.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-          existingPredicate, mediaTypePredicate
+          existingPredicate, mediaTypePredicate,
         ])
       } else {
         fetchOptions.predicate = mediaTypePredicate
@@ -304,10 +308,13 @@ final class PhotoLibraryManager: ObservableObject {
         targetSize: size,
         contentMode: contentMode,
         options: options
-      ) { image, _ in
+      ) { image, info in
         // Only resume once
         guard !hasResumed else { return }
         hasResumed = true
+        self.logger.debug(
+          "thumbnail callback id: \(asset.localIdentifier, privacy: .public) imageNil: \((image == nil))"
+        )
         continuation.resume(returning: image)
       }
     }
@@ -322,12 +329,24 @@ final class PhotoLibraryManager: ObservableObject {
       options.isNetworkAccessAllowed = true
       options.isSynchronous = false
 
+      self.logger.debug(
+        "requestFullImage start id: \(asset.localIdentifier, privacy: .public) size: \(asset.pixelWidth)x\(asset.pixelHeight)"
+      )
+
       PHImageManager.default().requestImage(
         for: asset,
         targetSize: PHImageManagerMaximumSize,
         contentMode: .aspectFit,
         options: options
       ) { image, info in
+        let isDegraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
+        let isInCloud = (info?[PHImageResultIsInCloudKey] as? NSNumber)?.boolValue ?? false
+        let isCancelled = (info?[PHImageCancelledKey] as? NSNumber)?.boolValue ?? false
+        let requestID = (info?[PHImageResultRequestIDKey] as? NSNumber)?.intValue ?? 0
+        let error = info?[PHImageErrorKey] as? NSError
+        self.logger.debug(
+          "requestFullImage callback id: \(asset.localIdentifier, privacy: .public) requestID: \(requestID) degraded: \(isDegraded) inCloud: \(isInCloud) cancelled: \(isCancelled) imageNil: \((image == nil)) error: \(String(describing: error?.localizedDescription), privacy: .public)"
+        )
         if let error = info?[PHImageErrorKey] as? Error {
           continuation.resume(throwing: error)
           return

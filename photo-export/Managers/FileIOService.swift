@@ -33,7 +33,7 @@ enum FileIOService {
       try FileManager.default.setAttributes(
         [
           .creationDate: creationDate,
-          .modificationDate: creationDate
+          .modificationDate: creationDate,
         ], ofItemAtPath: url.path)
     } catch {
       logger.error(

@@ -13,7 +13,6 @@ import SwiftUI
 struct ContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportManager: ExportManager
-  @State private var isShowingAuthorizationView = false
   @State private var selectedYearMonth: YearMonth? = YearMonth(
     year: Calendar.current.component(.year, from: Date()),
     month: Calendar.current.component(.month, from: Date()))
@@ -105,7 +104,6 @@ struct ContentView: View {
       }
     }
     .onAppear {
-      isShowingAuthorizationView = photoLibraryManager.authorizationStatus != .authorized
       if photoLibraryManager.isAuthorized {
         years = (try? photoLibraryManager.availableYears()) ?? []
         if let selected = selectedYearMonth {
@@ -147,20 +145,6 @@ struct ContentView: View {
     let year: Int
     let month: Int
     var id: String { "\(year)-\(month)" }
-  }
-
-  private func monthName(_ month: Int) -> String {
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "MMMM"
-
-    var components = DateComponents()
-    components.month = month
-    components.year = 2023  // Any year will do for getting month name
-
-    if let date = Calendar.current.date(from: components) {
-      return dateFormatter.string(from: date)
-    }
-    return "\(month)"
   }
 
   private func computeMonthsWithAssets(for year: Int) -> [Int] {
@@ -260,7 +244,7 @@ struct MonthRow: View {
     let summary = exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
     let queued = exportManager.queuedCount(year: year, month: month)
     return HStack(spacing: 8) {
-      Text(monthName(month))
+      Text(MonthFormatting.name(for: month))
       Spacer()
       if queued > 0 {
         ProgressView()
@@ -289,12 +273,6 @@ struct MonthRow: View {
     .contentShape(Rectangle())
   }
 
-  private func monthName(_ month: Int) -> String {
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "MMMM"
-    let date = Calendar.current.date(from: DateComponents(year: 2023, month: month))!
-    return dateFormatter.string(from: date)
-  }
 }
 
 #Preview {

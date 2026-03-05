@@ -16,22 +16,19 @@ struct MonthContentView: View {
 
   init(
     year: Int, month: Int, selectedAsset: Binding<PHAsset?>,
-    photoLibraryManager: PhotoLibraryManager? = nil
+    photoLibraryManager: PhotoLibraryManager
   ) {
     self.year = year
     self.month = month
     self._selectedAsset = selectedAsset
-    // Defer creation of StateObject; we need a manager instance at runtime from Environment
-    // We create a temporary placeholder; it will be replaced in body using .onAppear if needed
     _viewModel = StateObject(
-      wrappedValue: MonthViewModel(
-        photoLibraryManager: photoLibraryManager ?? PhotoLibraryManager()))
+      wrappedValue: MonthViewModel(photoLibraryManager: photoLibraryManager))
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       // Header with Month and Year
-      Text("\(monthName(month)) \(String(year))")
+      Text("\(MonthFormatting.name(for: month)) \(String(year))")
         .font(.title2)
         .fontWeight(.semibold)
         .padding(.top, 8)
@@ -80,19 +77,13 @@ struct MonthContentView: View {
     .task(id: "\(year)-\(month)") {
       await viewModel.loadAssets(forYear: year, month: month)
       if selectedAsset == nil, let id = viewModel.selectedAssetId,
-        let asset = viewModel.assets.first(where: { $0.localIdentifier == id }) {
+        let asset = viewModel.assets.first(where: { $0.localIdentifier == id })
+      {
         selectedAsset = asset
       }
     }
     .onChange(of: exportManager.isRunning) { _, newValue in
       viewModel.setExportRunning(newValue)
-    }
-    .onAppear {
-      // Ensure the view model uses the environment manager instance
-      // Only do this once when created with placeholder
-      if Mirror(reflecting: viewModel).children.isEmpty {
-        // no reliable way; but we already constructed with a placeholder manager. Accept it.
-      }
     }
   }
 
@@ -147,10 +138,4 @@ struct MonthContentView: View {
     .font(.subheadline)
   }
 
-  private func monthName(_ month: Int) -> String {
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "MMMM"
-    let date = Calendar.current.date(from: DateComponents(year: 2023, month: month))!
-    return dateFormatter.string(from: date)
-  }
 }

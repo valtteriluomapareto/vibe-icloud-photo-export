@@ -1,12 +1,16 @@
 import AppKit
 import Photos
 import SwiftUI
+import os
 
 /// Manages access to the Photos library, including authorization and asset fetching
+@MainActor
 final class PhotoLibraryManager: ObservableObject {
   /// Published properties to track authorization status
   @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
   @Published var isAuthorized: Bool = false
+
+  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
 
   /// Errors that can occur in the Photo Library Manager
   enum PhotoLibraryError: Error {
@@ -18,13 +22,17 @@ final class PhotoLibraryManager: ObservableObject {
   /// Shared caching image manager for thumbnails
   private static let cachingImageManager = PHCachingImageManager()
 
+  nonisolated static func isAuthorizationSufficient(_ status: PHAuthorizationStatus) -> Bool {
+    status == .authorized || status == .limited
+  }
+
   init() {
     // Check if Info.plist contains photos usage description
     verifyPhotoLibraryPermissions()
 
     // Initialize with current authorization status
     authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-    isAuthorized = authorizationStatus == .authorized
+    isAuthorized = Self.isAuthorizationSufficient(authorizationStatus)
   }
 
   /// Verify that Photos usage description is properly set in Info.plist
@@ -44,65 +52,16 @@ final class PhotoLibraryManager: ObservableObject {
 
     await MainActor.run {
       self.authorizationStatus = status
-      self.isAuthorized = status == .authorized
+      self.isAuthorized = Self.isAuthorizationSufficient(status)
     }
 
-    return status == .authorized
-  }
-
-  /// Fetch all assets grouped by year and month
-  func fetchAssetsByYearAndMonth() async throws -> [Int: [Int: [PHAsset]]] {
-    guard isAuthorized else {
-      throw PhotoLibraryError.authorizationDenied
-    }
-
-    // Create fetch options
-    let fetchOptions = PHFetchOptions()
-    fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-
-    // Fetch all photo and video assets
-    let fetchResult = PHAsset.fetchAssets(with: fetchOptions)
-
-    // Group assets by year and month
-    var assetsByYearAndMonth: [Int: [Int: [PHAsset]]] = [:]
-
-    // Process in batches to avoid loading everything into memory at once
-    let totalAssets = fetchResult.count
-    let batchSize = 500
-
-    for index in 0..<totalAssets {
-      autoreleasepool {
-        guard let creationDate = fetchResult.object(at: index).creationDate else {
-          return
-        }
-
-        let calendar = Calendar.current
-        let year = calendar.component(.year, from: creationDate)
-        let month = calendar.component(.month, from: creationDate)
-
-        if assetsByYearAndMonth[year] == nil {
-          assetsByYearAndMonth[year] = [:]
-        }
-
-        if assetsByYearAndMonth[year]?[month] == nil {
-          assetsByYearAndMonth[year]?[month] = []
-        }
-
-        assetsByYearAndMonth[year]?[month]?.append(fetchResult.object(at: index))
-      }
-
-      // Yield to main thread periodically
-      if index % batchSize == 0 && index > 0 {
-        try await Task.sleep(nanoseconds: 1_000_000)  // 1ms
-      }
-    }
-
-    return assetsByYearAndMonth
+    return Self.isAuthorizationSufficient(status)
   }
 
   /// Fetch assets for a specific year and month
   func fetchAssets(year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil) async throws
-    -> [PHAsset] {
+    -> [PHAsset]
+  {
     guard isAuthorized else {
       throw PhotoLibraryError.authorizationDenied
     }
@@ -139,7 +98,7 @@ final class PhotoLibraryManager: ObservableObject {
 
       if let existingPredicate = fetchOptions.predicate {
         fetchOptions.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-          existingPredicate, mediaTypePredicate
+          existingPredicate, mediaTypePredicate,
         ])
       } else {
         fetchOptions.predicate = mediaTypePredicate
@@ -244,19 +203,6 @@ final class PhotoLibraryManager: ObservableObject {
       .filter { (try? self.countAssets(year: $0)) ?? 0 > 0 }
   }
 
-  /// Extract asset metadata into a structured format
-  func extractAssetMetadata(from asset: PHAsset) -> AssetMetadata {
-    return AssetMetadata(
-      localIdentifier: asset.localIdentifier,
-      creationDate: asset.creationDate,
-      mediaType: asset.mediaType,
-      pixelWidth: asset.pixelWidth,
-      pixelHeight: asset.pixelHeight,
-      duration: asset.duration,
-      isFavorite: asset.isFavorite
-    )
-  }
-
   /// Start caching thumbnails for assets
   func startCachingThumbnails(
     for assets: [PHAsset], size: CGSize = CGSize(width: 200, height: 200),
@@ -296,18 +242,24 @@ final class PhotoLibraryManager: ObservableObject {
       options.isNetworkAccessAllowed = allowNetwork
       options.resizeMode = .fast
 
-      // Add a flag to track whether we've already resumed
-      var hasResumed = false
+      let resumed = OSAllocatedUnfairLock(initialState: false)
 
       PhotoLibraryManager.cachingImageManager.requestImage(
         for: asset,
         targetSize: size,
         contentMode: contentMode,
         options: options
-      ) { image, _ in
-        // Only resume once
-        guard !hasResumed else { return }
-        hasResumed = true
+      ) { image, info in
+        guard
+          resumed.withLock({
+            let was = $0
+            $0 = true
+            return !was
+          })
+        else { return }
+        self.logger.debug(
+          "thumbnail callback id: \(asset.localIdentifier, privacy: .public) imageNil: \((image == nil))"
+        )
         continuation.resume(returning: image)
       }
     }
@@ -322,16 +274,52 @@ final class PhotoLibraryManager: ObservableObject {
       options.isNetworkAccessAllowed = true
       options.isSynchronous = false
 
+      self.logger.debug(
+        "requestFullImage start id: \(asset.localIdentifier, privacy: .public) size: \(asset.pixelWidth)x\(asset.pixelHeight)"
+      )
+
+      let resumed = OSAllocatedUnfairLock(initialState: false)
+
       PHImageManager.default().requestImage(
         for: asset,
         targetSize: PHImageManagerMaximumSize,
         contentMode: .aspectFit,
         options: options
       ) { image, info in
-        if let error = info?[PHImageErrorKey] as? Error {
-          continuation.resume(throwing: error)
+        let isDegraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
+        let isInCloud = (info?[PHImageResultIsInCloudKey] as? NSNumber)?.boolValue ?? false
+        let isCancelled = (info?[PHImageCancelledKey] as? NSNumber)?.boolValue ?? false
+        let requestID = (info?[PHImageResultRequestIDKey] as? NSNumber)?.intValue ?? 0
+        let error = info?[PHImageErrorKey] as? NSError
+        self.logger.debug(
+          "requestFullImage callback id: \(asset.localIdentifier, privacy: .public) requestID: \(requestID) degraded: \(isDegraded) inCloud: \(isInCloud) cancelled: \(isCancelled) imageNil: \((image == nil)) error: \(String(describing: error?.localizedDescription), privacy: .public)"
+        )
+
+        if isCancelled || error != nil {
+          guard
+            resumed.withLock({
+              let was = $0
+              $0 = true
+              return !was
+            })
+          else { return }
+          if let error = error as? Error {
+            continuation.resume(throwing: error)
+          } else {
+            continuation.resume(throwing: PhotoLibraryError.assetUnavailable)
+          }
           return
         }
+
+        if isDegraded { return }
+
+        guard
+          resumed.withLock({
+            let was = $0
+            $0 = true
+            return !was
+          })
+        else { return }
 
         guard let image = image else {
           continuation.resume(throwing: PhotoLibraryError.assetUnavailable)

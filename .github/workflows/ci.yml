@@ -51,14 +51,26 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Run Unit Tests (Debug)
+      - name: Run Unit Tests (Debug, with coverage)
         run: |
           set -o pipefail
           xcodebuild \
             -project photo-export.xcodeproj \
             -scheme "photo-export" \
             -destination 'platform=macOS' \
+            -enableCodeCoverage YES \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
             test
+
+      - name: Convert coverage to LCOV
+        run: ./scripts/xccov2lcov.sh TestResults.xcresult lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
 
       - name: Build Release
         run: |

@@ -1,1 +1,3 @@
 /build
+*.xcresult
+lcov.info

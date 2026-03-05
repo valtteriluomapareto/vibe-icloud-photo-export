@@ -1,135 +1,115 @@
 # UI Overhaul Implementation Plan
 
-## Overview
-Restructure the UI to move settings/controls out of the sidebar into a toolbar, add prominent export progress, improve the first-launch experience, and polish thumbnail/detail views.
+## Status: All steps implemented and merged with main
 
 ---
 
-## Step 1: Add `ExportAllManager` capability to `ExportManager`
+## Step 1: Add `ExportAllManager` capability to `ExportManager` — DONE
 
 **File:** `photo-export/Managers/ExportManager.swift`
 
-- Add a new `startExportAll()` method that iterates all available years (via `PhotoLibraryManager.availableYears()`) and calls `enqueueYear` for each.
-- Add published properties for overall progress tracking:
-  - `@Published private(set) var totalJobsEnqueued: Int = 0` — total jobs added in current batch
-  - `@Published private(set) var totalJobsCompleted: Int = 0` — completed so far
-  - `@Published private(set) var currentAssetFilename: String?` — name of file currently being exported
-- Update `processNext()` to increment `totalJobsCompleted` and set `currentAssetFilename` when starting a job.
-- Update `cancelAndClear()` to reset these counters.
-- These published properties power the toolbar progress bar.
+- Added `startExportAll()` method that iterates all available years and calls `enqueueYear` for each, with generation-based cancellation support.
+- Added published properties for progress tracking:
+  - `@Published private(set) var totalJobsEnqueued: Int = 0`
+  - `@Published private(set) var totalJobsCompleted: Int = 0`
+  - `@Published private(set) var currentAssetFilename: String?`
+- Updated `processNext()` to increment `totalJobsCompleted` and set `currentAssetFilename`.
+- Updated `cancelAndClear()` to reset counters and clean up in-flight records.
+- Added `queuedCount(year:month:)` for per-month queue status queries.
 
 ---
 
-## Step 2: Create `ExportToolbarView` (new file)
+## Step 2: Create `ExportToolbarView` — DONE
 
 **New file:** `photo-export/Views/ExportToolbarView.swift`
 
-A SwiftUI view used as `.toolbar { }` content in ContentView. Contains:
-
-1. **Destination indicator** (left): folder icon + truncated path + green/yellow status icon + "Change…" button. If no folder selected, show "Select Folder…" button.
-2. **Primary actions** (center): "Export All" button (`.borderedProminent`), Pause/Resume toggle button.
-3. **Progress bar** (right): `ProgressView(value:total:)` with `totalJobsCompleted / totalJobsEnqueued`, percentage text, and `currentAssetFilename` below in caption. Only visible when `exportManager.isRunning || exportManager.totalJobsEnqueued > 0`.
-
-This view reads from `ExportManager` and `ExportDestinationManager` via `@EnvironmentObject`.
+Contains:
+1. **Destination indicator**: drive icon + folder name + status color + "Change..." button
+2. **Primary actions**: "Export All" button, Pause/Resume/Cancel controls
+3. **Progress bar**: linear progress with completed/total count and current filename
 
 ---
 
-## Step 3: Refactor `ContentView` sidebar
+## Step 3: Refactor `ContentView` sidebar — DONE
 
 **File:** `photo-export/ContentView.swift`
 
-- **Remove** `exportDestinationSection` (moved to toolbar).
-- **Remove** `exportProcessSection` (moved to toolbar).
-- **Remove** per-year "Export Year" buttons from the sidebar year rows (moved to toolbar / content area).
-- **Remove** per-month "Export" buttons from `MonthRow` (move to content area).
-- **Add** a search/filter `TextField` at the top of the sidebar list for filtering months by name.
-- **Add** `.toolbar { ExportToolbarView() }` to the `NavigationSplitView`.
-- **Delete** the dead `MainView` struct (lines 419–478) and the trailing comment on line 484.
-- Simplify `MonthRow` to show: month name, export count badge, and status icon only (no buttons).
-- Add inline progress indicator to `MonthRow` during active export: if the export manager's queue contains jobs for that year/month, show a mini progress indicator or percentage instead of the static count.
+- Removed `exportDestinationSection` (moved to toolbar)
+- Removed `exportProcessSection` (moved to toolbar)
+- Removed per-year "Export Year" buttons and per-month "Export" buttons
+- Added `.toolbar { ExportToolbarView() }` to NavigationSplitView
+- Deleted dead `MainView` struct and unused `EnvironmentKey`
+- Simplified `MonthRow`: shows month name, status icon, inline progress during export
+- Adopted `MonthFormatting.name(for:)` from main branch
 
 ---
 
-## Step 4: Add per-month "Export Month" button to `MonthContentView`
+## Step 4: Add per-month "Export Month" button to `MonthContentView` — DONE
 
 **File:** `photo-export/Views/MonthContentView.swift`
 
-- Add an "Export Month" button in the header area (next to the month title or in `exportSummaryView`).
-- Disable when `!exportDestinationManager.canExportNow`.
-- This replaces the per-month export buttons that were removed from the sidebar.
+- Added "Export Month" button in the header area next to export summary
+- Disabled when `!exportDestinationManager.canExportNow`
 
 ---
 
-## Step 5: Create `OnboardingView` (new file)
+## Step 5: Create `OnboardingView` — DONE
 
 **New file:** `photo-export/Views/OnboardingView.swift`
 
-Shown when `exportDestinationManager.selectedFolderURL == nil` (first launch or after clearing). Contains:
-
-1. App icon / welcome header: "Welcome to Photo Export"
-2. Subtitle: "Back up your Photos library to any drive."
-3. Step 1: "Select an export destination" with a "Choose Folder…" button that calls `exportDestinationManager.selectFolder()`.
-4. Step 2: "Choose what to export" with two radio options: "Everything (recommended)" / "Let me pick months".
-5. A "Start Export" button that either calls `exportManager.startExportAll()` or dismisses to the main view.
-6. A "Skip" link/button to go straight to the main view without exporting.
-
-**Integration in `ContentView`:** After the authorization check, add a second check: if authorized but no destination selected, show `OnboardingView` instead of the `NavigationSplitView`. Add a `@State private var hasCompletedOnboarding: Bool` (persisted via `@AppStorage`) so onboarding only shows once; after that, missing destination just shows the toolbar prompt.
+- Welcome header with app icon
+- Step 1: folder selection with "Choose Folder..." button
+- Step 2: export scope picker (Everything / Let me pick months)
+- "Start Export" and "Skip" buttons
+- Gated by `@AppStorage("hasCompletedOnboarding")` in ContentView
 
 ---
 
-## Step 6: Improve `ThumbnailView` with failure state
+## Step 6: Improve `ThumbnailView` with failure state — DONE
 
 **File:** `photo-export/Views/ThumbnailView.swift`
 
-- Change the `thumbnail: NSImage?` parameter to accept a loading state enum:
-  ```swift
-  enum ThumbnailState {
-    case loading
-    case loaded(NSImage)
-    case failed
-  }
-  ```
-- Update `MonthViewModel` to track failed thumbnails (e.g., `failedThumbnailIds: Set<String>`).
-- In `ThumbnailView`, when state is `.failed`, show a gray rectangle with a warning icon and "Could not load" caption text, instead of an infinite spinner.
-- Update `MonthContentView` to pass the correct state.
+- Changed from `thumbnail: NSImage?` to `state: ThumbnailState` enum (`.loading`, `.loaded(NSImage)`, `.failed`)
+- Failed state shows gray rectangle with warning icon and "Failed" text
+- `MonthViewModel` tracks `failedThumbnailIds: Set<String>` and exposes `thumbnailState(for:)`
 
 ---
 
-## Step 7: Enrich `AssetDetailView` metadata
+## Step 7: Enrich `AssetDetailView` metadata — DONE
 
 **File:** `photo-export/Views/AssetDetailView.swift`
 
-- Add **filename**: use `PHAssetResource.assetResources(for: asset)` to get the original filename and display it.
-- Add **file size**: use `PHAssetResource` `value(forKey: "fileSize")` to get and format the byte size (e.g., "4.2 MB").
-- These are cheap synchronous calls on `PHAssetResource` so they can be computed inline.
+- Added original filename display from `PHAssetResource`
+- Added file size display using `ByteCountFormatter`
+- Fixed pre-existing bug: switched from broken `@Environment(\.exportRecordStore)` to `@EnvironmentObject`
 
 ---
 
-## Step 8: Add sidebar progress indicators during export
+## Step 8: Add sidebar progress indicators during export — DONE
 
 **File:** `photo-export/ContentView.swift` (in `MonthRow`)
 
-- Expose per-month queue status from `ExportManager`. Add a method or published dictionary:
-  `func queuedCount(year: Int, month: Int) -> Int` — returns number of pending/in-progress jobs for that month.
-- In `MonthRow`, when jobs are queued for that month, show a small `ProgressView` or a "⟳" indicator alongside the count, instead of the static export status.
+- `ExportManager.queuedCount(year:month:)` returns pending job count per month
+- `MonthRow` shows spinner + "N left" text when jobs are queued, otherwise shows static status
 
 ---
 
+## Merge with main — DONE
+
+Resolved conflicts with main branch changes:
+- Integrated generation-based cancellation into `startExportAll()` and `processNext()`
+- Adapted to refactored `beginScopedAccess() -> URL?` and `endScopedAccess(for:)` signatures
+- Adopted `MonthFormatting.name(for:)` helper, removed duplicate `monthName()` functions
+
 ## File Change Summary
 
-| File | Action |
-|---|---|
-| `Managers/ExportManager.swift` | Add `startExportAll()`, progress properties, per-month queue count |
-| `Views/ExportToolbarView.swift` | **New** — toolbar with destination, actions, progress |
-| `Views/OnboardingView.swift` | **New** — first-launch guided setup |
-| `Views/ThumbnailView.swift` | Add failure state rendering |
-| `Views/MonthContentView.swift` | Add "Export Month" button |
-| `Views/AssetDetailView.swift` | Add filename and file size metadata |
-| `ContentView.swift` | Remove destination/process sections, remove dead `MainView`, add toolbar, add search filter, add onboarding gate, simplify `MonthRow` |
-| `ViewModels/MonthViewModel.swift` | Track thumbnail failure state |
-
-## Implementation Order
-
-1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
-
-Steps 1-3 are the core restructuring (toolbar + sidebar cleanup). Steps 4-5 add new views. Steps 6-8 are polish improvements. Each step produces a compilable state.
+| File | Action | Status |
+|---|---|---|
+| `Managers/ExportManager.swift` | Add `startExportAll()`, progress properties, per-month queue count | Done |
+| `Views/ExportToolbarView.swift` | **New** — toolbar with destination, actions, progress | Done |
+| `Views/OnboardingView.swift` | **New** — first-launch guided setup | Done |
+| `Views/ThumbnailView.swift` | Add failure state rendering | Done |
+| `Views/MonthContentView.swift` | Add "Export Month" button | Done |
+| `Views/AssetDetailView.swift` | Add filename, file size; fix @EnvironmentObject bug | Done |
+| `ContentView.swift` | Remove destination/process sections, remove dead `MainView`, add toolbar, add onboarding gate, simplify `MonthRow` | Done |
+| `ViewModels/MonthViewModel.swift` | Track thumbnail failure state | Done |

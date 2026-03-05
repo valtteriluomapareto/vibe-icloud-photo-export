@@ -10,17 +10,6 @@ import Foundation
 import Photos
 import SwiftUI
 
-private struct ExportRecordStoreKey: EnvironmentKey {
-  static let defaultValue: ExportRecordStore? = nil
-}
-
-extension EnvironmentValues {
-  var exportRecordStore: ExportRecordStore? {
-    get { self[ExportRecordStoreKey.self] }
-    set { self[ExportRecordStoreKey.self] = newValue }
-  }
-}
-
 struct ContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportManager: ExportManager

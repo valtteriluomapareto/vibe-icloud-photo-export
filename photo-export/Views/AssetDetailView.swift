@@ -4,7 +4,7 @@ import SwiftUI
 
 struct AssetDetailView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @Environment(\.exportRecordStore) private var exportRecordStore
+  @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
   let asset: PHAsset?
 
@@ -107,7 +107,7 @@ struct AssetDetailView: View {
         Text("Duration: \(durationString)")
       }
       let id = asset.localIdentifier
-      if let export = exportRecordStore?.exportInfo(assetId: id) {
+      if let export = exportRecordStore.exportInfo(assetId: id) {
         switch export.status {
         case .done:
           if let when = export.exportDate {

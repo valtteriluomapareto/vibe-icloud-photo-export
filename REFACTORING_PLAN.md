@@ -1,398 +1,429 @@
-# Photo Export — Refactoring Plan (v8)
+# Photo Export — Refactoring Plan (v10)
 
 ## Context
 
-Code review found correctness bugs, dead code, weak verification gates, and concurrency design gaps. This v8 plan addresses those issues with a stricter execution model:
+This plan prioritizes correctness, strict-concurrency pre-adaptation, and executable verification with proportionate process for a solo project.
 
-1. Pre-adapt for Swift 6 strict concurrency now (without waiting for full toolchain migration).
-2. Make risky changes testable before doing the migration.
-3. Keep each step independently verifiable with explicit exit criteria.
+Primary goals:
+1. Pre-adapt to Swift 6 strict-concurrency constraints now.
+2. Preserve export correctness (no silent data loss, no duplicate queue effects).
+3. Keep high-risk changes testable at the point they are introduced.
 
 ## Locked Decisions
 
-- Swift 6 pre-adaptation is in scope now.
-- Authorization revocation policy is **pause + require re-authorization to resume** (not cancel/drop all pending jobs).
-- Non-`@MainActor` protocols must use Sendable/domain wrappers only (no `PHAsset` or other Photos reference types crossing nonisolated async boundaries).
-- `PhotoLibraryManager` remains `@MainActor` and owns UI/auth state.
-- Security-scoped access will use a single scoped operation API (`withScopedAccess`) instead of split `begin/end` calls.
-- Export queue processing uses run-generation guards to prevent stale tasks from mutating state after pause/cancel/revoke.
-- Queue test signaling uses a per-run event stream with strict completion semantics.
-- File timestamp and file move side effects are validated via dependency injection (`FileIOProviding`), not inferred from filesystem side effects.
-- `resourceToken` is structured/versioned and validated for round-trip correctness.
+- Authorization revocation policy: pause queue and require explicit re-auth resume.
+- `PhotoLibraryManager` becomes and remains `@MainActor`.
+- Nonisolated protocols expose only Sendable/domain wrappers (no `PHAsset` / `PHAssetResource` in protocol signatures).
+- Export queue uses one serialized state owner plus run-generation guard.
+- Destination dependency is split into:
+  - `@MainActor` control plane (selection/UI state)
+  - nonisolated export session API for export-time operations
+- Security-scoped access is balanced through one API boundary (`withExportScope`) in export pipeline code.
+- `resourceToken` remains ephemeral and in-memory only for now (no structured/versioned persistence work in this plan).
+- Characterization tests must pass before `ExportManager` rewrite.
 
 ---
 
-## Phase 0: Swift 6 Concurrency Baseline (New)
+## Toolchain + Baseline Prerequisites
 
-### 0.1 — Enable strict concurrency diagnostics
-**Files**: `photo-export.xcodeproj/project.pbxproj`
+### P0.1 — Toolchain and test plan pinning
+
+**Requirements**:
+- Pin CI toolchain to one exact version (for example, Xcode 15.3).
+- Use checked-in test plan:
+  - `photo-export.xcodeproj/xcshareddata/xctestplans/photo-export.xctestplan`
+
+**Exit criteria**:
+- CI and local test commands run through the same `.xctestplan`.
+
+### P0.2 — Strict-concurrency baseline policy
+
+**Files**:
+- `photo-export.xcodeproj/project.pbxproj`
 
 **Changes**:
 1. Keep `SWIFT_VERSION = 5.0` for now.
-2. Add strict concurrency diagnostics for Debug/Test configurations (for example, `SWIFT_STRICT_CONCURRENCY = complete` and warning flags as supported by current Xcode).
-3. Document active compiler diagnostics in this repo (`CONCURRENCY_BASELINE.md`) with: warning, file, and planned fix phase.
+2. Enable strict concurrency diagnostics in Debug/Test configs.
+3. Record baseline warnings from a clean build.
+4. Add CI check: fail on any new concurrency warning identity (file/line/diagnostic), not just count.
 
 **Exit criteria**:
-- Project builds.
-- Strict-concurrency warnings are triaged and mapped to plan steps.
+- Baseline recorded.
+- CI enforces no-new-warning policy.
 
-### 0.2 — Add deterministic test seams before risky migrations
+### P0.3 — Mandatory actor isolation correction + compile-order dependency fix
+
+**Files**:
+- `photo-export/Managers/PhotoLibraryManager.swift`
+- `photo-export/Views/MonthContentView.swift`
+
+**Changes**:
+1. Add class-level `@MainActor` to `PhotoLibraryManager`.
+2. Remove fallback `PhotoLibraryManager()` construction path from `MonthContentView` immediately in this step.
+3. Apply required call-site actor hops/async fixes.
+
+**Reason**:
+- This avoids the known compile break if fallback removal is delayed to later cleanup.
+
+**Exit criteria**:
+- Build passes with `@MainActor` annotation and no fallback construction path.
+
+### P0.4 — Test seams required for early bug-fix verification
+
 **Files**:
 - `photo-export/Managers/ExportManager.swift`
+- `photo-export/Managers/PhotoLibraryManager.swift`
+- `photo-export/Managers/FileIOService.swift`
+- `photo-export/Protocols/*.swift` (new)
+
+**Add seams**:
+1. `FileIOProviding` for move/timestamp/temp checks.
+2. `ImageRequesting` for `PHImageManager.requestImage`.
+3. `ResourceWriting` for `PHAssetResourceManager.writeData`.
+4. Destination seam protocols with final intended shape now (not redefined later):
+   - `@MainActor ExportDestinationControlProviding`
+   - nonisolated `ExportDestinationSessionProviding` with `withExportScope(...)`.
+
+**Exit criteria**:
+- Phase 1 deterministic tests are implementable without Photos mocking hacks.
+- Add seam smoke suite: `photo-exportTests/TestSeamContractTests`.
+
+### P0.5 — ExportRecordStore strict-concurrency cleanup
+
+**Files**:
 - `photo-export/Managers/ExportRecordStore.swift`
 - `photo-exportTests/ExportRecordStoreTests.swift`
 
 **Changes**:
-1. Add `FileIOProviding` abstraction and inject into `ExportManager`.
-2. Add deterministic hooks for tests (for timeout, queue lifecycle, and controllable in-flight export behavior).
-3. Remove sleep-based assertion from `ExportRecordStoreTests` by making notification debounce configurable/injectable for tests.
+1. Replace `DispatchQueue.main.asyncAfter` coalescing with Task-based flow plus injected debounce/clock seam.
+2. Remove `@MainActor` captures in `ioQueue.async` closures via nonisolated helper boundaries.
+3. Replacement pattern: perform IO in nonisolated helpers, then marshal state updates back via `await MainActor.run`.
+4. Make debounce and compaction threshold injectable.
 
 **Exit criteria**:
-- Existing tests pass without `Task.sleep`-timing assumptions.
-- No new behavior change in production codepaths.
+- No new strict-concurrency warnings in ExportRecordStore path.
+- Store tests are deterministic without wall-clock sleep assumptions.
 
 ---
 
-## Phase 1: Critical Correctness Fixes
+## Phase 1: Critical Correctness Fixes (Fully Testable)
 
-### 1.1 — `requestFullImage` double-resume crash guard
+### 1.1 — Continuation resume race-safety for all `PHImageManager` callbacks
+
 **File**: `photo-export/Managers/PhotoLibraryManager.swift`
 
-**Problem**: `requestFullImage` continuation can be resumed multiple times.
+**Scope**:
+- `loadThumbnail(...)` and `requestFullImage(...)`.
+
+**Problem**:
+- Both currently rely on plain boolean resume guards that are race-prone under concurrent callback delivery.
 
 **Fix**:
-- Mirror `loadThumbnail` pattern with `hasResumed` guard on all resume paths.
+- Use lock/atomic gate (`OSAllocatedUnfairLock<Bool>` or equivalent) around terminal resume decision in both methods.
 
-**Verification**:
-- Unit test with callback invoked multiple times (degraded/full/error order variants) verifies single terminal resume.
+**Test gate**:
+- `photo-exportTests/PhotoLibraryManagerImageRequestTests`
+- Assertions:
+  - opportunistic/degraded/final/error callback permutations still cause exactly one terminal resume.
 
-### 1.2 — Temp file cleanup on export failure with scoped access intact
+### 1.2 — Temp cleanup on export failure (assert outcomes, not attempts)
+
 **File**: `photo-export/Managers/ExportManager.swift`
 
-**Problem**: temp `.tmp` files can leak on failure; cleanup timing currently conflicts with scoped-access lifecycle.
-
 **Fix**:
-1. Explicit cleanup ownership: cleanup is performed by `do`-scope `defer` while access scope is active.
-2. Ensure all failure paths (write/move/timestamp/cancel) remove temp file best-effort.
+1. Cleanup ownership is `defer` while export scope is active.
+2. Validate postcondition: `.tmp` file absent after write/move/timestamp/cancel failures.
 
-**Verification**:
-- Table-driven tests: write failure, move failure, timestamp failure, cancellation while writing.
-- Assert temp-file cleanup attempts happen for each path.
+**Test gate**:
+- `photo-exportTests/ExportManagerFailurePathTests`
 
-### 1.3 — Crash-safe snapshot compaction
+### 1.3 — Crash-safe compaction + restart recovery validation
+
 **File**: `photo-export/Managers/ExportRecordStore.swift`
 
-**Problem**: remove-then-move can lose snapshot on crash.
-
 **Fix**:
-- If snapshot exists: `replaceItemAt`.
-- Else: `moveItem` first snapshot.
+- Existing snapshot: `replaceItemAt`.
+- First snapshot: `moveItem`.
+- Add fault-injection seams around compaction boundaries.
 
-**Verification**:
-- Tests cover both branches: first compaction (no snapshot), subsequent compaction (existing snapshot).
-- Assert snapshot survives and log truncates correctly.
+**Test gate**:
+- `photo-exportTests/ExportRecordStoreCompactionTests`
+- Assertions:
+  - restart after injected failures recovers records correctly.
+  - no snapshot loss window across replace/move/truncate boundaries.
 
-### 1.4 — Fix `AssetDetailView` export status wiring
+### 1.4 — `AssetDetailView` export status wiring fix
+
 **Files**:
 - `photo-export/Views/TestPhotoAccessView.swift` (delete)
 - `photo-export/Views/AssetDetailView.swift`
 - `photo-export/ContentView.swift`
 
-**Problem**: custom environment key for export store is never injected.
-
 **Fix**:
-1. Delete `TestPhotoAccessView`.
-2. Migrate `AssetDetailView` to `@EnvironmentObject ExportRecordStore`.
-3. Remove unused custom `EnvironmentKey` from `ContentView`.
+1. Migrate to `@EnvironmentObject ExportRecordStore`.
+2. Remove optional-chain calls (`exportRecordStore?.`) at call sites.
+3. Remove dead custom `EnvironmentKey` path.
 
-**Verification**:
-- Build passes.
-- UI smoke: selecting asset displays export status in detail pane.
+**Test gate**:
+- `photo-exportTests/AssetDetailViewIntegrationTests`
 
----
+### 1.5 — Authorization mapping correctness moved early
 
-## Phase 2: Dead Code + Hidden Coupling Removal
-
-### 2.1 — Delete `fetchAssetsByYearAndMonth()`
-**File**: `photo-export/Managers/PhotoLibraryManager.swift`
-
-### 2.2 — Delete deprecated `MainView`
-**File**: `photo-export/ContentView.swift`
-
-### 2.3 — Delete `InfoPlist.swift`
-**File**: `photo-export/InfoPlist.swift`
-
-### 2.4 — Delete unused `AssetMetadata` + `extractAssetMetadata()`
 **Files**:
-- `photo-export/Models/AssetMetadata.swift`
 - `photo-export/Managers/PhotoLibraryManager.swift`
-
-### 2.5 — Remove unused `isShowingAuthorizationView`
-**File**: `photo-export/ContentView.swift`
-
-### 2.6 — Remove accidental second `PhotoLibraryManager` construction path
-**File**: `photo-export/Views/MonthContentView.swift`
-
-**Problem**: view can instantiate a fallback manager, creating duplicate state sources.
+- `photo-export/ContentView.swift`
 
 **Fix**:
-- Require environment/injected manager only; remove `PhotoLibraryManager()` fallback path.
+- `.authorized` and `.limited` map to `isAuthorized == true`.
+- Maintain `isLimited` explicitly for UI.
 
-**Verification for entire phase**:
-- Build succeeds.
-- No references to removed symbols.
+**Test gate**:
+- `photo-exportTests/PhotoLibraryManagerAuthorizationTests`
 
 ---
 
-## Phase 3: UI Concurrency Hardening (Deterministic)
+## Phase 2: Dead Code Sweep (Single Proportionate Cleanup Step)
 
-### 3.1 — Shared month formatting helper with static formatter
+### 2.1 — Remove dead/unused paths in one commit
+
+**Remove**:
+- `fetchAssetsByYearAndMonth()`
+- deprecated `MainView`
+- `InfoPlist.swift`
+- `AssetMetadata` + `extractAssetMetadata()`
+- unused `isShowingAuthorizationView`
+- empty test stub `photo_exportTests.swift`
+
+**Test gate**:
+- build + targeted UI/view-model regression suites
+- assertions:
+  - no references to removed symbols
+  - runtime behavior for month/detail views unchanged
+
+---
+
+## Phase 3: UI/VM Concurrency Hardening Only
+
+### 3.1 — Shared month formatting helper
+
 **New file**: `photo-export/Helpers/MonthFormatting.swift`
 
 **Fix**:
-- Create shared `monthName(for:)` using cached static `DateFormatter`.
-- Replace duplicate helpers across `ContentView`, `MonthRow`, and `MonthContentView`.
+- shared helper with static cached formatter.
 
-### 3.2 — Move sidebar loading orchestration to testable view model
+### 3.2 — Extract sidebar orchestration to `SidebarViewModel`
+
 **New file**: `photo-export/ViewModels/SidebarViewModel.swift`
 
 **Fix**:
-- Extract year/month loading and stale-result/cancellation logic out of `ContentView`.
-- Keep computation pure: collect counts in local variables first; apply state only once after token/cancel checks.
+- mark `SidebarViewModel` as `@MainActor`.
+- token/cancellation guards.
+- local accumulation then single state commit.
 
-### 3.3 — Async migration of year/month counting with cancellation safety
-**Files**:
-- `photo-export/ContentView.swift`
-- `photo-export/Managers/PhotoLibraryManager.swift`
-- `photo-export/Managers/PhotoLibraryService.swift` (new)
+### 3.3 — Deterministic out-of-order/cancel tests
 
-**Fix**:
-- Migrate `availableYears` and month-count querying to async.
-- Add explicit cancellation checks inside month loops.
-- Ensure stale tasks cannot mutate published state.
-
-### 3.4 — Tests for out-of-order completion and cancellation
 **New file**: `photo-exportTests/SidebarViewModelTests.swift`
 
-**Tests**:
-- Slow-old / fast-new completion ordering.
-- Task cancellation before completion.
-- Partial month computations do not leak stale counts.
+**Assertions**:
+- stale tasks cannot mutate final state.
+- canceled tasks commit nothing.
+
+**Note**:
+- `PhotoLibraryService.swift` is intentionally deferred to Phase 4.
 
 ---
 
-## Phase 4: Swift 6-Oriented Architecture Split + Protocol Extraction
+## Phase 4: Protocol/Service Architecture Migration
 
-This phase is high risk and is split into small commits. No substep proceeds without passing listed tests.
+### 4.1 — Domain wrappers + export protocol boundary
 
-### 4.1 — Domain wrappers and Sendable boundaries
-**New file**: `photo-export/Models/ExportableAsset.swift`
+**Files**:
+- `photo-export/Models/ExportableAsset.swift` (new)
+- `photo-export/Protocols/PhotoLibraryExportProviding.swift` (new)
 
-**Rules**:
-- All nonisolated protocol APIs use Sendable wrapper/domain types.
-- Explicit enum mappers (`init(from:)` switch), no raw-value coupling.
+**Rule**:
+- New protocol APIs return/accept wrapper types only.
 
-### 4.2 — Structured `resourceToken` contract
+**Test gate**:
+- `photo-exportTests/ExportableModelMappingTests`
+
+### 4.2 — Destination split implementation and scoped operation correctness
+
+**Files**:
+- `photo-export/Managers/ExportDestinationManager.swift`
+- `photo-export/Managers/ExportManager.swift`
+
+**API contract already introduced in P0.4**:
+
+```swift
+func withExportScope<T: Sendable>(
+  year: Int,
+  month: Int,
+  operation: @Sendable (URL) async throws -> T
+) async throws -> T
+```
+
+**Mandatory invariants**:
+1. Scope closes even on thrown/cancelled operations.
+2. `urlForMonth` no longer starts/stops security scope itself.
+3. Heavy IO within operation is off-main.
+4. Destination switch invalidates current run generation and prevents stale writes.
+
+**Test gate**:
+- `photo-exportTests/ExportDestinationSessionTests`
+
+### 4.3 — `resourceToken` policy for ephemeral in-memory use
+
 **Files**:
 - `photo-export/Models/ExportableAsset.swift`
 - `photo-export/Managers/PhotoLibraryService.swift`
 
-**Fix**:
-- Replace delimiter token (`"assetId#index"`) with versioned structured token (encoded payload containing asset ID + resource identity fields).
-- Enforce parse + validation + round-trip tests.
-- Invalid token is hard failure (no fuzzy fallback).
+**Policy**:
+- Keep token format simple and explicit for in-memory handoff.
+- No persistence/back-compat migration work in this plan.
+- If token persistence is introduced later, add versioned format in that future change.
 
-### 4.3 — `PhotoLibraryExportProviding` protocol (nonisolated)
-**New file**: `photo-export/Protocols/PhotoLibraryExportProviding.swift`
+**Test gate**:
+- `photo-exportTests/ResourceTokenRoundTripTests`
+- plus negative corpus tests for malformed/unknown token inputs.
 
-**Contract**:
-- Export pipeline only.
-- No UI auth state.
-- No Photos reference types in protocol signatures.
+### 4.4 — Introduce `PhotoLibraryService` once with explicit ownership map
 
-### 4.4 — `ExportDestinationProviding` protocol with scoped operation API
-**New file**: `photo-export/Protocols/ExportDestinationProviding.swift`
-
-**Contract**:
-- `@MainActor` protocol.
-- Keep `urlForMonth(...)`.
-- Replace split `beginScopedAccess/endScopedAccess` with one balanced API:
-
-```swift
-@MainActor
-protocol ExportDestinationProviding: AnyObject {
-  var canExportNow: Bool { get }
-  func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL
-  func withScopedAccess<T>(_ operation: () async throws -> T) async throws -> T
-}
-```
-
-### 4.5 — `PhotoLibraryService` conformance and queue separation
 **File**: `photo-export/Managers/PhotoLibraryService.swift` (new)
 
-**Fix**:
-- Implement protocol with separate queues for heavy fetches vs light stats.
-- Keep non-Sendable Photos references internal to service implementation.
-- Expose only wrapper types across async boundary.
+**Ownership**:
+- `PhotoLibraryManager` owns auth state and UI-facing authorization lifecycle.
+- `PhotoLibraryService` owns export-oriented asset/resource access.
+- Export path consumes only service protocols, not manager internals.
 
-### 4.6 — `ExportManager` protocol migration + run-generation state machine
+**Test gate**:
+- `photo-exportTests/PhotoLibraryServiceContractTests`
+
+### 4.5 — ExportManager characterization tests before rewrite
+
+**File**:
+- `photo-exportTests/ExportManagerCharacterizationTests.swift` (new)
+
+**Purpose**:
+- lock current queue/record behavior before rewrite.
+
+**Gate**:
+- Must pass before 4.6 starts.
+
+### 4.6 — ExportManager state-machine migration (minimal, non-framework)
+
+**File**: `photo-export/Managers/ExportManager.swift`
+
+**Constraints**:
+1. Single serialized owner with one ingress API (`send(event:)`).
+2. Reducer implementation stays compact (target around 80 lines, no generic framework).
+3. Run-generation stale completion guard retained.
+4. State includes auth-blocked state explicitly; booleans derive from state.
+5. `FileIOProviding` seam reused from P0.4.
+
+**Test gate**:
+- `photo-exportTests/ExportManagerStateMachineTests`
+
+### 4.7 — Auth revoke behavior + deterministic dedupe
+
 **File**: `photo-export/Managers/ExportManager.swift`
 
 **Fix**:
-1. Replace concrete deps with protocols:
-   - `photoLibraryService: any PhotoLibraryExportProviding`
-   - `exportDestinationManager: any ExportDestinationProviding`
-   - `fileIO: any FileIOProviding`
-   - injected `isAuthorized: @MainActor () -> Bool`
-2. Add `runID` generation token and attach it to processing tasks.
-3. All terminal record writes pass through one idempotent finalize path guarded by current `runID`.
-4. Late completions from stale tasks are ignored.
-5. Keep `creationDate` on `ExportJob` and pass it via injected file IO.
+- Stable job identity key: `(assetLocalIdentifier, year, month, destinationId)`.
+- Revoke flow:
+  1. cancel in-flight
+  2. requeue only non-terminal interrupted job
+  3. dedupe against pending keys
+  4. enter blocked-by-auth state
+- Resume flow must explicitly refresh auth and re-enter running only when authorized/limited.
 
-### 4.7 — Authorization revocation policy: pause + require re-auth
-**Files**:
-- `photo-export/Managers/ExportManager.swift`
-- `photo-export/photo_exportApp.swift`
-- `photo-export/Managers/PhotoLibraryManager.swift`
+**Test gate**:
+- `photo-exportTests/ExportManagerAuthorizationBlockingTests`
 
-**Policy**:
-- On authorization loss while queue is active:
-  1. Cancel current export task.
-  2. Requeue interrupted job at front (if still needed).
-  3. Keep remaining pending jobs.
-  4. Set `isPaused = true`, `requiresReauthorization = true`, `isRunning = false`, `isProcessing = false`.
-  5. Emit `.blockedByAuthorization` event (non-terminal for queue data).
-- Resume requires explicit user action + positive auth check.
-- No automatic resume on authorization regain.
+### 4.8 — Composition root wiring
 
-**Additional lifecycle fix**:
-- Add `refreshAuthorizationStatus()` to `PhotoLibraryManager`.
-- Call on app activation/scene active and before queue processing entry points.
-
-### 4.8 — Event stream test infrastructure (strict semantics)
-**File**: `photo-export/Managers/ExportManager.swift`
-
-**Fix**:
-- Per-run stream creation.
-- Stream close is explicit and single-owner.
-- `awaitEvents` must throw if stream ends before expected event count unless partial explicitly requested.
-- Add event for authorization blocking.
-
-### 4.9 — Composition root update
 **File**: `photo-export/photo_exportApp.swift`
 
-**Fix**:
-- Wire new protocol dependencies.
-- Inject single-source auth closure.
-- Connect auth status changes to revocation handler.
+**Fix order**:
+1. Wire protocol dependencies.
+2. Wire auth refresh lifecycle hooks.
+3. Route external signals through `send(event:)` entrypoint only.
+
+**Test gate**:
+- `photo-exportTests/AppCompositionIntegrationTests`
 
 ---
 
-## Phase 5: Test Expansion for Real Verification
+## Phase 5: Integration Verification
 
-### 5.1 — `ExportManager` deterministic tests
-**New file**: `photo-exportTests/ExportManagerTests.swift`
+### 5.1 — Real filesystem export integration test
 
-**Coverage**:
-- Queue lifecycle: paused, resumed, drained, cancelled, blocked-by-auth.
-- Revocation while in-flight with blocking mock writer.
-- Stale run completion ignored.
-- Negative paths: asset missing, no resource, scope denied, write fail, move fail, timestamp fail.
-- Temp file cleanup assertions.
-- Timestamp pass-through via `FileIOProviding` spy.
+**New file**: `photo-exportTests/ExportFilesystemIntegrationTests.swift`
 
-### 5.2 — `ExportDestinationManager` tests with isolated storage
-**New file**: `photo-exportTests/ExportDestinationManagerTests.swift`
-
-**Coverage**:
-- Validation errors for year/month/path.
-- Directory creation behavior.
-- Scoped-access API guarantees balancing.
-- `clearSelection` affects only injected test storage.
-
-### 5.3 — `PhotoLibraryManager` auth mapping tests
-**New file**: `photo-exportTests/PhotoLibraryManagerAuthorizationTests.swift`
-
-**Coverage**:
-- `.authorized` and `.limited` map to `isAuthorized == true`.
-- denied/restricted map false.
-- refresh path updates state correctly.
-
-### 5.4 — `ExportRecordStore` compaction and notification determinism
-**File**: `photo-exportTests/ExportRecordStoreTests.swift`
-
-**Coverage**:
-- First and subsequent compaction branches.
-- Notification coalescing without fixed sleeps.
+**Scope**:
+- real `FileIOService`
+- temp destination directory
+- real bytes written and atomically moved
+- timestamp application verified with filesystem-appropriate tolerance
 
 ---
 
-## Phase 6: Limited Authorization UX + Final Hardening
+## Mandatory Gate Matrix
 
-### 6.1 — `.limited` UX banner and behavior
-**Files**:
-- `photo-export/Managers/PhotoLibraryManager.swift`
-- `photo-export/ContentView.swift`
+All step commands use this base:
 
-**Fix**:
-- Track `isLimited`.
-- Show subtle banner explaining subset visibility.
-- Keep export controls consistent with authorized/limited state.
+`xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export`
 
-### 6.2 — Final manual smoke tests
-1. Launch app, browse years/months.
-2. View detail pane export status.
-3. Start month export, pause/resume.
-4. Revoke authorization mid-export, verify queue goes blocked/paused.
-5. Re-authorize, explicitly resume, verify queue continues.
-6. Validate limited-access banner behavior.
+| Step | Required gate | Exact command | Key assertions |
+|---|---|---|---|
+| P0.1 | Test plan pinning | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export test` | command runs through pinned test plan |
+| P0.2 | Concurrency baseline build | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' build` | baseline warnings recorded; CI no-new-warning check passes |
+| P0.3 | Build gate | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' build` | `PhotoLibraryManager` main-actor + no fallback manager path |
+| P0.4 | Seams smoke tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/TestSeamContractTests test` | new seams are injectable and callable from tests |
+| P0.5 | Store determinism tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportRecordStoreTests test` | deterministic coalescing/compaction behavior |
+| 1.1 | Image callback race tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/PhotoLibraryManagerImageRequestTests test` | exactly one terminal resume for both methods |
+| 1.2 | Failure path tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportManagerFailurePathTests test` | temp absent + correct failed record |
+| 1.3 | Compaction recovery tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportRecordStoreCompactionTests test` | restart recovery across fault boundaries |
+| 1.4 | Wiring integration tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/AssetDetailViewIntegrationTests test` | export status visible via env object |
+| 1.5 | Authorization mapping tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/PhotoLibraryManagerAuthorizationTests test` | `.limited` treated as authorized |
+| 2.1 | Cleanup regression gate | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/AssetDetailViewIntegrationTests -only-testing:photo-exportTests/SidebarViewModelTests test` | no regressions from removals |
+| 3.1 | Build gate | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' build` | shared month helper wired |
+| 3.2 | Build + VM gate | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/SidebarViewModelTests test` | VM owns orchestration and main-actor state |
+| 3.3 | Concurrency ordering tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/SidebarViewModelTests test` | stale/cancel safety |
+| 4.1 | Wrapper mapping tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportableModelMappingTests test` | no Photos types in protocol boundaries |
+| 4.2 | Destination session tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportDestinationSessionTests test` | scoped close + off-main IO + stale-run invalidation |
+| 4.3 | Token tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ResourceTokenRoundTripTests test` | round-trip + malformed token handling |
+| 4.4 | Service contract tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/PhotoLibraryServiceContractTests test` | ownership and wrapper contract hold |
+| 4.5 | Characterization prereq | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportManagerCharacterizationTests test` | baseline locked before rewrite |
+| 4.6 | State-machine tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportManagerStateMachineTests test` | transition legality + stale-ignore + idempotence |
+| 4.7 | Auth-blocking tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportManagerAuthorizationBlockingTests test` | deterministic requeue + dedupe |
+| 4.8 | Composition tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/AppCompositionIntegrationTests test` | single ingress wiring through `send(event:)` |
+| 5.1 | Filesystem integration tests | `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export -only-testing:photo-exportTests/ExportFilesystemIntegrationTests test` | bytes/timestamps written correctly |
 
----
+At end of each phase:
 
-## Execution Model (Replaces prior verification section)
-
-Each step must meet these gates before moving forward:
-1. Build gate: `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' build`
-2. Targeted test gate: run only tests for touched area.
-3. Phase gate: full test run at end of each phase.
-4. Manual gate: only for behavior/UI changes.
-
-### Commit strategy
-
-- One commit per numbered step.
-- High-risk steps (`3.2`, `3.3`, `4.x`, `5.1`) must not mix production migration and new test framework work in the same commit unless the test seam is required by that exact change.
-- Rollback remains `git revert` per step.
-
-### Recommended test commands
-
-1. Targeted: `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -only-testing:photo-exportTests/<SuiteName> test`
-2. Full phase gate: `xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' test`
+`xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -testPlan photo-export test`
 
 ---
 
-## File Impact Summary (v8)
+## File Impact Summary (v10)
 
 | File | Planned phases |
-|------|----------------|
-| `Managers/PhotoLibraryManager.swift` | 1.1, 2.1, 2.4, 3.3, 4.7, 6.1 |
-| `Managers/PhotoLibraryService.swift` (new) | 3.3, 4.2, 4.5 |
-| `Managers/ExportManager.swift` | 1.2, 4.6, 4.7, 4.8 |
-| `Managers/ExportRecordStore.swift` | 1.3, 0.2 |
-| `Managers/ExportDestinationManager.swift` | 4.4, 5.2 |
-| `Managers/FileIOService.swift` + new protocol | 0.2, 4.6 |
-| `Protocols/PhotoLibraryExportProviding.swift` (new) | 4.3 |
-| `Protocols/ExportDestinationProviding.swift` (new) | 4.4 |
-| `Models/ExportableAsset.swift` (new) | 4.1, 4.2 |
-| `Views/AssetDetailView.swift` | 1.4 |
-| `Views/MonthContentView.swift` | 2.6, 3.1 |
-| `Views/TestPhotoAccessView.swift` | 1.4 (delete) |
-| `ContentView.swift` | 1.4, 2.2, 2.5, 3.1, 3.2, 6.1 |
-| `InfoPlist.swift` | 2.3 (delete) |
-| `Models/AssetMetadata.swift` | 2.4 (delete) |
-| `photo_exportApp.swift` | 4.7, 4.9 |
-| `ViewModels/SidebarViewModel.swift` (new) | 3.2, 3.4 |
-| `photo-exportTests/ExportManagerTests.swift` (new) | 5.1 |
-| `photo-exportTests/ExportDestinationManagerTests.swift` (new) | 5.2 |
-| `photo-exportTests/PhotoLibraryManagerAuthorizationTests.swift` (new) | 5.3 |
-| `photo-exportTests/SidebarViewModelTests.swift` (new) | 3.4 |
-
+|---|---|
+| `photo-export/Managers/PhotoLibraryManager.swift` | P0.3, P0.4, 1.1, 1.5 |
+| `photo-export/Managers/ExportManager.swift` | P0.4, 1.2, 4.2, 4.6, 4.7 |
+| `photo-export/Managers/ExportRecordStore.swift` | P0.5, 1.3 |
+| `photo-export/Managers/ExportDestinationManager.swift` | 4.2 |
+| `photo-export/Managers/PhotoLibraryService.swift` (new) | 4.3, 4.4 |
+| `photo-export/Managers/FileIOService.swift` | P0.4 |
+| `photo-export/Protocols/*.swift` (new) | P0.4, 4.1 |
+| `photo-export/Models/ExportableAsset.swift` (new) | 4.1, 4.3 |
+| `photo-export/Views/AssetDetailView.swift` | 1.4 |
+| `photo-export/Views/MonthContentView.swift` | P0.3, 3.1 |
+| `photo-export/Views/TestPhotoAccessView.swift` | 1.4 (delete) |
+| `photo-export/ContentView.swift` | 1.4, 1.5, 2.1, 3.1, 3.2 |
+| `photo-export/InfoPlist.swift` | 2.1 (delete) |
+| `photo-export/Models/AssetMetadata.swift` | 2.1 (delete) |
+| `photo-export/photo_exportApp.swift` | 4.8 |
+| `photo-export/ViewModels/SidebarViewModel.swift` (new) | 3.2, 3.3 |
+| `photo-exportTests/*` | P0.5, 1.x, 2.1, 3.3, 4.x, 5.1 |

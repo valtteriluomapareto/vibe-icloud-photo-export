@@ -407,7 +407,7 @@ final class ExportManager: ObservableObject {
     return resources.first
   }
 
-  private func splitFilename(_ filename: String) -> (base: String, ext: String) {
+  func splitFilename(_ filename: String) -> (base: String, ext: String) {
     let url = URL(fileURLWithPath: filename)
     let base = url.deletingPathExtension().lastPathComponent
     let ext = url.pathExtension

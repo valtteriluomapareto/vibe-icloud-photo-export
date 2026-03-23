@@ -13,10 +13,8 @@ struct ExportToolbarView: ToolbarContent {
       primaryActions
     }
 
-    if exportManager.totalJobsEnqueued > 0 {
-      ToolbarItem(placement: .automatic) {
-        progressIndicator
-      }
+    ToolbarItem(placement: .automatic) {
+      progressIndicator
     }
   }
 
@@ -38,6 +36,7 @@ struct ExportToolbarView: ToolbarContent {
         Text(url.lastPathComponent)
           .lineLimit(1)
           .truncationMode(.middle)
+          .frame(maxWidth: 120, alignment: .leading)
           .help(url.path)
 
         Button("Change\u{2026}") {
@@ -69,30 +68,27 @@ struct ExportToolbarView: ToolbarContent {
           : "Select a writable export folder first"
       )
 
-      if exportManager.isRunning || exportManager.queueCount > 0 {
+      Button {
         if exportManager.isPaused {
-          Button {
-            exportManager.resume()
-          } label: {
-            Image(systemName: "play.fill")
-          }
-          .help("Resume export")
+          exportManager.resume()
         } else {
-          Button {
-            exportManager.pause()
-          } label: {
-            Image(systemName: "pause.fill")
-          }
-          .help("Pause export")
+          exportManager.pause()
         }
-
-        Button {
-          exportManager.cancelAndClear()
-        } label: {
-          Image(systemName: "xmark.circle")
-        }
-        .help("Cancel and clear queue")
+      } label: {
+        Image(systemName: exportManager.isPaused ? "play.fill" : "pause.fill")
       }
+      .help(exportManager.isPaused ? "Resume export" : "Pause export")
+      .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
+      .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
+
+      Button {
+        exportManager.cancelAndClear()
+      } label: {
+        Image(systemName: "xmark.circle")
+      }
+      .help("Cancel and clear queue")
+      .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
+      .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
     }
   }
 
@@ -102,6 +98,7 @@ struct ExportToolbarView: ToolbarContent {
     let total = exportManager.totalJobsEnqueued
     let done = exportManager.totalJobsCompleted
     let fraction = total > 0 ? Double(done) / Double(total) : 0
+    let hasProgress = total > 0
 
     return HStack(spacing: 8) {
       ProgressView(value: fraction)
@@ -111,15 +108,15 @@ struct ExportToolbarView: ToolbarContent {
       Text("\(done)/\(total)")
         .font(.caption)
         .monospacedDigit()
+        .frame(width: 60, alignment: .leading)
 
-      if let filename = exportManager.currentAssetFilename, exportManager.isRunning {
-        Text(filename)
-          .font(.caption2)
-          .foregroundColor(.secondary)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .frame(maxWidth: 140)
-      }
+      Text(exportManager.currentAssetFilename ?? "")
+        .font(.caption2)
+        .foregroundColor(.secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .frame(width: 140, alignment: .leading)
     }
+    .opacity(hasProgress ? 1 : 0)
   }
 }

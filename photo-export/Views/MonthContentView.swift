@@ -60,7 +60,8 @@ struct MonthContentView: View {
               asset: asset,
               state: viewModel.thumbnailState(for: asset),
               isSelected: asset.localIdentifier == selectedAsset?.localIdentifier,
-              isExported: exportRecordStore.isExported(assetId: asset.localIdentifier)
+              isExported: exportRecordStore.isExported(assetId: asset.localIdentifier),
+              onRetry: { viewModel.retryThumbnail(for: asset) }
             )
             .frame(width: 120, height: 120)
             .onTapGesture {

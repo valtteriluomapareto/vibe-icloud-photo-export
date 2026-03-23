@@ -13,6 +13,7 @@ struct ThumbnailView: View {
   let state: ThumbnailState
   let isSelected: Bool
   let isExported: Bool
+  var onRetry: (() -> Void)? = nil
 
   var body: some View {
     ZStack {
@@ -36,9 +37,15 @@ struct ThumbnailView: View {
             VStack(spacing: 4) {
               Image(systemName: "exclamationmark.triangle")
                 .foregroundColor(.secondary)
-              Text("Failed")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+              if let onRetry {
+                Button("Retry") { onRetry() }
+                  .font(.caption2)
+                  .buttonStyle(.borderless)
+              } else {
+                Text("Failed")
+                  .font(.caption2)
+                  .foregroundColor(.secondary)
+              }
             }
           )
       }

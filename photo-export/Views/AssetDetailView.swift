@@ -94,6 +94,8 @@ struct AssetDetailView: View {
       ?? resources.first(where: { $0.type == .video })
       ?? resources.first
     let originalFilename = primaryResource?.originalFilename
+    // Note: "fileSize" is an undocumented KVC property on PHAssetResource.
+    // It works at runtime but is not part of the public API. Fails gracefully to nil.
     let fileSize: Int64? = {
       guard let r = primaryResource,
         let size = r.value(forKey: "fileSize") as? Int64, size > 0
@@ -150,22 +152,29 @@ struct AssetDetailView: View {
   }
 
   private func formattedFileSize(_ bytes: Int64) -> String {
-    let formatter = ByteCountFormatter()
-    formatter.allowedUnits = [.useKB, .useMB, .useGB]
-    formatter.countStyle = .file
-    return formatter.string(fromByteCount: bytes)
+    Self.byteCountFormatter.string(fromByteCount: bytes)
   }
 
-  private var dateFormatter: DateFormatter {
+  private static let byteCountFormatter: ByteCountFormatter = {
+    let f = ByteCountFormatter()
+    f.allowedUnits = [.useKB, .useMB, .useGB]
+    f.countStyle = .file
+    return f
+  }()
+
+  private static let dateFormatterMedium: DateFormatter = {
     let f = DateFormatter()
     f.dateStyle = .medium
     return f
-  }
+  }()
 
-  private var dateTimeFormatter: DateFormatter {
+  private static let dateTimeFormatterMedium: DateFormatter = {
     let f = DateFormatter()
     f.dateStyle = .medium
     f.timeStyle = .short
     return f
-  }
+  }()
+
+  private var dateFormatter: DateFormatter { Self.dateFormatterMedium }
+  private var dateTimeFormatter: DateFormatter { Self.dateTimeFormatterMedium }
 }

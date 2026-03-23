@@ -96,6 +96,15 @@ final class MonthViewModel: ObservableObject {
     }
   }
 
+  func retryThumbnail(for asset: PHAsset) {
+    let id = asset.localIdentifier
+    failedThumbnailIds.remove(id)
+    Task { [weak self] in
+      guard let self else { return }
+      await self.loadAndStoreThumbnail(for: asset)
+    }
+  }
+
   func select(asset: PHAsset?) {
     selectedAssetId = asset?.localIdentifier
   }

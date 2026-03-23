@@ -1,23 +1,20 @@
 import SwiftUI
 
-struct ExportToolbarView: View {
+struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
-  var body: some View {
-    HStack(spacing: 16) {
-      // Destination indicator
+  var body: some ToolbarContent {
+    ToolbarItem(placement: .automatic) {
       destinationIndicator
+    }
 
-      Divider().frame(height: 20)
-
-      // Primary actions
+    ToolbarItem(placement: .automatic) {
       primaryActions
+    }
 
-      Divider().frame(height: 20)
-
-      // Progress
-      if exportManager.totalJobsEnqueued > 0 {
+    if exportManager.totalJobsEnqueued > 0 {
+      ToolbarItem(placement: .automatic) {
         progressIndicator
       }
     }

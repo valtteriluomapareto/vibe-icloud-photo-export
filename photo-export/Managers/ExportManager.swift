@@ -32,6 +32,8 @@ final class ExportManager: ObservableObject {
   private var currentTask: Task<Void, Never>?
   private var currentJobAssetId: String?
   private var generation: Int = 0
+  private var isEnqueueingAll: Bool = false
+  private var queuedCountsByYearMonth: [String: Int] = [:]
 
   init(
     photoLibraryManager: PhotoLibraryManager,
@@ -44,6 +46,7 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
+    if !isRunning && !isProcessing { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
@@ -60,6 +63,7 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportYear(year: Int) {
+    if !isRunning && !isProcessing { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
@@ -76,17 +80,28 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportAll() {
+    guard !isEnqueueingAll else { return }
+    isEnqueueingAll = true
+    resetProgressCounters()
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else { return }
+      guard let self, self.generation == gen else {
+        self?.isEnqueueingAll = false
+        return
+      }
       do {
         let allYears = try photoLibraryManager.availableYears()
         for year in allYears {
           try await enqueueYear(year: year, generation: gen)
-          guard self.generation == gen else { return }
+          guard self.generation == gen else {
+            self.isEnqueueingAll = false
+            return
+          }
         }
+        self.isEnqueueingAll = false
         processQueueIfNeeded()
       } catch {
+        self.isEnqueueingAll = false
         logger.error(
           "Failed to enqueue export-all: \(String(describing: error), privacy: .public)"
         )
@@ -104,11 +119,13 @@ final class ExportManager: ObservableObject {
     currentJobAssetId = nil
     generation += 1
     pendingJobs.removeAll()
+    queuedCountsByYearMonth.removeAll()
     currentTask?.cancel()
     currentTask = nil
     isProcessing = false
     isRunning = false
     isPaused = false
+    isEnqueueingAll = false
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
     currentAssetFilename = nil
@@ -131,6 +148,8 @@ final class ExportManager: ObservableObject {
   func clearPending() {
     let removed = pendingJobs.count
     pendingJobs.removeAll()
+    queuedCountsByYearMonth.removeAll()
+    totalJobsEnqueued = max(0, totalJobsEnqueued - removed)
     updateQueueCount()
     logger.info("Cleared \(removed) pending export jobs")
   }
@@ -149,6 +168,7 @@ final class ExportManager: ObservableObject {
     }
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
+    queuedCountsByYearMonth["\(year)-\(month)", default: 0] += newJobs.count
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
   }
@@ -171,6 +191,9 @@ final class ExportManager: ObservableObject {
     }
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
+    for job in newJobs {
+      queuedCountsByYearMonth["\(job.year)-\(job.month)", default: 0] += 1
+    }
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
   }
@@ -196,11 +219,17 @@ final class ExportManager: ObservableObject {
       isProcessing = false
       isRunning = false
       currentJobAssetId = nil
+      currentAssetFilename = nil
       updateQueueCount()
       logger.info("Export queue drained")
       return
     }
     let job = pendingJobs.removeFirst()
+    let key = "\(job.year)-\(job.month)"
+    queuedCountsByYearMonth[key, default: 1] -= 1
+    if queuedCountsByYearMonth[key, default: 0] <= 0 {
+      queuedCountsByYearMonth.removeValue(forKey: key)
+    }
     currentJobAssetId = job.assetLocalIdentifier
     updateQueueCount()
     let currentGen = generation
@@ -208,15 +237,22 @@ final class ExportManager: ObservableObject {
       await self?.export(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
         self?.currentJobAssetId = nil
-        self?.totalJobsCompleted += 1
         guard let self, self.generation == currentGen else { return }
+        self.totalJobsCompleted += 1
         self.processNext()
       }
     }
   }
 
   func queuedCount(year: Int, month: Int) -> Int {
-    pendingJobs.filter { $0.year == year && $0.month == month }.count
+    queuedCountsByYearMonth["\(year)-\(month)", default: 0]
+  }
+
+  private func resetProgressCounters() {
+    totalJobsEnqueued = 0
+    totalJobsCompleted = 0
+    currentAssetFilename = nil
+    queuedCountsByYearMonth.removeAll()
   }
 
   private func updateQueueCount() {

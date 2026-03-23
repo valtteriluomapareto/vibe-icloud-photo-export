@@ -23,7 +23,7 @@ struct ContentView: View {
   @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
   @State private var assetCountsByYearMonth: [String: Int] = [:]
 
-  // Onboarding
+  // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
 
   // Detail selection
@@ -95,15 +95,21 @@ struct ContentView: View {
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           })
         .toolbar {
-          ToolbarItem(placement: .automatic) {
-            ExportToolbarView()
-          }
+          ExportToolbarView()
         }
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)
       }
     }
     .onAppear {
+      // Auto-skip onboarding for existing users who already have an export destination or records
+      if !hasCompletedOnboarding {
+        let hasDestination = exportDestinationManager.selectedFolderURL != nil
+        let hasRecords = !exportRecordStore.recordsById.isEmpty
+        if hasDestination || hasRecords {
+          hasCompletedOnboarding = true
+        }
+      }
       if photoLibraryManager.isAuthorized {
         years = (try? photoLibraryManager.availableYears()) ?? []
         if let selected = selectedYearMonth {

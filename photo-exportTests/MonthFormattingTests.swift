@@ -15,10 +15,10 @@ struct MonthFormattingTests {
     }
   }
 
-  @Test func testInvalidMonthReturnsFallback() {
-    // Out-of-range months fall back to the raw number string
-    #expect(MonthFormatting.name(for: 0) == "0")
-    #expect(MonthFormatting.name(for: 13) == "13")
-    #expect(MonthFormatting.name(for: -1) == "-1")
+  @Test func testOutOfRangeMonthsWrapViaCalenar() {
+    // Calendar wraps out-of-range months (0 → December, 13 → January)
+    #expect(MonthFormatting.name(for: 0) == "December")
+    #expect(MonthFormatting.name(for: 13) == "January")
+    #expect(MonthFormatting.name(for: -1) == "November")
   }
 }

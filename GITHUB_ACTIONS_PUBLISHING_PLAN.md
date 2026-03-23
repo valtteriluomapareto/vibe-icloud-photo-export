@@ -2,263 +2,118 @@
 
 ## Status
 
-This document is a plan only.
+This document is a plan only. Nothing described here is implemented.
 
-Nothing described here is implemented by this document.
-
-The intent is to define, in detail, how this repository should be prepared for public distribution via:
-
-1. Direct download from GitHub Releases
-2. Homebrew via an owned tap
-
-The plan uses GitHub Actions as the only CI/CD system.
-
-The plan is written against the repository state on 2026-03-23.
+Written against the repository state on 2026-03-23.
 
 ---
 
-## 1. Executive Summary
+## 1. Release Model
 
-The app is already close to the shape needed for public release:
+- **GitHub Releases** — notarized DMG and ZIP, directly downloadable.
+- **Homebrew** — owned tap (`valtteriluomapareto/homebrew-tap`), installs from the GitHub Release DMG.
+- **In-app update check** — the app checks GitHub Releases API on launch, prompts the user when a newer version exists.
+- **No App Store, TestFlight, or Sparkle** in phase 1. Can be added later without changing this pipeline.
 
-- It is a native macOS SwiftUI app with a shared Xcode scheme.
-- It already has unit tests and a GitHub Actions CI workflow.
-- It already uses App Sandbox and Photos entitlements.
-- It already has a direct-distribution deployment note.
-
-The app is not yet publish-ready because release automation, signing automation, and several product-level decisions are still missing.
-
-The release model is:
-
-1. Keep GitHub Actions as the single automation platform.
-2. Keep one ordinary CI workflow for pull requests and `main`.
-3. Add one release workflow that can be dry-run manually and publishes only from `v*` tag pushes whose commit is already reachable from `main`.
-4. Treat Homebrew as an owned tap first, not `homebrew/cask` core, until the app, metadata, naming, and release cadence are stable.
-5. Do not add Sparkle in the first release phase. Homebrew handles updates for technical users. Sparkle can be reconsidered later if direct-download becomes a first-class distribution path.
-
----
-
-## 2. Current Repository State
-
-### 2.1 What already exists
-
-- The app is a macOS app with target `photo-export`, tests, and a shared scheme in [README.md](README.md).
-- Local command-line build and test instructions already exist in [README.md](README.md).
-- There is already a GitHub Actions CI workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml).
-- The app already has App Sandbox, user-selected file access, and Photos access entitlements in [photo-export/photo_export.entitlements](photo-export/photo_export.entitlements).
-- There is already a direct-distribution planning document in [PUBLIC_DEPLOYMENT_PLAN.md](PUBLIC_DEPLOYMENT_PLAN.md).
-
-### 2.2 What the existing CI does today
-
-The current workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml):
-
-- Runs on `macos-15`
-- Builds Debug
-- Runs unit tests with coverage
-- Builds Release unsigned
-- Installs lint tools on the runner
-- Uploads coverage to Codecov
-
-Current limitations:
-
-1. Lint and format checks are non-blocking because they use `|| true`.
-2. It has no artifact retention for `.xcresult` or signed release output.
-3. It has no signing, notarization, or Homebrew cask update steps.
-
-### 2.3 App configuration observations that matter for distribution
-
-1. The app uses generated Info.plist values from Xcode build settings in [photo-export.xcodeproj/project.pbxproj](photo-export.xcodeproj/project.pbxproj).
-2. `MARKETING_VERSION` is currently `1.0` and `CURRENT_PROJECT_VERSION` is currently `1`.
-3. The bundle identifier is currently `valtteriluoma.photo-export`.
-4. The app product name is effectively `$(TARGET_NAME)`, which means the built app bundle is `photo-export.app`, not `Photo Export.app`.
-5. The minimum deployment target is currently macOS `15.4`.
-6. The Photos permission usage string already exists.
-7. The entitlements do not include network client access, which is correct for the current app and another reason not to add Sparkle now.
-
-### 2.4 Current release-readiness gaps
-
-#### Missing real app icon assets
-
-The app icon catalog contains only the metadata file and no actual icon images:
-
-- [photo-export/Assets.xcassets/AppIcon.appiconset/Contents.json](photo-export/Assets.xcassets/AppIcon.appiconset/Contents.json)
-
-This is a hard blocker for public release.
-
-#### Bundle ID inconsistency in code vs project settings
-
-The Xcode project uses `valtteriluoma.photo-export`, but logger subsystems use `com.valtteriluoma.photo-export`.
-
-This is visible in:
-
-- [photo-export.xcodeproj/project.pbxproj](photo-export.xcodeproj/project.pbxproj)
-- [photo-export/Managers/PhotoLibraryManager.swift](photo-export/Managers/PhotoLibraryManager.swift)
-- [photo-export/Managers/ExportRecordStore.swift](photo-export/Managers/ExportRecordStore.swift)
-- [photo-export/Managers/ExportManager.swift](photo-export/Managers/ExportManager.swift)
-- [photo-export/Managers/ExportDestinationManager.swift](photo-export/Managers/ExportDestinationManager.swift)
-- [photo-export/Managers/FileIOService.swift](photo-export/Managers/FileIOService.swift)
-- [photo-export/Views/AssetDetailView.swift](photo-export/Views/AssetDetailView.swift)
-
-This should be resolved before the first public release.
-
-#### Release hardening settings not formalized
-
-Hardened Runtime and app category metadata are not present in the current target build settings. The release workflow will inject these at build time via xcodebuild overrides, keeping the project usable for local development with Automatic signing.
-
-#### Production logging still has `print(...)`
-
-[photo-export/Managers/PhotoLibraryManager.swift](photo-export/Managers/PhotoLibraryManager.swift) still contains `print(...)` calls even though [README.md](README.md) says production code should use `os.Logger`. Should be cleaned up before public distribution.
-
-#### Very narrow OS support
-
-The app currently targets macOS `15.4`. This limits the potential audience. See Section 10.3 for the decision needed.
-
----
-
-## 3. Release Channel Strategy
-
-### 3.1 Channels
-
-The public distribution channels are:
-
-1. **GitHub Releases** — notarized DMG and ZIP, directly downloadable
-2. **Homebrew** — via an owned tap, installing from the GitHub Release DMG
-
-No App Store, TestFlight, or Sparkle in phase 1. These can be added later as separate workflow additions.
-
-### 3.2 Why Homebrew + direct download
-
-#### GitHub Releases gives:
-
-- a trusted, familiar download origin for all users
-- artifact hosting with no additional infrastructure
-- SHA-256 checksums and release notes in one place
-- a path to optional provenance attestation later, if it is explicitly added to the workflow
-
-#### Homebrew gives:
-
-- a standard install/upgrade path for technical users
-- no custom in-app updater to design or maintain
-- a natural fit for GitHub Releases as the artifact source
-
-### 3.3 Why not Sparkle or App Store first
-
-Sparkle adds: another entitlement, another signing story, another update UX, another support path. If Homebrew is the intended non-App-Store channel, Sparkle is unnecessary for the first release.
-
-App Store adds: review process, store metadata, screenshots, privacy disclosures, provisioning profiles. It can be added as a separate workflow later without changing the Homebrew pipeline.
-
-### 3.4 Homebrew strategy
-
-Use an owned tap first.
-
-Recommended structure:
-
-- app repository: `valtteriluomapareto/photo-export`
-- tap repository: `valtteriluomapareto/homebrew-tap`
-
-Why own tap first:
-
-1. Fully automatable from GitHub Actions.
-2. Avoids depending on `homebrew/cask` review timing.
-3. Avoids solving naming and product maturity during the first launch.
-4. Can graduate to `homebrew/cask` later after the app stabilizes and has an established user base.
-
-User install path:
+User install paths:
 
 ```bash
 brew tap valtteriluomapareto/tap
 brew install --cask photo-export
-# Or in one command:
-brew install valtteriluomapareto/tap/photo-export
+# Or:
+brew install --cask valtteriluomapareto/tap/photo-export
 ```
 
----
-
-## 4. What Should Be Delivered
-
-### 4.1 GitHub Actions workflows
-
-#### Workflow 1: `ci.yml` (improved)
-
-Purpose: ordinary CI for pull requests and `main`.
-
-Responsibilities:
-
-1. Check out the repo
-2. Select Xcode
-3. Install or verify lint tooling
-4. Run blocking lint and format checks
-5. Build Debug unsigned
-6. Run unit tests with coverage
-7. Upload `.xcresult` and coverage as GitHub artifacts
-
-Changes from current CI:
-
-1. Remove `|| true` from SwiftLint (make it a blocking gate)
-2. Keep `|| true` on swift-format for now (separate, allow-failure)
-3. Add concurrency control to cancel outdated runs on the same PR
-4. Remove the redundant Release build step (the release workflow handles signed Release builds)
-5. Upload `.xcresult` artifact for failure diagnosis
-
-#### Workflow 2: `release.yml` (new)
-
-Purpose: produce the public signed, notarized build.
-
-Triggers:
-
-1. `push` on `v*` tags for real releases
-2. `workflow_dispatch` with an explicit version input for dry runs that build/sign/notarize and upload workflow artifacts, but do not publish a GitHub Release or update the Homebrew tap
-
-Responsibilities:
-
-1. Resolve version from the tag or manual input
-2. Check out the repo with full history and verify that real release tags point to a commit reachable from `main`
-3. Import the Developer ID certificate into a temporary keychain
-4. Store notarization credentials in that temporary keychain
-5. Archive the app in Release mode with signing overrides
-6. Export using `developer-id` export options
-7. Discover the exported `.app` path rather than hardcoding it
-8. Notarize and staple the app
-9. Create a basic DMG containing the app and `/Applications` shortcut
-10. Notarize and staple the DMG
-11. Create ZIP, compute SHA-256 checksums, and upload all artifacts to the workflow run
-12. Create or update the GitHub Release with explicit release notes and attached artifacts (`push` tags only)
-13. Update the Homebrew tap only if `HOMEBREW_TAP_TOKEN` is present (`push` tags only)
-14. Clean up the temporary keychain (`if: always()`)
-
-### 4.2 Supporting repository assets
-
-1. Homebrew cask template in the tap repository
-2. Release documentation in this repository
-
-### 4.3 Documentation deliverables
-
-Written instructions for:
-
-1. How to run each workflow
-2. How to dry-run the release workflow without publishing
-3. Which secrets are required and how to generate them
-4. Which Apple-side steps happen outside GitHub
-5. How versioning and build numbering work
-6. Which product assets and metadata are still missing
-7. How end users can verify the binary and why they should trust it
+> **Doc deliverable → Homebrew Instructions (README):** Homebrew install/upgrade commands, direct download link, and minimum macOS version.
 
 ---
 
-## 5. Detailed Workflow Design
+## 2. Decisions Needed Before Implementation
 
-### 5.1 CI workflow design
+These must be resolved before any workflow code is written.
 
-#### Trigger
+### 2.0 Apple Developer Program enrollment
 
-- `pull_request`
-- `push` to `main`
+Everything — signing, notarization, Developer ID — requires an active Apple Developer Program membership ($99/year, 24-48h approval). This is the absolute first blocker.
 
-#### Permissions
+### 2.1 Final app identity
 
-- `contents: read`
+Decide all of these together:
 
-#### Concurrency
+| Decision | Current value | Issue |
+|----------|---------------|-------|
+| App display name | `photo-export` (from `$(TARGET_NAME)`) | No human-friendly name |
+| Bundle identifier | `valtteriluoma.photo-export` | Not reverse-DNS; inconsistent with logger subsystem `com.valtteriluoma.photo-export` |
+| App bundle filename | `photo-export.app` | May want `Photo Export.app` |
+| GitHub Release artifact basename | (none) | Needs deciding |
+| Homebrew cask token | (none) | Needs deciding |
+| Short description | (none) | For Homebrew and GitHub |
+
+**Recommendation:** Standardize bundle ID to `com.valtteriluoma.photo-export`. Align logger subsystems (already use this), project settings (currently missing `com.` prefix), display name, and cask token.
+
+### 2.2 App icon
+
+The icon catalog has only `Contents.json` — no actual images. **Hard blocker** for public release.
+
+### 2.3 Minimum macOS version
+
+Currently targets `15.4` (released March 2025). Questions:
+1. Is 15.4 required by actual APIs used?
+2. Would `15.0` (Sequoia) be viable?
+
+**Recommendation:** Lower to `15.0` unless a specific 15.4 API is needed.
+
+### 2.4 Privacy and trust posture
+
+The app handles private photo libraries. Decide and document before launch:
+1. Does the app send anything over the network? (Currently: only the update check described in this plan)
+2. Analytics, crash reporting, telemetry? (Currently: no)
+3. Is exported EXIF/location metadata preserved or modified?
+
+> **Doc deliverable → README / Release Notes:** If the answer is "no telemetry, no account, local-only processing except version check," state that plainly and prominently.
+
+### 2.5 Items that can be deferred
+
+| Item | Notes |
+|------|-------|
+| Sparkle auto-updates | Unnecessary — in-app update check + Homebrew cover this |
+| App Store / TestFlight | Separate workflow, orthogonal to this pipeline |
+| Fancy DMG layout | Cosmetic; first release uses plain `hdiutil` |
+| Provenance attestation | Add via `actions/attest-build-provenance` later |
+| Submit to `homebrew/cask` | Requires established user base; start with personal tap |
+| GPG-signed tags | Optional verification enhancement |
+
+---
+
+## 3. Release-Readiness Gaps (Code Changes)
+
+These are code-level fixes needed before the first release, independent of workflow implementation.
+
+1. **Bundle ID inconsistency:** Project uses `valtteriluoma.photo-export`, loggers use `com.valtteriluoma.photo-export`. Align after deciding Section 2.1.
+2. **Production `print()` calls:** `PhotoLibraryManager.swift` still uses `print(...)`. Replace with `os.Logger`.
+3. **`MARKETING_VERSION` is two-component:** Currently `1.0`. Update to `1.0.0` for semver consistency.
+4. **Network entitlement missing:** The update checker (Section 7) requires adding `com.apple.security.network.client` to entitlements.
+
+---
+
+## 4. CI Workflow (`ci.yml` — improved)
+
+Triggers: `pull_request`, `push` to `main`.
+
+### Changes from current CI
+
+| Change | Why |
+|--------|-----|
+| Remove `\|\| true` from SwiftLint | Make it a real gate |
+| Remove `\|\| true` from swift-format | Either fix violations and enforce, or remove the step entirely. A permanently-allowed-to-fail step teaches you to ignore CI. |
+| Pin Xcode version path (e.g., `/Applications/Xcode_16.2.app`) | The cascading `if [ -d ... ]` silently picks a different Xcode when the runner image updates |
+| Add concurrency control | Cancel outdated runs on the same PR |
+| Keep the Release build step (build only, no signing) | Catches optimizer bugs, `#if DEBUG` guards, and stripping issues. Removing it is a regression. |
+| Upload `.xcresult` as artifact | Failure diagnosis |
+| Cache or pin lint tool binaries | `brew install` adds 1-3 min per run on $0.08/min macOS runners |
+| Set `HOMEBREW_NO_AUTO_UPDATE=1` if still using Homebrew | `brew update` removal alone doesn't disable auto-update |
+
+### Design
 
 ```yaml
 concurrency:
@@ -266,69 +121,94 @@ concurrency:
   cancel-in-progress: true
 ```
 
-#### Steps
+Steps:
+1. Checkout
+2. Select Xcode — hardcode `/Applications/Xcode_16.2.app`
+3. Install lint tools (pinned binaries preferred; Homebrew with `HOMEBREW_NO_AUTO_UPDATE=1` acceptable)
+4. SwiftLint `--strict` (blocking)
+5. swift-format lint (blocking)
+6. Build Debug with `CODE_SIGNING_ALLOWED=NO`
+7. Run unit tests with coverage, output `.xcresult`
+8. Build Release with `CODE_SIGNING_ALLOWED=NO` (build only, no tests)
+9. Convert coverage to lcov, upload `.xcresult` and `lcov.info` as artifacts
 
-1. Check out the repository.
-2. Select the active Xcode installation.
-3. Verify `xcodebuild -version`.
-4. Install `swiftlint` and `swift-format`.
-5. Run `swiftlint --strict` as a blocking step.
-6. Run `swift-format lint --recursive photo-export` (allow-failure for now).
-7. Build Debug unsigned with `CODE_SIGNING_ALLOWED=NO`.
-8. Run unit tests with coverage and a `.xcresult` bundle.
-9. Convert coverage to `lcov.info`.
-10. Upload `.xcresult` and `lcov.info` as GitHub artifacts.
+> **Doc deliverable → Development Guide:** How CI works, how to read `.xcresult` artifacts, how to run the same checks locally.
 
-### 5.2 Release workflow design
+---
 
-#### Trigger
+## 5. Release Workflow (`release.yml` — new)
+
+### Triggers
 
 ```yaml
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: Semver without leading v, used only for dry-run artifact naming
+        description: Semver without leading v (dry-run only)
         required: true
 ```
 
-Manual runs are for build/sign/notarize validation only. They should upload artifacts to the workflow run, but they should not create a GitHub Release or update the tap.
+`workflow_dispatch` builds/signs/notarizes and uploads workflow artifacts, but does **not** publish a GitHub Release or update the tap. Must be launched from `main`.
 
-#### Permissions
+### Concurrency
+
+```yaml
+concurrency:
+  group: release
+  cancel-in-progress: false
+```
+
+Prevents two tag pushes from racing each other. `cancel-in-progress: false` lets the first one finish.
+
+### Permissions
 
 ```yaml
 permissions:
   contents: write
 ```
 
-If build provenance attestation is added later, then also grant `attestations: write` and `id-token: write`. Do not grant those permissions before the attestation step exists.
+### Environment
 
-#### Release environment
+Use a protected GitHub Environment `release` with required reviewers. Store signing/notarization secrets there, not as repository-wide secrets.
 
-The release job should target a protected GitHub Environment such as `release`, with required reviewers. Keep signing/notarization secrets there rather than as repository-wide secrets.
-
-#### Workflow constants
-
-Centralize mutable product identity values in one `env:` block instead of hardcoding them across steps:
+### Workflow constants
 
 ```yaml
 env:
-  APP_DISPLAY_NAME: "Photo Export"
-  ARTIFACT_BASENAME: "PhotoExport"
-  HOMEBREW_CASK_TOKEN: "photo-export"
+  APP_DISPLAY_NAME: "__SET_BEFORE_FIRST_RELEASE__"
+  ARTIFACT_BASENAME: "__SET_BEFORE_FIRST_RELEASE__"
+  APP_BUNDLE_ID: "__SET_BEFORE_FIRST_RELEASE__"
+  APP_SHORT_DESCRIPTION: "__SET_BEFORE_FIRST_RELEASE__"
+  REPO_SLUG: "__SET_BEFORE_FIRST_RELEASE__"
+  HOMEBREW_TAP_REPO: "__SET_BEFORE_FIRST_RELEASE__"
+  HOMEBREW_CASK_TOKEN: "__SET_BEFORE_FIRST_RELEASE__"
+  HOMEBREW_MACOS_FLOOR: "__SET_BEFORE_FIRST_RELEASE__"
   KEYCHAIN_PATH: "${{ runner.temp }}/build.keychain-db"
 ```
 
-If the app identity changes, update this block and the cask template together.
+### Step: Pre-flight validation
 
-#### Version source
+Checks **every** env-block placeholder, not just the ones used in the build steps. A placeholder leaking into the tap update or release notes is just as bad as one in the archive step.
 
-For tag pushes, the git tag is the input. `v1.2.3` becomes marketing version `1.2.3`.
+```yaml
+- name: Pre-flight validation
+  run: |
+    FAILED=0
+    for var in APP_DISPLAY_NAME ARTIFACT_BASENAME APP_BUNDLE_ID APP_SHORT_DESCRIPTION \
+               REPO_SLUG HOMEBREW_TAP_REPO HOMEBREW_CASK_TOKEN HOMEBREW_MACOS_FLOOR; do
+      val="$(eval echo \$$var)"
+      if [ "$val" = "__SET_BEFORE_FIRST_RELEASE__" ]; then
+        echo "::error::$var has not been configured"
+        FAILED=1
+      fi
+    done
+    [ "$FAILED" -eq 0 ] || exit 1
+```
 
-For `workflow_dispatch`, require an explicit `version` input such as `1.2.3`.
+### Step: Resolve version
 
 ```yaml
 - name: Resolve version
@@ -341,50 +221,34 @@ For `workflow_dispatch`, require an explicit `version` input such as `1.2.3`.
     fi
 
     if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-      echo "Invalid version: $VERSION" >&2
+      echo "::error::Invalid version: $VERSION" >&2
       exit 1
     fi
 
     echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 ```
 
-#### Build number source
+### Step: Source gate
 
-Use `github.run_number` from the release workflow.
-
-Why this rule:
-
-1. Always monotonically increasing (GitHub guarantees this per-workflow)
-2. Simple, no computation needed
-3. Deterministic: you can look up run 47 in the Actions UI
-4. Git commit count is fragile (rebases change it); epoch-based is less readable
-
-If you re-run a failed release, the run number stays the same (same run). If you push a new tag, it gets the next run number.
-
-Both values are passed as xcodebuild overrides; no project file edits per release:
-
-```bash
-MARKETING_VERSION="${{ steps.version.outputs.version }}"
-CURRENT_PROJECT_VERSION="${{ github.run_number }}"
-```
-
-#### Publish gate
+The tagged commit must be the **current tip** of `main`, not merely reachable from it. `merge-base --is-ancestor` is too weak — it accepts any old commit on `main`, which allows accidental stale releases. If you need to release an older commit, make it the tip of `main` first (cherry-pick or revert forward).
 
 ```yaml
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
 
-- name: Verify tagged commit is on main
-  if: github.event_name == 'push'
+- name: Verify release source is tip of main
   run: |
-    git fetch origin main --depth=1
-    git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"
+    MAIN_TIP="$(git rev-parse origin/main)"
+    if [ "$GITHUB_SHA" != "$MAIN_TIP" ]; then
+      echo "::error::Release commit $GITHUB_SHA is not the tip of main ($MAIN_TIP)"
+      exit 1
+    fi
 ```
 
-This blocks publishing from arbitrary detached tags or stale commits that are not actually on `main`.
+Full history (`fetch-depth: 0`) is required so `origin/main` resolves correctly.
 
-#### Step: Import signing certificate
+### Step: Import signing certificate
 
 ```yaml
 - name: Import signing certificate
@@ -408,12 +272,14 @@ This blocks publishing from arbitrary detached tags or stale commits that are no
     security set-key-partition-list -S apple-tool:,apple:,codesign: \
       -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
+    security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
     rm "$RUNNER_TEMP/certificate.p12"
 ```
 
-This keeps the signing identity in an isolated temporary keychain for the duration of the job.
+The `list-keychains` call is required — without it `codesign` won't find the imported identity because the temp keychain isn't in the search path.
 
-#### Step: Store notarization credentials
+### Step: Store notarization credentials
 
 ```yaml
 - name: Store notarization credentials
@@ -429,9 +295,7 @@ This keeps the signing identity in an isolated temporary keychain for the durati
       --keychain "$KEYCHAIN_PATH"
 ```
 
-The current repository already documents `notarytool store-credentials`. Reuse that pattern in CI instead of claiming direct inline credentials are required.
-
-#### Step: Archive
+### Step: Archive
 
 ```yaml
 - name: Build and archive
@@ -449,12 +313,16 @@ The current repository already documents `notarytool store-credentials`. Reuse t
       CODE_SIGN_IDENTITY="Developer ID Application" \
       DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
       ENABLE_HARDENED_RUNTIME=YES \
+      ONLY_ACTIVE_ARCH=NO \
+      ARCHS="arm64 x86_64" \
       OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH --timestamp --options runtime"
 ```
 
-Using `xcodebuild archive` followed by `xcodebuild -exportArchive` is the correct flow for distribution builds. A raw `build` is not a release artifact.
+`ARCHS="arm64 x86_64"` produces a universal binary. GitHub's `macos-15` runners are Apple Silicon — without this, the build is arm64-only.
 
-#### Step: Export
+Build number uses `github.run_number`: monotonically increasing per-workflow, stable across re-runs, maps to the Actions UI.
+
+### Step: Export
 
 ```yaml
 - name: Export archive
@@ -483,9 +351,7 @@ Using `xcodebuild archive` followed by `xcodebuild -exportArchive` is the correc
       -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 ```
 
-The `ExportOptions.plist` with `method = developer-id` tells Xcode to sign for direct distribution.
-
-#### Step: Discover exported app and artifact paths
+### Step: Discover exported app
 
 ```yaml
 - name: Discover exported app
@@ -514,37 +380,31 @@ The `ExportOptions.plist` with `method = developer-id` tells Xcode to sign for d
     } >> "$GITHUB_OUTPUT"
 ```
 
-Do not hardcode `photo-export.app` in the workflow. The bundle filename is one of the unresolved identity decisions in Section 10.
-
-#### Step: Notarize
+### Step: Notarize and staple
 
 ```yaml
 - name: Notarize app
   run: |
-    # Create ZIP for notarization submission
     ditto -c -k --sequesterRsrc --keepParent \
       "${{ steps.app.outputs.app_path }}" \
       "$RUNNER_TEMP/photo-export-notarize.zip"
 
-    # Submit for notarization and wait
     xcrun notarytool submit "$RUNNER_TEMP/photo-export-notarize.zip" \
       --keychain-profile "ci-notary" \
       --keychain "$KEYCHAIN_PATH" \
       --wait --timeout 30m
 
-    # Staple the notarization ticket to the app
     xcrun stapler staple "${{ steps.app.outputs.app_path }}"
 ```
 
-This uses the credentials stored in the temporary keychain. If the team later switches to App Store Connect API key auth, replace the `store-credentials` step and `submit` flags together.
+If notarization fails with a server-side error, re-run the workflow — `github.run_number` stays the same for re-runs.
 
-#### Step: Create DMG
+### Step: Create DMG, notarize DMG
 
 ```yaml
 - name: Create DMG
   run: |
     STAGING_DIR="$RUNNER_TEMP/dmg-root"
-    rm -rf "$STAGING_DIR"
     mkdir -p "$STAGING_DIR"
 
     cp -R "${{ steps.app.outputs.app_path }}" "$STAGING_DIR/"
@@ -556,7 +416,6 @@ This uses the credentials stored in the temporary keychain. If the team later sw
       -ov -format UDZO \
       "${{ steps.artifacts.outputs.dmg_path }}"
 
-    # Notarize the DMG itself
     xcrun notarytool submit "${{ steps.artifacts.outputs.dmg_path }}" \
       --keychain-profile "ci-notary" \
       --keychain "$KEYCHAIN_PATH" \
@@ -565,9 +424,7 @@ This uses the credentials stored in the temporary keychain. If the team later sw
     xcrun stapler staple "${{ steps.artifacts.outputs.dmg_path }}"
 ```
 
-The first implementation should prefer a simple `hdiutil` DMG that is deterministic and fails loudly. Fancy Finder window layout is a separate polish task, not a release blocker.
-
-#### Step: Create ZIP
+### Step: Create ZIP
 
 ```yaml
 - name: Create ZIP
@@ -577,7 +434,7 @@ The first implementation should prefer a simple `hdiutil` DMG that is determinis
       "${{ steps.artifacts.outputs.zip_path }}"
 ```
 
-#### Step: Compute checksums and upload workflow artifacts
+### Step: Checksums and upload
 
 ```yaml
 - name: Compute checksums
@@ -591,7 +448,7 @@ The first implementation should prefer a simple `hdiutil` DMG that is determinis
       echo "zip_sha256=$ZIP_SHA256"
     } >> "$GITHUB_OUTPUT"
 
-- name: Upload release artifacts to the workflow run
+- name: Upload release artifacts
   uses: actions/upload-artifact@v4
   with:
     name: release-${{ steps.version.outputs.version }}
@@ -600,92 +457,189 @@ The first implementation should prefer a simple `hdiutil` DMG that is determinis
       ${{ steps.artifacts.outputs.zip_path }}
 ```
 
-Workflow artifact upload is not optional. It is the only safe dry-run output and the first place to inspect a failed release build.
+Workflow artifact upload happens on **every** run (including dry-runs). It's the only safe dry-run output.
 
-#### Step: Create GitHub Release
+### Step: Create GitHub Release (tag push only)
+
+Publishes as **draft**. The release workflow deliberately does **not** update the Homebrew tap. Draft release assets are not publicly downloadable — if the tap were updated here, `brew install` would be broken until manual promotion. The tap update happens in the separate `promote-release.yml` workflow (Section 5B) after verification and promotion.
 
 ```yaml
-- name: Build release notes body
-  if: github.event_name == 'push'
-  id: release_notes
-  run: |
-    BODY_PATH="$RUNNER_TEMP/release-notes.md"
-    cat > "$BODY_PATH" <<EOF
-    ## $APP_DISPLAY_NAME ${{ steps.version.outputs.version }}
-
-    ### Downloads
-    - DMG (recommended): `${{ steps.artifacts.outputs.dmg_name }}` — SHA256: `${{ steps.checksums.outputs.dmg_sha256 }}`
-    - ZIP: `${{ steps.artifacts.outputs.zip_name }}` — SHA256: `${{ steps.checksums.outputs.zip_sha256 }}`
-    EOF
-
-    if [ -n "${{ secrets.HOMEBREW_TAP_TOKEN }}" ]; then
-      cat >> "$BODY_PATH" <<EOF
-
-    ### Install via Homebrew
-    ```bash
-    brew install valtteriluomapareto/tap/$HOMEBREW_CASK_TOKEN
-    ```
-    EOF
-    fi
-
-    echo "body_path=$BODY_PATH" >> "$GITHUB_OUTPUT"
-
-- name: Create GitHub Release
+- name: Create GitHub Release (draft)
   if: github.event_name == 'push'
   uses: softprops/action-gh-release@v2
   with:
     tag_name: ${{ github.ref_name }}
     name: ${{ env.APP_DISPLAY_NAME }} ${{ steps.version.outputs.version }}
-    draft: false
+    draft: true
     prerelease: false
-    body_path: ${{ steps.release_notes.outputs.body_path }}
+    body: |
+      ## Downloads
+      - **DMG** (recommended): `${{ steps.artifacts.outputs.dmg_name }}` — SHA256: `${{ steps.checksums.outputs.dmg_sha256 }}`
+      - **ZIP**: `${{ steps.artifacts.outputs.zip_name }}` — SHA256: `${{ steps.checksums.outputs.zip_sha256 }}`
     files: |
       ${{ steps.artifacts.outputs.dmg_path }}
       ${{ steps.artifacts.outputs.zip_path }}
 ```
 
-Do not mix `generate_release_notes: true` with a separately constructed checksum body unless you have explicitly tested the merged output. First release should prefer deterministic notes.
-
-#### Step: Update Homebrew tap
+### Step: Cleanup
 
 ```yaml
+- name: Cleanup
+  if: always()
+  run: security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+```
+
+> **Doc deliverable → Release Guide:** How to publish a release, how to dry-run, how to promote a draft release, how to roll back (see Section 6), which secrets are needed, how to generate them, which Apple-side steps happen outside GitHub, how versioning and build numbering work.
+
+---
+
+## 5B. Promote Release Workflow (`promote-release.yml` — new)
+
+This workflow exists because draft release assets are not publicly downloadable. The Homebrew cask URL points at `releases/download/v.../...` which only resolves for public releases. Updating the tap before promotion breaks `brew install`.
+
+The release lifecycle is:
+
+1. `release.yml` builds, signs, notarizes, creates a **draft** GitHub Release.
+2. Maintainer verifies on a clean machine (download DMG, Gatekeeper check, `lipo -info`, launch app).
+3. Maintainer runs `promote-release.yml` which promotes the draft and updates the tap.
+
+### Trigger
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to promote (e.g., v1.0.0)'
+        required: true
+```
+
+### Permissions
+
+```yaml
+permissions:
+  contents: write
+```
+
+### Workflow constants
+
+Same `env:` block as `release.yml` (same placeholder values, same pre-flight validation).
+
+### Steps
+
+```yaml
+- name: Pre-flight validation
+  run: |
+    FAILED=0
+    for var in APP_DISPLAY_NAME ARTIFACT_BASENAME APP_BUNDLE_ID APP_SHORT_DESCRIPTION \
+               REPO_SLUG HOMEBREW_TAP_REPO HOMEBREW_CASK_TOKEN HOMEBREW_MACOS_FLOOR; do
+      val="$(eval echo \$$var)"
+      if [ "$val" = "__SET_BEFORE_FIRST_RELEASE__" ]; then
+        echo "::error::$var has not been configured"
+        FAILED=1
+      fi
+    done
+    [ "$FAILED" -eq 0 ] || exit 1
+
+- name: Validate tag input
+  id: version
+  run: |
+    TAG="${{ inputs.tag }}"
+    VERSION="${TAG#v}"
+    if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "::error::Invalid tag: $TAG" && exit 1
+    fi
+    echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+    echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+- name: Verify draft release exists with assets
+  env:
+    GH_TOKEN: ${{ github.token }}
+  run: |
+    RELEASE_JSON="$(gh release view "${{ inputs.tag }}" --json isDraft,assets)"
+    IS_DRAFT="$(echo "$RELEASE_JSON" | jq -r '.isDraft')"
+    ASSET_COUNT="$(echo "$RELEASE_JSON" | jq '.assets | length')"
+
+    if [ "$IS_DRAFT" != "true" ]; then
+      echo "::error::Release ${{ inputs.tag }} is not a draft — already promoted?"
+      exit 1
+    fi
+    if [ "$ASSET_COUNT" -eq 0 ]; then
+      echo "::error::Release ${{ inputs.tag }} has no assets attached"
+      exit 1
+    fi
+
+- name: Promote draft to public
+  env:
+    GH_TOKEN: ${{ github.token }}
+  run: gh release edit "${{ inputs.tag }}" --draft=false
+
+- name: Compute DMG checksum from public release
+  id: checksums
+  env:
+    GH_TOKEN: ${{ github.token }}
+  run: |
+    VERSION="${{ steps.version.outputs.version }}"
+    DMG_NAME="${ARTIFACT_BASENAME}-${VERSION}.dmg"
+
+    # Download the DMG from the now-public release to verify it's actually downloadable
+    gh release download "${{ inputs.tag }}" --pattern "$DMG_NAME" --dir "$RUNNER_TEMP"
+
+    DMG_SHA256="$(shasum -a 256 "$RUNNER_TEMP/$DMG_NAME" | awk '{print $1}')"
+    echo "dmg_sha256=$DMG_SHA256" >> "$GITHUB_OUTPUT"
+    echo "dmg_name=$DMG_NAME" >> "$GITHUB_OUTPUT"
+```
+
+### Step: Update Homebrew tap (with validation)
+
+```yaml
+- name: Check Homebrew tap token
+  id: tap_check
+  env:
+    HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+  run: echo "enabled=$HAS_TAP_TOKEN" >> "$GITHUB_OUTPUT"
+
 - name: Update Homebrew Cask
-  if: github.event_name == 'push' && secrets.HOMEBREW_TAP_TOKEN != ''
+  if: steps.tap_check.outputs.enabled == 'true'
   env:
     GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
   run: |
     VERSION="${{ steps.version.outputs.version }}"
-    DMG_NAME="${{ steps.artifacts.outputs.dmg_name }}"
+    DMG_NAME="${{ steps.checksums.outputs.dmg_name }}"
     DMG_SHA256="${{ steps.checksums.outputs.dmg_sha256 }}"
-    APP_BUNDLE_NAME="${{ steps.app.outputs.app_bundle_name }}"
 
-    # Clone the tap repo
-    git clone "https://x-access-token:${GH_TOKEN}@github.com/valtteriluomapareto/homebrew-tap.git" \
+    git clone "https://x-access-token:${GH_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" \
       "$RUNNER_TEMP/homebrew-tap"
 
-    # Update the cask formula
+    # Discover app bundle name from release notes or use the configured display name.
+    # The release workflow recorded this in the draft — here we use the env constant.
+    APP_BUNDLE_NAME="${APP_DISPLAY_NAME}.app"
+
     cat > "$RUNNER_TEMP/homebrew-tap/Casks/${HOMEBREW_CASK_TOKEN}.rb" <<RUBY
     cask "${HOMEBREW_CASK_TOKEN}" do
       version "${VERSION}"
       sha256 "${DMG_SHA256}"
 
-      url "https://github.com/valtteriluomapareto/photo-export/releases/download/v#{version}/${DMG_NAME}"
+      url "https://github.com/${REPO_SLUG}/releases/download/v#{version}/${DMG_NAME}"
       name "${APP_DISPLAY_NAME}"
-      desc "Export Apple Photos library to organized folder hierarchy"
-      homepage "https://github.com/valtteriluomapareto/photo-export"
+      desc "${APP_SHORT_DESCRIPTION}"
+      homepage "https://github.com/${REPO_SLUG}"
 
-      # Keep this aligned with the real minimum supported macOS version.
-      depends_on macos: ">= :sequoia"
+      depends_on macos: ">= :${HOMEBREW_MACOS_FLOOR}"
 
       app "${APP_BUNDLE_NAME}"
 
-      # Keep these paths aligned with the final PRODUCT_BUNDLE_IDENTIFIER.
       zap trash: [
-        "~/Library/Preferences/com.valtteriluoma.photo-export.plist",
-        "~/Library/Application Support/com.valtteriluoma.photo-export",
+        "~/Library/Preferences/${APP_BUNDLE_ID}.plist",
+        "~/Library/Application Support/${APP_BUNDLE_ID}",
       ]
     end
     RUBY
+
+    # Validate the cask before committing. This catches bad Ruby syntax,
+    # invalid floor values, and missing required fields.
+    brew tap --force "${HOMEBREW_TAP_REPO}" "$RUNNER_TEMP/homebrew-tap"
+    brew audit --cask "${HOMEBREW_CASK_TOKEN}"
 
     cd "$RUNNER_TEMP/homebrew-tap"
     git config user.name "github-actions[bot]"
@@ -697,361 +651,252 @@ Do not mix `generate_release_notes: true` with a separately constructed checksum
     fi
     git commit -m "Update ${HOMEBREW_CASK_TOKEN} to ${VERSION}"
     git push
-```
 
-The tap update is genuinely optional only if the workflow has an `if:` guard. Without that guard, missing tap credentials turn a successful release into a failed workflow after the artifacts are already published.
-
-#### Step: Cleanup
-
-```yaml
-- name: Cleanup
-  if: always()
+- name: Append Homebrew instructions to release notes
+  if: steps.tap_check.outputs.enabled == 'true'
+  env:
+    GH_TOKEN: ${{ github.token }}
   run: |
-    security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+    CURRENT_BODY="$(gh release view "${{ inputs.tag }}" --json body -q '.body')"
+    BREW_SECTION="$(cat <<EOF
+
+    ## Install via Homebrew
+    \`\`\`bash
+    brew install --cask ${HOMEBREW_TAP_REPO%%/*}/tap/${HOMEBREW_CASK_TOKEN}
+    \`\`\`
+    EOF
+    )"
+    gh release edit "${{ inputs.tag }}" --notes "${CURRENT_BODY}${BREW_SECTION}"
 ```
 
-The `if: always()` ensures the keychain is removed even on failure.
-
-#### Artifact format rationale
-
-Both DMG and ZIP are produced:
-
-- **DMG** (primary): mounted install experience with Applications shortcut, used by Homebrew cask
-- **ZIP** (secondary): simpler alternative for users who prefer it
+The key ordering guarantee: the DMG is downloaded from the **public** release URL before the cask is written. If the download fails, the cask is never updated. `brew audit --cask` validates the Ruby syntax and metadata before the commit is pushed.
 
 ---
 
-## 6. Prerequisites (Manual, Outside GitHub)
+## 6. Rollback Procedures
 
-### 6.1 Apple Developer Program
+### Bad build discovered before promotion
+
+The release is still a draft. No public-facing state has changed. Simply:
+1. Delete the draft release on GitHub.
+2. Delete the tag: `git push --delete origin v1.2.3 && git tag -d v1.2.3`
+3. Fix, re-tag, re-run `release.yml`.
+
+The Homebrew tap is untouched because `promote-release.yml` hasn't run.
+
+### Bad release discovered after promotion but before tap update
+
+The release is public but Homebrew hasn't moved yet (promotion and tap update are separate steps in `promote-release.yml`, or the maintainer may have promoted manually before running the workflow).
+
+1. Revert the GitHub Release to draft: `gh release edit v1.2.3 --draft`
+2. Investigate, fix, tag a new patch version.
+
+### Bad release discovered after promotion and tap update
+
+Both GitHub Release and Homebrew are public.
+
+1. Revert the GitHub Release to draft: `gh release edit v1.2.3 --draft`
+2. Revert the tap commit: `cd homebrew-tap && git revert HEAD && git push`
+3. Investigate, fix, tag a new patch version.
+
+The notarization ticket is permanent — you can't un-notarize. But reverting the release to draft removes the download link, and reverting the tap makes `brew install` return to the previous version.
+
+### Key principle
+
+The two-workflow model (`release.yml` → verify → `promote-release.yml`) means most rollback scenarios are prevented, not recovered from. Don't promote until you've verified on a clean machine.
+
+> **Doc deliverable → Release Guide:** Rollback procedures for each failure scenario.
+
+---
+
+## 7. In-App Update Checker
+
+The app should check for newer versions via the GitHub Releases API and prompt the user to update. This avoids the complexity of Sparkle while still giving users a clear upgrade path.
+
+### Requirements
+
+1. **Network entitlement** — add `com.apple.security.network.client` to `photo_export.entitlements`.
+2. **No third-party dependencies** — use `URLSession` (system framework). Consistent with the project's "system frameworks only" constraint.
+3. **Privacy-respecting** — the only network call is to the public GitHub API. No telemetry, no tracking. Document this.
+
+### Architecture
+
+New `UpdateCheckManager` (`@MainActor`, `ObservableObject`):
+
+- On app launch (and optionally on a user-triggered "Check for Updates" action), fetch `https://api.github.com/repos/{REPO_SLUG}/releases/latest`.
+- Parse the `tag_name` field (e.g., `v1.2.3`), compare against the app's current `MARKETING_VERSION` from `Bundle.main`.
+- If a newer version exists, publish state that drives a UI prompt.
+- Respect rate limits (GitHub API allows 60 unauthenticated requests/hour — one check per launch is fine).
+- Don't check on every window focus or timer — once per launch is sufficient.
+- Cache the dismissal: if the user dismisses a specific version's prompt, don't re-show it until a newer version exists. Use `UserDefaults` for this.
+
+### UI
+
+- Non-intrusive banner or alert: "Version X.Y.Z is available."
+- Two actions: "Update" (opens the GitHub Release page or suggests `brew upgrade`), "Later" (dismisses for this version).
+- Accessible via menu bar: "Check for Updates..." under the app menu.
+
+### Version comparison
+
+Compare semver components numerically (`1.9.0 < 1.10.0`). Don't use string comparison.
+
+### Build-time configuration
+
+The `REPO_SLUG` (e.g., `valtteriluomapareto/photo-export`) should be injected at build time via an `Info.plist` key or a generated Swift constant, so the update URL isn't hardcoded in source.
+
+### What this does NOT do
+
+- It doesn't download or install the update. The user updates via Homebrew (`brew upgrade`) or by downloading the DMG from the release page.
+- It doesn't phone home. The GitHub API request is the only network call, it's to a public endpoint, and it contains no user data.
+
+> **Doc deliverable → README:** Mention that the app checks for updates via the public GitHub Releases API. No other network calls are made.
+
+---
+
+## 8. Prerequisites (Manual, Outside GitHub)
+
+### 8.1 Apple Developer Program
 
 1. Enroll at https://developer.apple.com/programs/ ($99/year, 24-48h approval).
-2. After enrollment, create a **Developer ID Application** certificate in Certificates, Identifiers & Profiles.
-3. Export the certificate + private key from Keychain Access as `.p12`:
-   - Open Keychain Access, find "Developer ID Application: Your Name"
-   - Expand to reveal the private key
-   - Select both the certificate AND the private key
-   - Right-click, "Export 2 items...", choose `.p12` format
-   - Set a strong password
+2. Create a **Developer ID Application** certificate in Certificates, Identifiers & Profiles.
+3. Export the certificate + private key as `.p12` from Keychain Access (select both cert and key, export, set password).
 4. Create an app-specific password at https://appleid.apple.com/account/manage (label: "GitHub Actions Notarization").
-5. Find your Team ID: `security find-identity -v -p codesigning` — the Team ID is the 10-character alphanumeric string in parentheses.
+5. Find Team ID: `security find-identity -v -p codesigning` — 10-char alphanumeric in parentheses.
 
-### 6.2 GitHub Secrets
+### 8.2 GitHub Secrets
 
-Prefer GitHub Environment secrets in a protected `release` environment rather than repository-wide secrets.
-
-Navigate to Settings > Environments > `release` > Secrets and variables, and add:
+Store in Settings > Environments > `release` > Secrets:
 
 | Secret | Value | How to generate |
 |--------|-------|-----------------|
-| `DEVELOPER_ID_CERTIFICATE_P12_BASE64` | Base64-encoded `.p12` file | `base64 -i certificate.p12 \| pbcopy` |
-| `DEVELOPER_ID_CERTIFICATE_PASSWORD` | Password from .p12 export | Set during Keychain export |
-| `APPLE_ID` | Your Apple ID email | — |
-| `APPLE_ID_PASSWORD` | App-specific password | Generated at appleid.apple.com (NOT your account password) |
-| `APPLE_TEAM_ID` | 10-character Team ID | From `security find-identity` output |
-| `KEYCHAIN_PASSWORD` | Random string for temp CI keychain | `openssl rand -base64 24` |
-| `HOMEBREW_TAP_TOKEN` | GitHub PAT with `repo` scope for tap repo | Settings > Developer settings > Personal access tokens. Optional; only needed once tap auto-update is enabled |
+| `DEVELOPER_ID_CERTIFICATE_P12_BASE64` | Base64 `.p12` | `base64 -i certificate.p12 \| pbcopy` |
+| `DEVELOPER_ID_CERTIFICATE_PASSWORD` | `.p12` export password | Set during Keychain export |
+| `APPLE_ID` | Apple ID email | — |
+| `APPLE_ID_PASSWORD` | App-specific password | appleid.apple.com (**not** your account password) |
+| `APPLE_TEAM_ID` | 10-char Team ID | From `security find-identity` |
+| `KEYCHAIN_PASSWORD` | Random string | `openssl rand -base64 24` |
+| `HOMEBREW_TAP_TOKEN` | GitHub PAT with `repo` scope for tap repo | Optional; only needed for tap auto-update |
 
-`notarytool` can also authenticate with an App Store Connect API key instead of Apple ID + app-specific password. If the team later switches to that model, replace the Apple ID secrets and update both the `store-credentials` step and `submit` flags together.
+> **Doc deliverable → Release Guide:** Full secret generation instructions, including Apple-side steps. Note that app-specific passwords can expire and need manual renewal.
 
-### 6.3 Homebrew Tap Repository
+### 8.3 Homebrew Tap Repository
 
-Create `valtteriluomapareto/homebrew-tap` on GitHub with this structure:
+Create `valtteriluomapareto/homebrew-tap`:
 
 ```
 homebrew-tap/
   Casks/
-    photo-export.rb
+    <cask-token>.rb
   README.md
 ```
 
-The `HOMEBREW_TAP_TOKEN` must be a PAT (classic with `repo` scope, or fine-grained with Contents write access) that can push to this repository.
+> **Doc deliverable → Homebrew Tap README:** What the tap is, how to use it, link back to main repo.
 
 ---
 
-## 7. Xcode Project Changes
+## 9. Xcode Project Changes
 
-These changes should be applied before the first release but are not strictly required in the project file — the release workflow injects them via xcodebuild overrides. Applying them in the project is cleaner and makes local Release builds match CI.
+Apply before first release. The release workflow also injects these via xcodebuild overrides, but applying them in the project keeps local Release builds consistent with CI.
 
-### 7.1 Enable Hardened Runtime (Release config)
+| Change | Setting | Notes |
+|--------|---------|-------|
+| Hardened Runtime (Release) | `ENABLE_HARDENED_RUNTIME = YES` | Required for notarization |
+| App category | `INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography"` | Both configs |
+| Network entitlement | `com.apple.security.network.client` | Required for update checker |
+| Marketing version | `MARKETING_VERSION = 1.0.0` | Three-component semver |
+| Signing | Keep `Automatic` | CI overrides to Manual; no project change needed |
 
-Required for notarization. Add to Release build settings in `project.pbxproj`:
-
-```
-ENABLE_HARDENED_RUNTIME = YES;
-```
-
-### 7.2 Add app category
-
-Add to both Debug and Release build settings:
-
-```
-INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-```
-
-### 7.3 Add Privacy Manifest
-
-Create `photo-export/PrivacyInfo.xcprivacy`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>NSPrivacyTracking</key>
-    <false/>
-    <key>NSPrivacyTrackingDomains</key>
-    <array/>
-    <key>NSPrivacyCollectedDataTypes</key>
-    <array/>
-    <key>NSPrivacyAccessedAPITypes</key>
-    <array/>
-</dict>
-</plist>
-```
-
-Add this file to the Xcode project target.
-
-### 7.4 Signing stays Automatic
-
-Signing stays `Automatic` in the project for local development. The CI release workflow overrides to `Manual` + `Developer ID Application` via xcodebuild flags. No project file change needed for signing.
+**Privacy manifest:** Don't add a stub `PrivacyInfo.xcprivacy`. Apple enforces privacy manifests for App Store, not Developer ID. If added later, populate it accurately (this codebase uses `UserDefaults`, which requires a real `NSPrivacyAccessedAPITypes` entry).
 
 ---
 
-## 8. Build Numbering Plan
+## 10. Implementation Order
 
-### 8.1 Two version fields
+### Phase 0: Enrollment (blocks everything)
 
-| Field | Xcode setting | Purpose |
-|-------|---------------|---------|
-| Marketing version | `MARKETING_VERSION` / `CFBundleShortVersionString` | User-visible version (e.g. `1.2.3`) |
-| Build number | `CURRENT_PROJECT_VERSION` / `CFBundleVersion` | Machine-generated, monotonically increasing |
+1. Complete Apple Developer Program enrollment.
 
-### 8.2 Marketing version policy
+### Phase 1: Product identity and code cleanup
 
-Use semantic versioning: `MAJOR.MINOR.PATCH` (e.g., `1.0.0`, `1.0.1`, `1.1.0`).
+1. Finalize app name, bundle ID, bundle filename, artifact basename, cask token, short description, minimum macOS floor.
+2. Add real app icon assets.
+3. Align bundle ID and logger subsystems.
+4. Replace `print()` with `os.Logger` in `PhotoLibraryManager.swift`.
+5. Update `MARKETING_VERSION` from `1.0` to `1.0.0`.
+6. Add hardened runtime and app category to Xcode project.
+7. Add network entitlement.
 
-Source of truth: the git tag. `v1.2.3` becomes `1.2.3`.
+### Phase 2: CI hardening
 
-### 8.3 Build number policy
+1. Pin Xcode version path.
+2. Make SwiftLint and swift-format blocking.
+3. Pin or cache lint tool binaries.
+4. Add concurrency control.
+5. Upload `.xcresult` as artifact.
 
-Use `github.run_number` — the auto-incrementing integer GitHub assigns to each run of this release workflow.
+### Phase 3: In-app update checker
 
-Why this rule:
+1. Implement `UpdateCheckManager` using GitHub Releases API.
+2. Add update prompt UI (banner/alert + "Check for Updates" menu item).
+3. Add version comparison logic.
+4. Inject `REPO_SLUG` via build-time configuration.
+5. Test with a mock release to verify the flow.
 
-1. Always monotonically increasing (GitHub guarantees this per-workflow)
-2. Simple — no computation needed
-3. Deterministic — run 47 always maps to the same run in the Actions UI
-4. Re-running a failed release keeps the same run number (same run)
-5. Pushing a new tag gets the next run number
+### Phase 4: Release automation
 
-Alternatives considered:
+1. Implement `release.yml`: tag-based build, sign, notarize, DMG/ZIP, draft GitHub Release.
+2. Implement `promote-release.yml`: promote draft, download DMG to verify URL, `brew audit --cask`, push tap, append Homebrew instructions to release notes.
+3. Dry-run `release.yml` from `main` via `workflow_dispatch` — verify artifacts upload, no release published.
+4. Test full cycle: push a `v0.0.1-rc.1` tag, verify draft, run `promote-release.yml`, verify `brew install` works end to end.
 
-- **Git commit count**: fragile (rebases change it)
-- **UTC timestamp** (`YYYYMMDDHHMMSS`): less readable, higher entropy than needed
-- **Manual counter**: requires committing bumps, creates merge noise
+### Phase 5: Launch
 
-### 8.4 Implementation principle
-
-Do not commit build number bumps into the Xcode project for each release. Instead:
-
-1. Keep a stable baseline in the project (`CURRENT_PROJECT_VERSION = 1`)
-2. Override both `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in the release workflow
-
-This avoids release-only git churn and keeps CI authoritative for versioning.
-
----
-
-## 9. How to Use the Workflows
-
-### 9.1 How to use CI
-
-1. Open a pull request.
-2. Wait for `ci.yml`.
-3. Inspect the uploaded `.xcresult` artifact on failure.
-
-### 9.2 How to publish a release
-
-1. Ensure all changes are merged to `main` and CI is green.
-2. Optionally run `release.yml` via `workflow_dispatch` with an explicit version such as `1.0.0` to validate signing, notarization, DMG/ZIP creation, and artifact upload without publishing.
-3. Create and push a tag from the already-merged `main` commit:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-4. The `release.yml` workflow will automatically:
-   - Build and sign with Developer ID
-   - Notarize with Apple
-   - Create DMG and ZIP
-   - Upload DMG and ZIP as workflow artifacts
-   - Create a GitHub Release with artifacts and checksums
-   - Update the Homebrew tap cask if `HOMEBREW_TAP_TOKEN` is configured
-
-5. Monitor the Actions run for success.
-
-6. Validate:
-   - Download the DMG on a clean Mac, verify Gatekeeper passes
-   - Verify binary architecture with `lipo -info`
-   - `brew install valtteriluomapareto/tap/photo-export` succeeds
-
-### 9.3 What to verify after every release
-
-1. Notarization success in the workflow logs
-2. GitHub Release has both DMG and ZIP attached
-3. SHA-256 checksums are present in release notes
-4. Homebrew cask was updated with correct version and SHA, or was intentionally skipped because the token is unset
-5. `lipo -info` on the shipped app binary matches the architecture policy you intended
-6. App launches without Gatekeeper warnings on a clean Mac
+1. Document privacy posture in README.
+2. Write verification instructions for end users.
+3. Tag `v1.0.0`, run `release.yml`.
+4. Verify on clean Mac: download DMG from draft, Gatekeeper check, `lipo -info`, launch app.
+5. Run `promote-release.yml` to make release public and update tap.
+6. Verify Homebrew: `brew install --cask valtteriluomapareto/tap/photo-export`
+7. Write release notes.
 
 ---
 
-## 10. Decisions Needed Before Moving Forward
-
-These gaps should be explicitly decided before implementing release automation.
-
-### 10.1 Final app identity
-
-Decide all of the following together:
-
-1. Final app name
-2. Final bundle identifier
-3. Final app bundle filename (e.g., `photo-export.app` vs `Photo Export.app`)
-4. GitHub Release artifact naming convention
-5. Homebrew cask token
-6. Short description for Homebrew and GitHub
-
-Currently there is visible inconsistency between the human app name, bundle name, bundle identifier, and logger subsystem names. These should all align before the first public release.
-
-**Recommendation**: Standardize bundle ID to `com.valtteriluoma.photo-export` (reverse-DNS convention).
-
-The release workflow should reference these values via one `env:` block, not via repeated hardcoded strings spread across steps.
-
-### 10.2 Iconography
-
-Public release should not proceed without final app icon assets. The icon set is currently structurally present but not populated with actual image files.
-
-This is a hard blocker.
-
-### 10.3 OS support policy
-
-The app currently targets macOS `15.4`. This is very recent (released March 2025).
-
-Questions to answer:
-
-1. Is 15.4 required by actual APIs used in the app?
-2. Would 15.0 be viable?
-3. Is the target audience likely to be on older macOS versions?
-
-This affects Homebrew audience size, the `depends_on macos` constraint in the cask formula, and whether the release can honestly claim Sequoia-wide support.
-
-**Recommendation**: Lower to `15.0` (Sequoia) unless a specific 15.4 API is needed. If 15.4 really is required, document that exact minimum clearly in the README, release notes, and cask instead of implying all of Sequoia is supported.
-
-### 10.4 GitHub repository URL
-
-The cask formula and release workflow reference the GitHub org/repo path. Confirm the correct value (e.g., `valtteriluomapareto/photo-export`).
-
-### 10.5 Privacy and trust posture
-
-The app handles private personal data (photo libraries). Decide and document before launch:
-
-1. Whether the app sends anything over the network (currently: no)
-2. Whether analytics exist (currently: no)
-3. Whether crash reporting exists (currently: no)
-4. Whether exported metadata (EXIF, location) is preserved or modified
-5. How this is communicated to users
-
-If the answer is "no telemetry, no account, local-only processing", say that plainly and prominently in the README and release notes.
-
-### 10.6 Support model
-
-Decide:
-
-1. Where users report bugs (GitHub Issues is the natural choice)
-2. Where release notes live (GitHub Releases)
-3. Whether there is an issue template
-
-### 10.7 Items that can be deferred
-
-| Item | Notes |
-|------|-------|
-| Sparkle auto-updates | Orthogonal, add later if direct-download needs its own update path |
-| App Store / TestFlight | Separate workflow, can be added later without changing the Homebrew pipeline |
-| Changelog auto-generation | Nice to have, not blocking |
-| Fancy DMG window layout | Cosmetic only; the first release can use a simple `hdiutil` DMG with the app and an `/Applications` symlink |
-| Provenance attestation | Optional enhancement via `actions/attest-build-provenance`, but only after the workflow actually emits an attestation |
-| Submit to official homebrew-cask | Requires established user base; start with personal tap |
-| Signed git tags (GPG) | Optional enhancement for advanced verification |
-
-Binary architecture is not a defer-by-default item. Prefer a universal binary unless you intentionally choose Apple Silicon only, and verify the shipped artifact with `lipo -info` before release.
-
----
-
-## 11. End-User Trust Plan
-
-Trust should not rely on a single mechanism. It should be layered.
-
-### 11.1 Apple trust chain
-
-1. **Developer ID signing**: Gatekeeper trusts the app, no "unidentified developer" warning.
-2. **Apple notarization**: Apple scans for malware; the stapled ticket works offline.
-
-### 11.2 Download integrity
-
-1. **Homebrew SHA-256**: The cask verifies the DMG checksum on install.
-2. **GitHub Release checksums**: SHA-256 published in release notes for manual verification.
-
-### 11.3 Open-source transparency
-
-1. **Public source code**: Users can audit every line.
-2. **Public CI logs**: anyone can see how the binary was produced and where it came from.
-3. **Tagged releases**: Each release maps to a specific commit.
-4. **Public workflow definitions**: The release pipeline itself is auditable.
-
-### 11.4 Optional trust enhancements (can be added later)
-
-1. **GitHub build provenance attestation** via `actions/attest-build-provenance`: cryptographic proof that artifacts were built by the CI pipeline.
-2. **GPG-signed git tags**: prove release authenticity beyond GitHub's web UI.
-3. **Verification instructions for advanced users**: document commands like `codesign --verify`, `spctl --assess`, and `shasum -a 256` in the README.
-
-### 11.5 Brand consistency
-
-Trust is also affected by polish. Before launch, make sure these all match:
-
-1. App icon
-2. App name in all contexts
-3. Bundle name
-4. GitHub Release naming
-5. Homebrew cask name
-
-Inconsistency makes even a technically sound release feel suspicious.
-
----
-
-## 12. First Release Checklist
-
-When all decisions are made and prerequisites are in place:
+## 11. First Release Checklist
 
 1. [ ] Complete Apple Developer enrollment
-2. [ ] Generate Developer ID Application certificate
-3. [ ] Export as `.p12`, base64-encode it
-4. [ ] Create app-specific password for notarization
-5. [ ] Create a protected GitHub `release` environment with required reviewers
-6. [ ] Set the required release secrets there, plus optional `HOMEBREW_TAP_TOKEN` if tap auto-update is enabled
-7. [ ] Resolve bundle ID inconsistency
-8. [ ] Add real app icon assets
-9. [ ] Apply Xcode project changes (hardened runtime, privacy manifest, category)
-10. [ ] Create `valtteriluomapareto/homebrew-tap` repo with initial cask
-11. [ ] Merge release workflow + CI improvements to `main`
-12. [ ] Run a `workflow_dispatch` dry run with an explicit version and verify it uploads artifacts but does not publish a GitHub Release or update the tap
-13. [ ] Tag and push: `git tag v1.0.0 && git push origin v1.0.0`
-14. [ ] Monitor Actions run
-15. [ ] Verify on clean Mac: download DMG, Gatekeeper check, launch app
-16. [ ] Verify binary architecture with `lipo -info`
-17. [ ] Verify Homebrew: `brew install valtteriluomapareto/tap/photo-export`
-18. [ ] Write release notes
+2. [ ] Generate Developer ID Application certificate, export as `.p12`
+3. [ ] Create app-specific password for notarization
+4. [ ] Create protected GitHub `release` environment with required reviewers
+5. [ ] Set all required secrets
+6. [ ] Resolve all identity decisions (Section 2.1), update placeholder `env:` values in **both** `release.yml` and `promote-release.yml`
+7. [ ] Add real app icon assets
+8. [ ] Apply all Xcode project changes (Section 9)
+9. [ ] Fix all code-level gaps (Section 3)
+10. [ ] Implement update checker (Section 7)
+11. [ ] Create `valtteriluomapareto/homebrew-tap` repo
+12. [ ] Merge CI improvements, `release.yml`, and `promote-release.yml` to `main`
+13. [ ] Run `release.yml` `workflow_dispatch` dry run — verify artifacts upload, no release published
+14. [ ] Tag `v1.0.0`, push tag
+15. [ ] Monitor `release.yml` Actions run — verify draft release created with DMG and ZIP attached
+16. [ ] Download DMG from the draft release on a clean Mac — verify Gatekeeper passes
+17. [ ] Verify architecture: `lipo -info` (expect `arm64 x86_64`)
+18. [ ] Run `promote-release.yml` with tag `v1.0.0` — verify it promotes draft, downloads DMG, passes `brew audit`, updates tap
+19. [ ] Verify release is now public on GitHub with Homebrew instructions appended
+20. [ ] Verify Homebrew: `brew install --cask valtteriluomapareto/tap/photo-export`
+21. [ ] Verify update checker: launch older build, confirm it detects the new version
+
+---
+
+## 12. Documentation Deliverables
+
+These documents should be created as part of implementation, not after.
+
+| Document | Location | Contents |
+|----------|----------|----------|
+| **Release Guide** | `docs/RELEASING.md` or wiki | How to publish a release (tag → `release.yml` → verify → `promote-release.yml`), dry-run procedure, rollback procedures for each phase, secret generation, Apple prerequisites, versioning scheme |
+| **Development Guide** | `docs/CONTRIBUTING.md` or `CLAUDE.md` update | How CI works, how to read `.xcresult` artifacts, local build/test/lint commands, signing stays Automatic locally |
+| **README updates** | `README.md` | Installation (Homebrew + direct download), minimum macOS version, privacy posture ("no telemetry, local-only except version check"), how to verify the binary |
+| **Homebrew Tap README** | `homebrew-tap/README.md` | What the tap is, install/upgrade commands, link to main repo |
 
 ---
 
@@ -1059,76 +904,15 @@ When all decisions are made and prerequisites are in place:
 
 | Action | File | Purpose |
 |--------|------|---------|
-| **Create** | `.github/workflows/release.yml` | Release pipeline |
-| **Create** | `photo-export/PrivacyInfo.xcprivacy` | Privacy manifest |
-| **Modify** | `photo-export.xcodeproj/project.pbxproj` | Hardened runtime, app category |
-| **Modify** | `.github/workflows/ci.yml` | Concurrency, lint strictness, artifact upload |
-| **Create** (separate repo) | `homebrew-tap/Casks/photo-export.rb` | Homebrew cask formula |
-| **Create** (separate repo) | `homebrew-tap/README.md` | Tap documentation |
-
----
-
-## 14. Recommended Implementation Order
-
-### Phase 1: Product identity and release prerequisites
-
-1. Finalize app name, bundle ID, bundle filename, and cask token
-2. Add real app icon assets
-3. Decide minimum supported macOS version
-4. Clean up logger subsystem/bundle ID consistency
-5. Remove production `print(...)`
-6. Add hardened runtime and privacy manifest to Xcode project
-
-### Phase 2: CI hardening
-
-1. Make SwiftLint blocking
-2. Upload `.xcresult` as artifact
-3. Add concurrency control
-4. Remove redundant Release build
-
-### Phase 3: Release automation
-
-1. Implement tag-based Developer ID release workflow
-2. Implement notarization
-3. Implement DMG + ZIP creation
-4. Implement GitHub Release creation with checksums
-5. Implement Homebrew tap auto-update
-
-### Phase 4: Trust and launch polish
-
-1. Document privacy posture
-2. Add verification instructions
-3. Create release notes/changelog process
-4. Perform clean-machine install tests
-
----
-
-## 15. Official References
-
-### GitHub
-
-- [Encrypted secrets](https://docs.github.com/en/actions/configuring-and-managing-workflows/creating-and-storing-encrypted-secrets)
-- [Build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations-to-establish-provenance-for-builds)
-
-### Apple
-
-- [Notarizing macOS software before distribution](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
-- [Distributing outside the Mac App Store](https://developer.apple.com/documentation/xcode/distributing-your-app-to-registered-devices)
-
-### Homebrew
-
-- [Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)
-- [How to create and maintain a tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap)
-
----
-
-## 16. Repository Evidence References
-
-These repository files were the main inputs for this plan:
-
-- [README.md](README.md)
-- [.github/workflows/ci.yml](.github/workflows/ci.yml)
-- [photo-export.xcodeproj/project.pbxproj](photo-export.xcodeproj/project.pbxproj)
-- [photo-export/photo_export.entitlements](photo-export/photo_export.entitlements)
-- [photo-export/Assets.xcassets/AppIcon.appiconset/Contents.json](photo-export/Assets.xcassets/AppIcon.appiconset/Contents.json)
-- [PUBLIC_DEPLOYMENT_PLAN.md](PUBLIC_DEPLOYMENT_PLAN.md)
+| **Modify** | `.github/workflows/ci.yml` | Concurrency, lint strictness, pinned Xcode, artifact upload |
+| **Create** | `.github/workflows/release.yml` | Build, sign, notarize, draft GitHub Release |
+| **Create** | `.github/workflows/promote-release.yml` | Promote draft, validate and update Homebrew tap |
+| **Modify** | `photo-export.xcodeproj/project.pbxproj` | Hardened runtime, app category, version, bundle ID |
+| **Modify** | `photo-export/photo_export.entitlements` | Add network client entitlement |
+| **Create** | `photo-export/Managers/UpdateCheckManager.swift` | GitHub Releases API update checker |
+| **Modify** | `photo-export/photo_exportApp.swift` | Inject `UpdateCheckManager` |
+| **Create** | UI for update prompt | Banner/alert + menu item |
+| **Modify** | Logger subsystems (6 files) | Align with final bundle ID |
+| **Modify** | `PhotoLibraryManager.swift` | Replace `print()` with `os.Logger` |
+| **Create** (separate repo) | `homebrew-tap/Casks/<cask-token>.rb` | Homebrew cask formula |
+| **Create** | `docs/RELEASING.md` | Release guide |

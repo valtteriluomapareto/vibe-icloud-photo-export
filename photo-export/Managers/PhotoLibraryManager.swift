@@ -229,7 +229,7 @@ final class PhotoLibraryManager: ObservableObject {
       for: assets, targetSize: size, contentMode: contentMode, options: options)
   }
 
-  /// Load thumbnail for an asset
+  /// Load thumbnail for an asset (fast/degraded version only, for initial grid population)
   @MainActor
   func loadThumbnail(
     for asset: PHAsset, size: CGSize = CGSize(width: 200, height: 200),
@@ -238,8 +238,8 @@ final class PhotoLibraryManager: ObservableObject {
   ) async -> NSImage? {
     return await withCheckedContinuation { continuation in
       let options = PHImageRequestOptions()
-      options.deliveryMode = .opportunistic
-      options.isNetworkAccessAllowed = allowNetwork
+      options.deliveryMode = .fastFormat
+      options.isNetworkAccessAllowed = false
       options.resizeMode = .fast
 
       let resumed = OSAllocatedUnfairLock(initialState: false)
@@ -258,7 +258,43 @@ final class PhotoLibraryManager: ObservableObject {
           })
         else { return }
         self.logger.debug(
-          "thumbnail callback id: \(asset.localIdentifier, privacy: .public) imageNil: \((image == nil))"
+          "thumbnail fast id: \(asset.localIdentifier, privacy: .public) imageNil: \((image == nil))"
+        )
+        continuation.resume(returning: image)
+      }
+    }
+  }
+
+  /// Load a high-quality thumbnail for an asset
+  @MainActor
+  func loadThumbnailHighQuality(
+    for asset: PHAsset, size: CGSize = CGSize(width: 200, height: 200),
+    contentMode: PHImageContentMode = .aspectFill,
+    allowNetwork: Bool = true
+  ) async -> NSImage? {
+    return await withCheckedContinuation { continuation in
+      let options = PHImageRequestOptions()
+      options.deliveryMode = .highQualityFormat
+      options.isNetworkAccessAllowed = allowNetwork
+      options.resizeMode = .exact
+
+      let resumed = OSAllocatedUnfairLock(initialState: false)
+
+      PhotoLibraryManager.cachingImageManager.requestImage(
+        for: asset,
+        targetSize: size,
+        contentMode: contentMode,
+        options: options
+      ) { image, info in
+        guard
+          resumed.withLock({
+            let was = $0
+            $0 = true
+            return !was
+          })
+        else { return }
+        self.logger.debug(
+          "thumbnail HQ id: \(asset.localIdentifier, privacy: .public) imageNil: \((image == nil))"
         )
         continuation.resume(returning: image)
       }

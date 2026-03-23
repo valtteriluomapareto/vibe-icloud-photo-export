@@ -23,24 +23,22 @@ struct ContentView: View {
   @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
   @State private var assetCountsByYearMonth: [String: Int] = [:]
 
+  // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
+  @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+
   // Detail selection
   @State private var selectedAsset: PHAsset?
 
   var body: some View {
     Group {
-      if photoLibraryManager.isAuthorized {
+      if photoLibraryManager.isAuthorized && !hasCompletedOnboarding {
+        OnboardingView {
+          hasCompletedOnboarding = true
+        }
+      } else if photoLibraryManager.isAuthorized {
         NavigationSplitView(
           sidebar: {
             List(selection: $selectedYearMonth) {
-              // Export destination selector
-              Section("Export Destination") {
-                exportDestinationSection
-              }
-
-              Section("Export Process") {
-                exportProcessSection
-              }
-
               Section("Photos by Year") {
                 ForEach(years, id: \.self) { year in
                   DisclosureGroup(
@@ -60,30 +58,12 @@ struct ContentView: View {
                         year: year,
                         month: month,
                         total: assetCountsByYearMonth["\(year)-\(month)"]
-                          ?? 0,
-                        exportAction: {
-                          exportManager.startExportMonth(
-                            year: year, month: month)
-                        },
-                        canExportNow: exportDestinationManager.canExportNow
+                          ?? 0
                       )
                       .tag(YearMonth(year: year, month: month))
                     }
                   } label: {
-                    HStack {
-                      Text(verbatim: String(year))
-                      Spacer()
-                      Button("Export Year") {
-                        exportManager.startExportYear(year: year)
-                      }
-                      .buttonStyle(.bordered)
-                      .disabled(!exportDestinationManager.canExportNow)
-                      .help(
-                        exportDestinationManager.canExportNow
-                          ? "Export all unexported assets for \(year)"
-                          : "Select a writable export folder first"
-                      )
-                    }
+                    Text(verbatim: String(year))
                   }
                 }
               }
@@ -114,11 +94,22 @@ struct ContentView: View {
               .environmentObject(photoLibraryManager)
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           })
+        .toolbar {
+          ExportToolbarView()
+        }
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)
       }
     }
     .onAppear {
+      // Auto-skip onboarding for existing users who already have an export destination or records
+      if !hasCompletedOnboarding {
+        let hasDestination = exportDestinationManager.selectedFolderURL != nil
+        let hasRecords = !exportRecordStore.recordsById.isEmpty
+        if hasDestination || hasRecords {
+          hasCompletedOnboarding = true
+        }
+      }
       if photoLibraryManager.isAuthorized {
         years = (try? photoLibraryManager.availableYears()) ?? []
         if let selected = selectedYearMonth {
@@ -160,92 +151,6 @@ struct ContentView: View {
     let year: Int
     let month: Int
     var id: String { "\(year)-\(month)" }
-  }
-
-  // MARK: - Export Destination UI
-  private var exportDestinationSection: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      if let url = exportDestinationManager.selectedFolderURL {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-          Image(
-            systemName: exportDestinationManager.isAvailable
-              && exportDestinationManager.isWritable
-              ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-          )
-          .foregroundColor(
-            exportDestinationManager.isAvailable && exportDestinationManager.isWritable
-              ? .green : .yellow)
-          Text(truncatedPath(for: url.path))
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help(url.path)
-        }
-        if let message = exportDestinationManager.statusMessage {
-          Text(message)
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
-
-        HStack(spacing: 8) {
-          Button("Change…") { exportDestinationManager.selectFolder() }
-          Button("Reveal in Finder") { exportDestinationManager.revealInFinder() }
-          Spacer()
-          Button("Clear") { exportDestinationManager.clearSelection() }
-            .foregroundColor(.red)
-        }
-      } else {
-        Text("No export folder selected")
-          .foregroundColor(.secondary)
-        Button("Select Folder…") { exportDestinationManager.selectFolder() }
-      }
-    }
-    .padding(.vertical, 4)
-  }
-
-  // MARK: - Export Process UI
-  private var exportProcessSection: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 6) {
-        Label(
-          "Queue: \(exportManager.queueCount)",
-          systemImage: exportManager.isRunning
-            ? "arrow.triangle.2.circlepath" : "tray.and.arrow.down"
-        )
-        .foregroundColor(exportManager.isRunning ? .orange : .secondary)
-        Spacer()
-        if exportManager.isRunning { ProgressView().scaleEffect(0.6) }
-      }
-      .font(.caption)
-
-      HStack(spacing: 8) {
-        if exportManager.isPaused {
-          Button("Resume") { exportManager.resume() }
-            .buttonStyle(.borderedProminent)
-            .disabled(exportManager.queueCount == 0)
-        } else {
-          Button("Pause") { exportManager.pause() }
-            .buttonStyle(.bordered)
-            .disabled(exportManager.queueCount == 0)
-        }
-        Button("Clear Pending") { exportManager.clearPending() }
-          .disabled(exportManager.queueCount == 0)
-        Button("Cancel & Clear") { exportManager.cancelAndClear() }
-          .foregroundColor(.red)
-          .help("Abort current export and clear the queue")
-        Spacer()
-      }
-      .font(.caption)
-    }
-    .padding(.vertical, 4)
-  }
-
-  private func truncatedPath(for path: String, maxLength: Int = 40) -> String {
-    guard path.count > maxLength else { return path }
-    let prefixCount = Int(Double(maxLength) * 0.6)
-    let suffixCount = maxLength - prefixCount - 1
-    let start = path.prefix(prefixCount)
-    let end = path.suffix(suffixCount)
-    return String(start) + "…" + String(end)
   }
 
   private func computeMonthsWithAssets(for year: Int) -> [Int] {
@@ -340,42 +245,35 @@ struct MonthRow: View {
   let year: Int
   let month: Int
   let total: Int
-  let exportAction: () -> Void
-  let canExportNow: Bool
 
   var body: some View {
     let summary = exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
+    let queued = exportManager.queuedCount(year: year, month: month)
     return HStack(spacing: 8) {
-      Text("\(String(year)) \(MonthFormatting.name(for: month))")
+      Text(MonthFormatting.name(for: month))
       Spacer()
-      if total > 0 {
+      if queued > 0 {
+        ProgressView()
+          .scaleEffect(0.5)
+          .frame(width: 16, height: 16)
+        Text("\(queued) left")
+          .font(.caption2)
+          .foregroundColor(.orange)
+      } else if total > 0 {
         switch summary.status {
         case .complete:
-          Label(
-            "\(summary.exportedCount)/\(summary.totalCount)",
-            systemImage: "checkmark.seal.fill"
-          )
-          .foregroundColor(.green)
-          .font(.caption)
+          Image(systemName: "checkmark.seal.fill")
+            .foregroundColor(.green)
+            .font(.caption)
         case .partial:
-          Label(
-            "\(summary.exportedCount)/\(summary.totalCount)",
-            systemImage: "arrow.triangle.2.circlepath"
-          )
-          .foregroundColor(.orange)
-          .font(.caption)
+          Text("\(summary.exportedCount)/\(summary.totalCount)")
+            .foregroundColor(.orange)
+            .font(.caption)
         case .notExported:
-          Label("0/\(summary.totalCount)", systemImage: "circle")
+          Text("\(summary.totalCount)")
             .foregroundColor(.secondary)
             .font(.caption)
         }
-        Button("Export") { exportAction() }
-          .buttonStyle(.bordered)
-          .disabled(!canExportNow)
-          .help(
-            canExportNow
-              ? "Export this month to selected folder"
-              : "Select a writable export folder first")
       }
     }
     .contentShape(Rectangle())

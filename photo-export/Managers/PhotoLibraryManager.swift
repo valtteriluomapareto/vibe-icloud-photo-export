@@ -250,7 +250,7 @@ final class PhotoLibraryManager: ObservableObject {
         targetSize: size,
         contentMode: contentMode,
         options: options
-      ) { image, info in
+      ) { image, _ in
         guard
           resumed.withLock({
             let was = $0
@@ -286,7 +286,7 @@ final class PhotoLibraryManager: ObservableObject {
         targetSize: size,
         contentMode: contentMode,
         options: options
-      ) { image, info in
+      ) { image, _ in
         guard
           resumed.withLock({
             let was = $0

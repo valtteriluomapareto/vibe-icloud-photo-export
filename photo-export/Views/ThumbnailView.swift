@@ -13,7 +13,7 @@ struct ThumbnailView: View {
   let state: ThumbnailState
   let isSelected: Bool
   let isExported: Bool
-  var onRetry: (() -> Void)? = nil
+  var onRetry: (() -> Void)?
 
   var body: some View {
     ZStack {

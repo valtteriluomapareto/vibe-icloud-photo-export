@@ -1,0 +1,56 @@
+---
+const base = import.meta.env.BASE_URL;
+---
+
+<footer class="site-footer">
+	<div class="footer-content">
+		<p>
+			<strong>Photo Export</strong> is open source under the
+			<a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/LICENSE">MIT License</a>.
+		</p>
+		<div class="footer-links">
+			<a href={`${base}getting-started`}>Docs</a>
+			<a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export">GitHub</a>
+			<a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">Issues</a>
+		</div>
+	</div>
+</footer>
+
+<style>
+	.site-footer {
+		background: #1a1a2e;
+		color: rgba(255, 255, 255, 0.7);
+		padding: 2rem;
+		text-align: center;
+		font-size: 0.9rem;
+	}
+
+	.footer-content {
+		max-width: 48rem;
+		margin: 0 auto;
+	}
+
+	.footer-content p {
+		margin: 0 0 0.75rem;
+	}
+
+	.footer-links {
+		display: flex;
+		gap: 1.5rem;
+		justify-content: center;
+	}
+
+	a {
+		color: rgba(255, 255, 255, 0.8);
+		text-decoration: none;
+	}
+
+	a:hover {
+		color: white;
+		text-decoration: underline;
+	}
+
+	strong {
+		color: white;
+	}
+</style>

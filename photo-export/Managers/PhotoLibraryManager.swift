@@ -39,10 +39,11 @@ final class PhotoLibraryManager: ObservableObject {
   private func verifyPhotoLibraryPermissions() {
     let bundleDict = Bundle.main.infoDictionary
     if bundleDict?["NSPhotoLibraryUsageDescription"] == nil {
-      print("WARNING: NSPhotoLibraryUsageDescription not found in Info.plist")
-      print("Available keys: \(bundleDict?.keys.joined(separator: ", ") ?? "none")")
+      logger.warning("NSPhotoLibraryUsageDescription not found in Info.plist")
+      logger.warning(
+        "Available keys: \(bundleDict?.keys.joined(separator: ", ") ?? "none", privacy: .public)")
     } else {
-      print("Found NSPhotoLibraryUsageDescription in Info.plist")
+      logger.debug("Found NSPhotoLibraryUsageDescription in Info.plist")
     }
   }
 

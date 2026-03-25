@@ -188,19 +188,16 @@ struct AuthorizationView: View {
       .multilineTextAlignment(.center)
       .padding(.horizontal)
 
-      Button(
-        action: { requestPermission() },
-        label: {
-          Text("Grant Access")
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(Color.blue)
-            .cornerRadius(10)
-        }
-      )
-      .padding(.horizontal)
+      Button(action: { requestPermission() }) {
+        Text("Grant Access")
+          .fontWeight(.semibold)
+          .foregroundColor(.white)
+          .padding(.horizontal, 40)
+          .padding(.vertical, 12)
+          .background(Color.blue)
+          .cornerRadius(10)
+      }
+      .buttonStyle(.plain)
       .disabled(isRequestingAuthorization)
 
       if isRequestingAuthorization {

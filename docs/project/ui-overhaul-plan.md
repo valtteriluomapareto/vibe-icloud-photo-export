@@ -1,4 +1,4 @@
-# UI Overhaul Implementation Plan
+# UI Overhaul Plan
 
 ## Status: All steps implemented and merged with main
 

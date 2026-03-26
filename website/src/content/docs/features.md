@@ -3,15 +3,14 @@ title: Features
 description: What Photo Export can do today.
 ---
 
-Photo Export is a fully functional MVP for backing up your Apple Photos library. Here's what's been implemented.
+Photo Export is a focused macOS app for exporting and tracking Apple Photos backups. These are the core capabilities available today.
 
 ## Photos library access
 
 - Full Photos framework integration with user authorization
 - Fetches all photo and video assets, grouped by year and month
-- Extracts asset metadata: creation date, media type, local identifier
-- Filtering by media type (photos/videos)
-- Async APIs throughout
+- Extracts asset metadata including creation date, media type, and local identifier
+- Async APIs throughout the app
 
 ## Library browsing
 
@@ -29,8 +28,9 @@ Photo Export is a fully functional MVP for backing up your Apple Photos library.
 ## Export functionality
 
 - One-click export for an entire month or year
+- Queue the full library for export from the toolbar
 - Only copies assets that haven't been exported yet (based on export records)
-- Automatic folder creation: `<root>/<year>/<month>/`
+- Automatic folder creation in `<root>/<year>/<month>/`
 - Handles both images and videos
 - Real-time progress tracking in the UI
 
@@ -48,6 +48,12 @@ Photo Export is a fully functional MVP for backing up your Apple Photos library.
 - Cancel and clear the entire export batch
 - Queue status indicator in the sidebar
 
+## Existing backup import
+
+- Import an existing backup folder to rebuild local export state
+- Match files conservatively against the current Photos library
+- Continue exporting on a fresh install without re-copying known assets
+
 ## Performance
 
 - Fast thumbnail loading with in-memory caching
@@ -60,3 +66,9 @@ Photo Export is a fully functional MVP for backing up your Apple Photos library.
 - Graceful handling of Photos library access denied
 - Export folder unavailable or write-protected detection
 - Individual asset export failures are skipped, recorded, and the batch continues
+
+## Current boundaries
+
+- macOS only
+- Build from source workflow first; direct-download releases are still evolving
+- Export structure is intentionally simple and fixed to a year/month hierarchy

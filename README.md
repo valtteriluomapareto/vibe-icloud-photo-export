@@ -1,126 +1,67 @@
-# Photo Export (macOS)
+# Photo Export
 
-**Website:** [valtteriluomapareto.github.io/vibe-icloud-photo-export](https://valtteriluomapareto.github.io/vibe-icloud-photo-export/)
+[![CI](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Vibe-coded warning: I didn’t know Swift when I started this. (I still don't) Shipped small, learned fast, fixed forward. Expect a few rough edges — contributions welcome.
+Photo Export is a native macOS app for exporting your Apple Photos library to local or external storage in a predictable `YYYY/MM/` folder layout.
 
-A macOS app to back up the Apple Photos library to local or external storage, exporting assets into an organized folder hierarchy.
+The project is intentionally small: SwiftUI on top, system frameworks only, and a straightforward export pipeline that favors reliability over feature sprawl.
 
-- App target: `photo-export`
-- Unit tests: `photo-exportTests`
-- UI tests: `photo-exportUITests` (currently skipped by default)
-- Shared scheme: `photo-export`
+## Current Capabilities
 
-See `IMPLEMENTATION_TASKS.md` for open work and `IMPLEMENTED_FEATURES.md` for completed features.
+- Browse your library by year and month
+- Preview thumbnails and selected assets
+- Export a month, a year, or the full queue without overwriting existing files
+- Track exported assets per destination so interrupted exports can resume safely
+- Pause, resume, cancel, and clear queued work
+- Import an existing backup folder to rebuild local export state on a fresh install
 
-If you’re browsing the code: it follows a simple SwiftUI + Managers pattern. Views are thin; logic lives in `Managers` and `ViewModels`. Photos export is resilient, avoids overwriting, and resumes after interruptions.
+## Requirements
 
----
+- macOS 15.0+
+- Xcode 16.2+ tested in CI
+- No third-party runtime dependencies
 
-## Prerequisites
+Optional local tools:
 
-- macOS (latest stable; project currently targets macOS 15.x)
-- Xcode 16.x (includes `xcodebuild`)
-- CocoaPods/SwiftPM: not required (uses system frameworks only)
+- `swiftlint`
+- `swift-format`
+- `xcpretty`
 
-Optional:
-- `xcpretty` for nicer CLI output (`gem install xcpretty`)
-- SwiftLint for linting (`brew install swiftlint`)
-- swift-format for formatting (`brew install swift-format`)
+## Build and Test
 
----
-
-## Project Layout
-
-- `photo-export/` — App sources (Swift, SwiftUI)
-- `photo-exportTests/` — Unit tests
-- `photo-exportUITests/` — UI tests
-- `SWIFT_SWIFTUI_BEST_PRACTICES.md` — Code style and patterns
-- `IMPLEMENTATION_TASKS.md` — Open tasks
-- `IMPLEMENTED_FEATURES.md` — Completed features
-- `FUTURE_ENHANCEMENTS.md` — Non-MVP ideas
-
----
-
-## Permissions and First Run
-
-The app uses the Photos framework. On first run, macOS will prompt for Photos library access. If access is denied, the app should handle it gracefully (see best practices doc). You can change permissions in System Settings → Privacy & Security → Photos.
-
----
-
-## Build from Command Line
-
-From the repository root:
+Open the project in Xcode:
 
 ```bash
-# Clean, then build Debug for macOS
+open photo-export.xcodeproj
+```
+
+Or build from the command line:
+
+```bash
 xcodebuild \
   -project photo-export.xcodeproj \
   -scheme "photo-export" \
   -configuration Debug \
   -destination 'platform=macOS' \
-  clean build
+  CODE_SIGNING_ALLOWED=NO \
+  build
 ```
 
-Notes:
-- Use `-configuration Release` for release builds.
-- On Apple Silicon, you can be explicit with `-destination 'platform=macOS,arch=arm64'`.
-
-### Standalone Release build (runnable outside Xcode)
-
-```bash
-# Build a Release app bundle to ./build
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -configuration Release \
-  -destination 'platform=macOS' \
-  -derivedDataPath build \
-  clean build
-
-# Launch the built app (no Xcode needed)
-open build/Build/Products/Release/photo-export.app
-```
-
-> To distribute to other Macs, sign with Developer ID and notarize. See `PUBLIC_DEPLOYMENT_PLAN.md`.
-
----
-
-## Run Tests from Command Line
-
-Run unit tests (UI tests are skipped by default in the shared scheme):
+Run unit tests:
 
 ```bash
 xcodebuild \
   -project photo-export.xcodeproj \
   -scheme "photo-export" \
   -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
   test
 ```
 
-Run a single unit test case (example):
+Generate coverage:
 
 ```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -destination 'platform=macOS' \
-  -only-testing:photo-exportTests/ExportRecordStoreTests \
-  test
-```
-
-Optional pretty output:
-
-```bash
-xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' test | xcpretty
-```
-
-### Code Coverage
-
-Generate an LCOV coverage report in two steps:
-
-```bash
-# 1. Run tests with coverage (remove old bundle first — xcodebuild won't overwrite)
 rm -rf TestResults.xcresult
 xcodebuild \
   -project photo-export.xcodeproj \
@@ -131,67 +72,35 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   test
 
-# 2. Convert to LCOV
 ./scripts/xccov2lcov.sh TestResults.xcresult lcov.info
 ```
 
-The script reads line-level coverage from the `.xcresult` archive via `xcrun xccov` and writes standard LCOV output. Test target files are excluded automatically.
+## Documentation
 
-To browse coverage in Xcode instead, open `TestResults.xcresult` directly — Xcode shows inline coverage annotations.
+- Project website: [valtteriluomapareto.github.io/vibe-icloud-photo-export](https://valtteriluomapareto.github.io/vibe-icloud-photo-export/)
+- User docs: [`website/src/content/docs/`](website/src/content/docs/)
+- Contributor guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Maintainer notes and plans: [`docs/README.md`](docs/README.md)
+- Persistence store reference: [`photo-export/Resources/PERSISTENCE_STORE.md`](photo-export/Resources/PERSISTENCE_STORE.md)
 
----
+## Repository Layout
 
-## Running the App
+- `photo-export/` app source
+- `photo-exportTests/` unit tests
+- `photo-exportUITests/` UI tests
+- `website/` documentation website
+- `docs/` maintainer-facing notes, plans, and reference material
+- `scripts/` small development utilities
 
-From Xcode: open the project and run the `photo-export` scheme.
+## Contributing
 
-From CLI (launch after build):
+Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup, testing expectations, and documentation ownership.
 
-```bash
-open photo-export.xcodeproj
-```
+If you are changing user-visible behavior, update the relevant docs in both places:
 
-Then press Run in Xcode. Command-line launching of the built app is also possible after locating the `.app` in `DerivedData`, but running via Xcode is recommended for debugging and permissions prompts.
-
----
-
-## Development Workflow
-
-- Follow `SWIFT_SWIFTUI_BEST_PRACTICES.md` for architecture, concurrency, Photos framework usage, and error handling.
-- Keep view logic slim; move side-effects to managers and view models.
-- Log with `os.Logger`. Avoid `print` in production code.
-- Prefer `.task(id:)` for cancellation-aware loading.
-- Track exports by `PHAsset.localIdentifier` and avoid overwrites.
-
-### Linting (SwiftLint)
-- Install: `brew install swiftlint`
-- Run locally: `swiftlint` (from repo root)
-- CI runs SwiftLint with `--strict`. Config: `.swiftlint.yml`.
-
-### Formatting (swift-format)
-- Install: `brew install swift-format`
-- Check formatting: `swift-format lint --recursive photo-export`
-- Apply formatting: `swift-format format --recursive --in-place photo-export`
-- Config: `.swift-format.json`
-
-> Tip: You can add a Run Script Phase in Xcode to run SwiftLint if installed:
-> `if which swiftlint >/dev/null; then swiftlint; fi`
-
----
-
-## Troubleshooting
-
-- Code signing: set to Automatic; no special provisioning is needed for local development.
-- Photos access denied: update permissions in System Settings; ensure app handles denial gracefully.
-- UI tests and permissions: UI tests are currently skipped by default in the shared scheme.
-- Schemes: list available schemes if needed:
-
-```bash
-xcodebuild -list -project photo-export.xcodeproj
-```
-
----
+- the root README for repo-level guidance
+- `website/src/content/docs/` for user-facing documentation
 
 ## License
 
-This project is licensed under the MIT License. See `LICENSE` for details.
+Photo Export is released under the MIT License. See [`LICENSE`](LICENSE).

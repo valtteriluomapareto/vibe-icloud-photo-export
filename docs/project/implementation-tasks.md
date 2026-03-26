@@ -1,10 +1,10 @@
-# IMPLEMENTATION_TASKS.md
+# Implementation Tasks
 
 ## Apple Photos Backup App — Open Tasks (Grouped by Impact)
 
 This project is a macOS app for backing up the Apple Photos library to local/external storage, exporting assets into an organized folder hierarchy. The app uses **Swift** and **SwiftUI**, and targets the latest macOS versions.
 
-Completed tasks have been moved to `IMPLEMENTED_FEATURES.md`. Below are the remaining open tasks, grouped by how they affect the app.
+Completed tasks have been moved to `implemented-features.md`. Below are the remaining open tasks, grouped by how they affect the app.
 
 ---
 

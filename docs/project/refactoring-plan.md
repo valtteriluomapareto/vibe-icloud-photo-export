@@ -1,4 +1,4 @@
-# Photo Export — Refactoring Plan (v11)
+# Refactoring Plan
 
 ## Context
 

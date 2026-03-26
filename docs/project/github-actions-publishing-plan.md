@@ -1,4 +1,4 @@
-# GitHub Actions Publishing Plan For Photo Export
+# GitHub Actions Publishing Plan
 
 ## Status
 

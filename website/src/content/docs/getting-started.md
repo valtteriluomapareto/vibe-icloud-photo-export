@@ -3,12 +3,12 @@ title: Getting Started
 description: How to build and run Photo Export on your Mac.
 ---
 
-Photo Export is a native macOS app that backs up your Apple Photos library to local or external storage. It uses system frameworks only — no CocoaPods, no SwiftPM dependencies.
+Photo Export is a native macOS app that exports your Apple Photos library to local or external storage. The project currently targets people building from source with Xcode.
 
 ## Prerequisites
 
-- **macOS 15.0+** (latest stable release)
-- **Xcode 16.x** (includes `xcodebuild`)
+- **macOS 15.0+**
+- **Xcode 16.2+**
 
 Optional tools for development:
 
@@ -41,6 +41,7 @@ xcodebuild \
   -scheme "photo-export" \
   -configuration Debug \
   -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
   build
 ```
 
@@ -55,6 +56,7 @@ xcodebuild \
   -configuration Release \
   -destination 'platform=macOS' \
   -derivedDataPath build \
+  CODE_SIGNING_ALLOWED=NO \
   clean build
 
 # Launch the built app
@@ -74,6 +76,7 @@ xcodebuild \
   -project photo-export.xcodeproj \
   -scheme "photo-export" \
   -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
   test
 ```
 
@@ -85,5 +88,12 @@ xcodebuild \
   -scheme "photo-export" \
   -destination 'platform=macOS' \
   -only-testing:photo-exportTests/ExportRecordStoreTests \
+  CODE_SIGNING_ALLOWED=NO \
   test
 ```
+
+## Documentation and Contributing
+
+- Repository overview: [`README.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/README.md)
+- Contributor guide: [`CONTRIBUTING.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/CONTRIBUTING.md)
+- Maintainer notes: [`docs/README.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/docs/README.md)

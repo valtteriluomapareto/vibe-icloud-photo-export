@@ -1,4 +1,4 @@
-## Future Enhancements
+# Future Enhancements
 
 This document outlines potential improvements to evolve the Apple Photos backup/export app. Each item includes a short rationale to clarify the value.
 

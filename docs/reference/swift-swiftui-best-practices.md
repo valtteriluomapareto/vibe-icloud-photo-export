@@ -1,4 +1,4 @@
-# Swift and SwiftUI Best Practices — Photo Export (macOS)
+# Swift and SwiftUI Best Practices
 
 This guide distills proven Swift and SwiftUI patterns for building a robust, scalable Photos backup/export app on macOS. It is tailored to the current codebase (e.g., `ContentView`, `MonthView`, `PhotoLibraryManager`, `AssetMetadata`, `TestPhotoAccessView`).
 

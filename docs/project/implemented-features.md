@@ -1,8 +1,8 @@
-# IMPLEMENTED_FEATURES.md
+# Implemented Features
 
 ## Apple Photos Backup App — Implemented Features
 
-Below are the features that have been completed and verified as implemented. These were moved from `IMPLEMENTATION_TASKS.md` to keep the implementation list focused on open work.
+Below are the features that have been completed and verified as implemented. These were moved from `implementation-tasks.md` to keep the implementation list focused on open work.
 
 ---
 

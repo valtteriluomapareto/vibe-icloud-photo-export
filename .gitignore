@@ -1,5 +1,16 @@
+# macOS
+.DS_Store
+
+# Local tooling
+.claude/
+
+# Xcode and Swift build artifacts
 /build
+DerivedData/
 *.xcresult
+*.xcuserstate
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
 lcov.info
 
 # Website

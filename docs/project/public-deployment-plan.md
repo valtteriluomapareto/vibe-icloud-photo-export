@@ -1,4 +1,4 @@
-# Public Deployment Plan — Photo Export (macOS)
+# Public Deployment Plan
 
 This document describes the exact steps to ship the app publicly via direct download: a notarized Developer ID build hosted on your site or GitHub Releases. It includes update delivery with Sparkle, notarization commands, and required metadata.
 

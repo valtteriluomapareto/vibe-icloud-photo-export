@@ -198,7 +198,9 @@ struct AuthorizationView: View {
       .multilineTextAlignment(.center)
       .padding(.horizontal)
 
-      Button(action: { requestPermission() }) {
+      Button {
+        requestPermission()
+      } label: {
         Text("Grant Access")
           .fontWeight(.semibold)
           .foregroundColor(.white)

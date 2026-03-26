@@ -51,6 +51,10 @@ UI tests exist in `photo-exportUITests/` but are skipped by default in the share
 - **Roadmap** is maintained only on the website (`website/src/content/docs/roadmap.md`) — do not duplicate elsewhere.
 - When changing user-visible behavior, update both the root `README.md` and the relevant page under `website/src/content/docs/`.
 
+## Workflow
+
+- After completing a new feature or significant change, run `/codex-review` to get an AI code review before committing.
+
 ## Key Conventions
 
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.

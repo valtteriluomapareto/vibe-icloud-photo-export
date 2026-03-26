@@ -228,40 +228,31 @@ jobs:
           echo "::endgroup::"
 
       # ── Create DMG ────────────────────────────────────────────────────
+      - name: Install create-dmg
+        run: brew install create-dmg
+
       - name: Create DMG
         run: |
           echo "::group::DMG creation"
           DMG_NAME="PhotoExport-${{ steps.ctx.outputs.version }}-arm64.dmg"
           DMG_PATH="${RUNNER_TEMP}/${DMG_NAME}"
-          STAGING="${RUNNER_TEMP}/dmg-staging"
-
-          echo "Creating DMG staging directory..."
-          mkdir -p "${STAGING}"
-
-          echo "Copying app bundle to staging..."
-          cp -R "${APP_PATH}" "${STAGING}/"
-
-          echo "Creating /Applications symlink..."
-          ln -s /Applications "${STAGING}/Applications"
-
-          echo "Staging contents:"
-          ls -la "${STAGING}/"
 
           echo "Creating DMG: ${DMG_NAME}..."
-          hdiutil create \
-            -volname "${APP_NAME}" \
-            -srcfolder "${STAGING}" \
-            -ov \
-            -format UDZO \
-            "${DMG_PATH}"
+          create-dmg \
+            --volname "${APP_NAME}" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 160 \
+            --icon "${APP_NAME}.app" 180 170 \
+            --hide-extension "${APP_NAME}.app" \
+            --app-drop-link 480 170 \
+            --codesign "Developer ID Application" \
+            --keychain "${KEYCHAIN_PATH}" \
+            "${DMG_PATH}" \
+            "${APP_PATH}"
 
           echo "DMG created: ${DMG_PATH}"
           echo "DMG size: $(du -sh "${DMG_PATH}" | cut -f1)"
-
-          echo "Signing DMG..."
-          codesign --force --sign "Developer ID Application" \
-            --keychain "${KEYCHAIN_PATH}" \
-            "${DMG_PATH}"
 
           echo "Verifying DMG signature..."
           codesign --verify --verbose=2 "${DMG_PATH}"

@@ -127,16 +127,17 @@ const base = import.meta.env.BASE_URL;
 		<!-- Roadmap -->
 		<section class="section section-alt">
 			<div class="container">
-				<h2>Roadmap</h2>
+				<h2>Ideas for the future</h2>
 				<ul class="roadmap-list">
-					<li>Bounded concurrent export pipeline for faster throughput</li>
+					<li>Concurrent export pipeline for faster throughput</li>
 					<li>iCloud originals handling (download or skip remote-only assets)</li>
 					<li>Live Photos and paired asset support</li>
-					<li>Flexible naming schemes (configurable date/name formats)</li>
-					<li>SQLite migration for large libraries (10k+ assets)</li>
-					<li>Filter and search within the library browser</li>
+					<li>Retry failed exports without restarting the batch</li>
+					<li>Media filtering and search within the library browser</li>
+					<li>Flexible naming schemes beyond year/month</li>
 				</ul>
-				<p><a href={`${base}/roadmap`}>See the full roadmap &rarr;</a></p>
+				<p><a href={`${base}/roadmap`}>See all ideas &rarr;</a></p>
+				<p class="feedback-cta">Missing a feature? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">Open an issue on GitHub</a> and let us know what you need.</p>
 			</div>
 		</section>
 
@@ -154,6 +155,7 @@ const base = import.meta.env.BASE_URL;
 						View on GitHub
 					</a>
 				</div>
+				<p class="feedback-note">Found a bug or have feedback? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">We'd love to hear from you.</a></p>
 			</div>
 		</section>
 
@@ -306,6 +308,33 @@ const base = import.meta.env.BASE_URL;
 	.roadmap-list li {
 		margin-bottom: 0.5rem;
 		color: #444;
+	}
+
+	.feedback-cta {
+		text-align: center;
+		margin-top: 1.5rem;
+		color: #555;
+		font-size: 0.95rem;
+	}
+
+	.feedback-cta a {
+		color: #4a9eff;
+		text-decoration: none;
+		font-weight: 600;
+	}
+
+	.feedback-cta a:hover {
+		text-decoration: underline;
+	}
+
+	.feedback-note {
+		margin-top: 1rem;
+		font-size: 0.9rem;
+	}
+
+	.feedback-note a {
+		color: rgba(255, 255, 255, 0.9);
+		text-decoration: underline;
 	}
 
 	/* CTA */

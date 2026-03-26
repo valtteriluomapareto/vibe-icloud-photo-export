@@ -1,33 +1,36 @@
 ---
-title: Roadmap
-description: Planned improvements and future features for Photo Export.
+title: Ideas
+description: Ideas for future features and improvements.
 ---
 
-Photo Export is intentionally narrow today. The roadmap focuses on changes that improve reliability, scalability, and day-to-day usability without turning the app into a much larger product.
+Photo Export is intentionally focused. Below are ideas we're considering that would improve reliability, usability, and media support without turning the app into something larger than it needs to be. None of these are committed to a timeline.
 
-## Near-term priorities
+## Usability
 
-- **Retry failed exports** so users do not need to restart larger export runs for a handful of bad files
-- **Media filtering in the UI** for photos, videos, or both
-- **Manual refresh and change observation** so the library view stays current
-- **Accessibility and polish** across the onboarding flow, sidebar, and export controls
+- **Retry failed exports** — re-attempt individual failures without restarting the entire batch
+- **Media filtering** — filter the library view by photos, videos, or both
+- **Manual refresh and change observation** — keep the library view current when new photos arrive
+- **Search and filter** — find assets by name or date within the browser
+- **Accessibility and polish** — improve VoiceOver support and refine the onboarding flow
 
 ## Reliability and performance
 
-- **Bounded concurrent export queue** to increase throughput without overwhelming disk or memory
-- **Preflight destination checks** for permissions, mount status, and available space
-- **Stronger crash-resume semantics** for long-running export sessions
-- **Persistent month-level caching** for larger libraries
+- **Concurrent export queue** — export multiple assets in parallel for faster throughput
+- **Preflight destination checks** — verify permissions, mount status, and available space before starting
+- **Stronger crash-resume** — more resilient recovery for long-running export sessions
+- **Persistent month-level caching** — speed up sidebar loading for larger libraries
 
-## Photos and media support
+## Media support
 
-- **Live Photos support** with coherent image and video pairing
-- **iCloud originals handling** with clear download-or-skip behavior
-- **Improved metadata export options** including sidecars and privacy controls
+- **Live Photos** — export paired image and video components together
+- **iCloud originals** — detect remote-only assets and let users choose to download or skip
+- **Metadata sidecars** — optionally export metadata alongside media files
 
-## Longer-term exploration
+## Bigger ideas
 
-- **Flexible naming schemes** beyond the current year/month structure
-- **SQLite-backed export records** if JSONL storage becomes a bottleneck
-- **Multiple destinations** with per-destination state
-- **Localization** beyond the current English-first experience
+- **Flexible naming schemes** — configurable folder structures beyond year/month
+- **SQLite-backed records** — replace JSONL storage if it becomes a bottleneck at scale
+- **Multiple destinations** — export to more than one location with independent tracking
+- **Localization** — support languages beyond English
+
+Have an idea? [Open an issue on GitHub.](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues)

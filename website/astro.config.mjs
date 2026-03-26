@@ -22,7 +22,7 @@ export default defineConfig({
 				{ label: 'Getting Started', slug: 'getting-started' },
 				{ label: 'Features', slug: 'features' },
 				{ label: 'Architecture', slug: 'architecture' },
-				{ label: 'Roadmap', slug: 'roadmap' },
+				{ label: 'Ideas', slug: 'roadmap' },
 			],
 		}),
 	],

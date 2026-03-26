@@ -238,6 +238,8 @@ jobs:
           DMG_PATH="${RUNNER_TEMP}/${DMG_NAME}"
 
           echo "Creating DMG: ${DMG_NAME}..."
+          # create-dmg does not accept a --keychain flag; codesign resolves the
+          # identity from the user keychain search list configured earlier.
           create-dmg \
             --volname "${APP_NAME}" \
             --window-pos 200 120 \
@@ -247,7 +249,6 @@ jobs:
             --hide-extension "${APP_NAME}.app" \
             --app-drop-link 480 170 \
             --codesign "Developer ID Application" \
-            --keychain "${KEYCHAIN_PATH}" \
             "${DMG_PATH}" \
             "${APP_PATH}"
 

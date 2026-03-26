@@ -10,19 +10,16 @@ This repository keeps public-facing docs and maintainer-facing notes in separate
 
 ## Maintainer Notes
 
-- [`docs/project/implementation-tasks.md`](project/implementation-tasks.md): current open work
-- [`docs/project/implemented-features.md`](project/implemented-features.md): shipped capabilities snapshot
-- [`docs/project/future-enhancements.md`](project/future-enhancements.md): longer-term ideas
-- [`docs/project/public-deployment-plan.md`](project/public-deployment-plan.md): distribution and notarization planning
+- [`docs/project/implementation-tasks.md`](project/implementation-tasks.md): open work items
+- [`docs/project/release-process.md`](project/release-process.md): how to cut a release (version bump, tag, publish)
 - [`docs/project/github-actions-publishing-plan.md`](project/github-actions-publishing-plan.md): CI/release workflow planning
 - [`docs/project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md): backup import design notes
-- [`docs/project/refactoring-plan.md`](project/refactoring-plan.md): targeted cleanup history and rationale
-- [`docs/project/ui-overhaul-plan.md`](project/ui-overhaul-plan.md): UI overhaul implementation notes
+- [`docs/project/refactoring-plan.md`](project/refactoring-plan.md): refactoring decisions and remaining test infrastructure work
 
 ## Reference Material
 
 - [`docs/reference/swift-swiftui-best-practices.md`](reference/swift-swiftui-best-practices.md): architecture and implementation guidance
-- [`photo-export/Resources/PERSISTENCE_STORE.md`](../photo-export/Resources/PERSISTENCE_STORE.md): export record persistence format and behavior
+- [`docs/reference/persistence-store.md`](reference/persistence-store.md): export record persistence format and behavior
 - [`CLAUDE.md`](../CLAUDE.md): repository guidance for Claude Code
 
 ## Maintenance Rules
@@ -31,3 +28,4 @@ This repository keeps public-facing docs and maintainer-facing notes in separate
 - Keep user-facing instructions in one of the public documentation locations above.
 - Move obsolete planning material into `docs/project/` instead of leaving it in the repo root.
 - Update docs in the same change that alters behavior, setup, or contributor workflow.
+- Future enhancements and roadmap live on the [project website](../website/src/content/docs/roadmap.md) — do not duplicate here.

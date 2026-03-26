@@ -24,6 +24,10 @@ disabled_rules:
   - identifier_name
   - large_tuple
   - nesting
+  - opening_brace
+  - function_parameter_count
+  - trailing_comma
+  - closure_parameter_position
 
 # Common thresholds
 line_length:

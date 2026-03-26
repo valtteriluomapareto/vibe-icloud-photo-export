@@ -1,0 +1,123 @@
+---
+const base = import.meta.env.BASE_URL;
+---
+
+<section class="hero">
+	<div class="hero-content">
+		<h1>Photo Export</h1>
+		<p class="tagline">
+			Back up your Apple Photos library to local or external storage, organized by year and month.
+		</p>
+		<p class="subtitle">
+			A native macOS app built with SwiftUI. No cloud services, no subscriptions — your photos, your folders.
+		</p>
+		<div class="hero-actions">
+			<a href={`${base}getting-started`} class="btn btn-primary">Get Started</a>
+			<a
+				href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export"
+				class="btn btn-secondary"
+			>
+				View Source
+			</a>
+		</div>
+		<div class="badges">
+			<span class="badge">macOS 15+</span>
+			<span class="badge">SwiftUI</span>
+			<span class="badge">MIT License</span>
+			<span class="badge">No Dependencies</span>
+		</div>
+	</div>
+</section>
+
+<style>
+	.hero {
+		background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+		color: white;
+		padding: 6rem 2rem 5rem;
+		text-align: center;
+	}
+
+	.hero-content {
+		max-width: 48rem;
+		margin: 0 auto;
+	}
+
+	h1 {
+		font-size: 3.5rem;
+		font-weight: 800;
+		margin: 0 0 1rem;
+		letter-spacing: -0.02em;
+	}
+
+	.tagline {
+		font-size: 1.35rem;
+		opacity: 0.95;
+		margin: 0 0 0.75rem;
+		line-height: 1.5;
+	}
+
+	.subtitle {
+		font-size: 1.05rem;
+		opacity: 0.7;
+		margin: 0 0 2rem;
+	}
+
+	.hero-actions {
+		display: flex;
+		gap: 1rem;
+		justify-content: center;
+		margin-bottom: 2rem;
+		flex-wrap: wrap;
+	}
+
+	.btn {
+		display: inline-block;
+		padding: 0.75rem 2rem;
+		border-radius: 8px;
+		font-size: 1rem;
+		font-weight: 600;
+		text-decoration: none;
+		transition: transform 0.15s ease, box-shadow 0.15s ease;
+	}
+
+	.btn:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+	}
+
+	.btn-primary {
+		background: #4a9eff;
+		color: white;
+	}
+
+	.btn-secondary {
+		background: rgba(255, 255, 255, 0.12);
+		color: white;
+		border: 1px solid rgba(255, 255, 255, 0.25);
+	}
+
+	.badges {
+		display: flex;
+		gap: 0.5rem;
+		justify-content: center;
+		flex-wrap: wrap;
+	}
+
+	.badge {
+		background: rgba(255, 255, 255, 0.1);
+		border: 1px solid rgba(255, 255, 255, 0.2);
+		padding: 0.3rem 0.75rem;
+		border-radius: 100px;
+		font-size: 0.8rem;
+		opacity: 0.8;
+	}
+
+	@media (max-width: 640px) {
+		h1 {
+			font-size: 2.5rem;
+		}
+		.hero {
+			padding: 4rem 1.5rem 3rem;
+		}
+	}
+</style>

@@ -5,6 +5,10 @@ on:
     branches: [ main ]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: macos-15
@@ -12,36 +16,43 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode (best effort)
+      - name: Select Xcode
         run: |
-          set -e
-          if [ -d "/Applications/Xcode_16.2.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_16.2.app"
-          elif [ -d "/Applications/Xcode_16.0.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_16.0.app"
-          else
-            sudo xcode-select -s "/Applications/Xcode.app"
-          fi
+          echo "::group::Xcode selection"
+          echo "Selecting Xcode at /Applications/Xcode_16.2.app"
+          sudo xcode-select -s /Applications/Xcode_16.2.app
+          echo "Active Xcode path: $(xcode-select -p)"
           xcodebuild -version
+          echo "Available SDKs:"
+          xcodebuild -showsdks 2>/dev/null | grep macosx
+          echo "::endgroup::"
 
       - name: Install SwiftLint and swift-format
         run: |
-          brew update
-          brew install swiftlint swift-format || true
-          swiftlint version || true
-          swift-format --version || true
+          echo "::group::Tool installation"
+          echo "Installing swiftlint and swift-format via Homebrew..."
+          brew install swiftlint swift-format
+          echo "SwiftLint version: $(swiftlint version)"
+          echo "swift-format version: $(swift-format --version)"
+          echo "::endgroup::"
 
       - name: SwiftLint
         run: |
-          swiftlint --strict || true
+          echo "Running SwiftLint in strict mode..."
+          echo "Config: $(cat .swiftlint.yml | head -5)"
+          swiftlint --strict
+          echo "SwiftLint passed."
 
       - name: SwiftFormat (check)
         run: |
-          # Check formatting (non-destructive). Use --in-place locally.
-          swift-format lint --recursive photo-export || true
+          echo "Running swift-format lint on photo-export/..."
+          swift-format lint --recursive photo-export
+          echo "swift-format lint passed."
 
       - name: Build Debug
         run: |
+          echo "::group::Debug build"
+          echo "Building Debug configuration (CODE_SIGNING_ALLOWED=NO)..."
           set -o pipefail
           xcodebuild \
             -project photo-export.xcodeproj \
@@ -49,10 +60,14 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build 2>&1 | tail -20
+          echo "Debug build succeeded."
+          echo "::endgroup::"
 
       - name: Run Unit Tests (Debug, with coverage)
         run: |
+          echo "::group::Unit tests"
+          echo "Running unit tests with code coverage enabled..."
           set -o pipefail
           xcodebuild \
             -project photo-export.xcodeproj \
@@ -61,10 +76,23 @@ jobs:
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            test
+            test 2>&1 | tail -30
+          echo "Unit tests passed."
+          echo "Result bundle: $(du -sh TestResults.xcresult)"
+          echo "::endgroup::"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults
+          path: TestResults.xcresult
 
       - name: Convert coverage to LCOV
-        run: ./scripts/xccov2lcov.sh TestResults.xcresult lcov.info
+        run: |
+          echo "Converting .xcresult to LCOV format..."
+          ./scripts/xccov2lcov.sh TestResults.xcresult lcov.info
+          echo "LCOV file size: $(wc -l < lcov.info) lines"
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
@@ -74,6 +102,8 @@ jobs:
 
       - name: Build Release
         run: |
+          echo "::group::Release build"
+          echo "Building Release configuration (CODE_SIGNING_ALLOWED=NO)..."
           set -o pipefail
           xcodebuild \
             -project photo-export.xcodeproj \
@@ -81,4 +111,6 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build 2>&1 | tail -20
+          echo "Release build succeeded."
+          echo "::endgroup::"

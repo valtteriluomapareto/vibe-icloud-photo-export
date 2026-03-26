@@ -51,6 +51,8 @@ final class ExportDestinationManager: ObservableObject {
 
   // MARK: - Public Computed
   var canExportNow: Bool { selectedFolderURL != nil && isAvailable && isWritable }
+  /// Import only reads the backup folder — it does not require write access.
+  var canImportNow: Bool { selectedFolderURL != nil && isAvailable }
 
   // MARK: - Lifecycle
   init() {

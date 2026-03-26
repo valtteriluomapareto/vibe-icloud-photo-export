@@ -29,6 +29,9 @@ struct ContentView: View {
   // Detail selection
   @State private var selectedAsset: PHAsset?
 
+  // Import sheet
+  @State private var isShowingImportSheet: Bool = false
+
   var body: some View {
     Group {
       if photoLibraryManager.isAuthorized && !hasCompletedOnboarding {
@@ -95,7 +98,14 @@ struct ContentView: View {
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           })
         .toolbar {
-          ExportToolbarView()
+          ExportToolbarView {
+            isShowingImportSheet = true
+            exportManager.startImport()
+          }
+        }
+        .sheet(isPresented: $isShowingImportSheet) {
+          ImportView()
+            .environmentObject(exportManager)
         }
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)

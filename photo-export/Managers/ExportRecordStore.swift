@@ -204,6 +204,23 @@ final class ExportRecordStore: ObservableObject {
       status: status)
   }
 
+  // MARK: - Bulk import (for backup import)
+
+  /// Imports a batch of export records at once, used by the "Import Existing Backup" feature.
+  /// Each record should have status `.done`. Existing records for the same asset ID are skipped.
+  func bulkImportRecords(_ records: [ExportRecord]) {
+    var importedCount = 0
+    for record in records {
+      // Skip if we already have a .done record for this asset
+      if let existing = recordsById[record.id], existing.status == .done {
+        continue
+      }
+      append(.upsert(record))
+      importedCount += 1
+    }
+    logger.info("Bulk imported \(importedCount) records (skipped \(records.count - importedCount))")
+  }
+
   // MARK: - Internals
   private func append(_ mutation: ExportRecordMutation) {
     apply(mutation)

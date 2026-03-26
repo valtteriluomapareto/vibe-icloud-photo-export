@@ -58,6 +58,5 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 ## Current boundaries
 
 - macOS only (15.0+)
-- Build from source; direct-download releases are still evolving
 - Export folder structure is fixed to year/month hierarchy
 - Exports run sequentially (one asset at a time)

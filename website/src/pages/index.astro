@@ -111,14 +111,13 @@ const base = import.meta.env.BASE_URL;
 			<div class="container">
 				<h2>Installation</h2>
 				<div class="install-steps">
-					<h3>Build from source</h3>
 					<ol>
-						<li>Clone the repository: <code>git clone https://github.com/valtteriluomapareto/vibe-icloud-photo-export.git</code></li>
-						<li>Open <code>photo-export.xcodeproj</code> in Xcode 16.2+</li>
-						<li>Build and run the <code>photo-export</code> scheme</li>
+						<li>Download the latest <code>.dmg</code> from <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases">GitHub Releases</a></li>
+						<li>Open the DMG and drag Photo Export to your Applications folder</li>
+						<li>Launch the app and grant Photos library access when prompted</li>
 					</ol>
 					<div class="requirements">
-						<strong>Requirements:</strong> macOS 15.0+, Xcode 16.2+. No external dependencies — uses system frameworks only.
+						<strong>Requirements:</strong> macOS 15.0+. Signed and notarized by Apple.
 					</div>
 				</div>
 			</div>
@@ -145,9 +144,10 @@ const base = import.meta.env.BASE_URL;
 		<section class="section cta-section">
 			<div class="container">
 				<h2>Get started</h2>
-				<p>Photo Export is free and open source. Clone the repo, build, and start backing up your photos today.</p>
+				<p>Photo Export is free and open source. Download the app, grant Photos access, and start backing up your library today.</p>
 				<div class="cta-actions">
-					<a href={`${base}/getting-started`} class="btn btn-primary">Read the docs</a>
+					<a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases" class="btn btn-primary">Download</a>
+					<a href={`${base}/getting-started`} class="btn btn-secondary">Read the docs</a>
 					<a
 						href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export"
 						class="btn btn-secondary"

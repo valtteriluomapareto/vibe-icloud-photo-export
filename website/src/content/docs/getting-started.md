@@ -1,67 +1,17 @@
 ---
 title: Getting Started
-description: How to build and run Photo Export on your Mac.
+description: How to install and use Photo Export on your Mac.
 ---
 
-Photo Export is a native macOS app that exports your Apple Photos library to local or external storage. The project currently targets people building from source with Xcode.
+Photo Export is a native macOS app that exports your Apple Photos library to local or external storage, organized by year and month.
 
-## Prerequisites
+## Download
 
-- **macOS 15.0+**
-- **Xcode 16.2+**
+Download the latest DMG from the [GitHub Releases page](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases). Open the DMG and drag Photo Export to your Applications folder.
 
-Optional tools for development:
+**Requirements:** macOS 15.0+
 
-- [SwiftLint](https://github.com/realm/SwiftLint) — `brew install swiftlint`
-- [swift-format](https://github.com/swiftlang/swift-format) — `brew install swift-format`
-- [xcpretty](https://github.com/xcpretty/xcpretty) — `gem install xcpretty`
-
-## Build from source
-
-Clone the repository and build with Xcode:
-
-```bash
-git clone https://github.com/valtteriluomapareto/vibe-icloud-photo-export.git
-cd vibe-icloud-photo-export
-```
-
-**Option A: Open in Xcode**
-
-```bash
-open photo-export.xcodeproj
-```
-
-Then press Run (Cmd+R) with the `photo-export` scheme selected.
-
-**Option B: Build from the command line**
-
-```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -configuration Debug \
-  -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO \
-  build
-```
-
-### Standalone Release build
-
-To build a runnable `.app` bundle outside of Xcode:
-
-```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -configuration Release \
-  -destination 'platform=macOS' \
-  -derivedDataPath build \
-  CODE_SIGNING_ALLOWED=NO \
-  clean build
-
-# Launch the built app
-open build/Build/Products/Release/photo-export.app
-```
+The app is signed and notarized by Apple, so it will open without Gatekeeper warnings.
 
 ## First launch
 
@@ -97,31 +47,16 @@ Export progress is shown in the toolbar. You can pause, resume, or cancel at any
 - **"Export folder is read-only"** — Right-click the folder, choose Get Info, and make sure you have write permission.
 - **Photos permission denied** — Open **System Settings → Privacy & Security → Photos** and enable access for Photo Export.
 
-## Running tests
+## Build from source
+
+If you prefer to build from source or want to contribute:
 
 ```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO \
-  test
+git clone https://github.com/valtteriluomapareto/vibe-icloud-photo-export.git
+cd vibe-icloud-photo-export
+open photo-export.xcodeproj
 ```
 
-Run a single test class:
+Press Run (Cmd+R) with the `photo-export` scheme selected. Requires Xcode 16.2+.
 
-```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -destination 'platform=macOS' \
-  -only-testing:photo-exportTests/ExportRecordStoreTests \
-  CODE_SIGNING_ALLOWED=NO \
-  test
-```
-
-## Documentation and Contributing
-
-- Repository overview: [`README.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/README.md)
-- Contributor guide: [`CONTRIBUTING.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/CONTRIBUTING.md)
-- Maintainer notes: [`docs/README.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/docs/README.md)
+See the [Contributing guide](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/CONTRIBUTING.md) for more details on development setup, running tests, and linting.

@@ -189,6 +189,13 @@ final class ExportRecordStore: ObservableObject {
     recordsById[assetId]
   }
 
+  /// Total number of exported assets across all months of a given year.
+  func yearExportedCount(year: Int) -> Int {
+    (1...12).reduce(0) { sum, month in
+      sum + (doneCountByYearMonth[ymKey(year: year, month: month)] ?? 0)
+    }
+  }
+
   func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
     let exportedCount = doneCountByYearMonth[ymKey(year: year, month: month)] ?? 0
     let status: MonthExportStatus

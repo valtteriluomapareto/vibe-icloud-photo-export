@@ -4,9 +4,6 @@ struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
-  /// Called when the user taps "Import Existing Backup…"
-  var onImport: () -> Void
-
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
       destinationIndicator
@@ -60,19 +57,6 @@ struct ExportToolbarView: ToolbarContent {
 
   private var primaryActions: some View {
     HStack(spacing: 8) {
-      Button("Import Existing Backup\u{2026}") {
-        onImport()
-      }
-      .disabled(
-        !exportDestinationManager.canImportNow || exportManager.hasActiveExportWork
-          || exportManager.isImporting
-      )
-      .help(
-        exportManager.hasActiveExportWork
-          ? "Cancel the current export before importing"
-          : "Scan backup folder and rebuild export state"
-      )
-
       Button("Export All") {
         exportManager.startExportAll()
       }

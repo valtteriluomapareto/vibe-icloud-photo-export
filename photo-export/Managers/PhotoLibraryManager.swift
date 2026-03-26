@@ -199,9 +199,46 @@ final class PhotoLibraryManager: ObservableObject {
     let endYear = calendar.component(.year, from: lastDate)
     guard startYear <= endYear else { return [] }
 
-    // Build descending list
-    return Array(stride(from: endYear, through: startYear, by: -1))
-      .filter { (try? self.countAssets(year: $0)) ?? 0 > 0 }
+    // Build descending list, keeping the per-year counts
+    var yearCounts: [(year: Int, count: Int)] = []
+    for year in stride(from: endYear, through: startYear, by: -1) {
+      let c = (try? self.countAssets(year: year)) ?? 0
+      if c > 0 {
+        yearCounts.append((year, c))
+      }
+    }
+    return yearCounts.map(\.year)
+  }
+
+  /// Returns descending list of years with at least one asset, together with per-year asset counts.
+  func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+
+    let opts = PHFetchOptions()
+    opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+    let result = PHAsset.fetchAssets(with: opts)
+    let count = result.count
+    guard count > 0 else { return [] }
+
+    guard let firstDate = result.object(at: 0).creationDate,
+      let lastDate = result.object(at: count - 1).creationDate
+    else {
+      return []
+    }
+
+    let calendar = Calendar.current
+    let startYear = calendar.component(.year, from: firstDate)
+    let endYear = calendar.component(.year, from: lastDate)
+    guard startYear <= endYear else { return [] }
+
+    var yearCounts: [(year: Int, count: Int)] = []
+    for year in stride(from: endYear, through: startYear, by: -1) {
+      let c = (try? self.countAssets(year: year)) ?? 0
+      if c > 0 {
+        yearCounts.append((year, c))
+      }
+    }
+    return yearCounts
   }
 
   /// Start caching thumbnails for assets

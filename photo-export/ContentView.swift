@@ -22,6 +22,7 @@ struct ContentView: View {
   @State private var expandedYears: Set<Int> = []
   @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
   @State private var assetCountsByYearMonth: [String: Int] = [:]
+  @State private var assetCountsByYear: [Int: Int] = [:]
 
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -72,7 +73,7 @@ struct ContentView: View {
                       .tag(YearMonth(year: year, month: month))
                     }
                   } label: {
-                    Text(verbatim: String(year))
+                    YearRow(year: year, totalAssets: assetCountsByYear[year] ?? 0)
                   }
                 }
               }
@@ -104,10 +105,7 @@ struct ContentView: View {
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           })
         .toolbar {
-          ExportToolbarView {
-            isShowingImportSheet = true
-            exportManager.startImport()
-          }
+          ExportToolbarView()
         }
         .sheet(isPresented: $isShowingImportSheet) {
           ImportView()
@@ -127,7 +125,7 @@ struct ContentView: View {
         }
       }
       if photoLibraryManager.isAuthorized {
-        years = (try? photoLibraryManager.availableYears()) ?? []
+        loadYears()
         if let selected = selectedYearMonth {
           expandedYears.insert(selected.year)
           monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(
@@ -137,7 +135,7 @@ struct ContentView: View {
     }
     .onChange(of: photoLibraryManager.isAuthorized) { _, new in
       if new {
-        years = (try? photoLibraryManager.availableYears()) ?? []
+        loadYears()
         if let selected = selectedYearMonth {
           expandedYears.insert(selected.year)
           monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(
@@ -147,6 +145,7 @@ struct ContentView: View {
         years = []
         expandedYears.removeAll()
         monthsWithAssetsByYear.removeAll()
+        assetCountsByYear.removeAll()
       }
     }
     .onChange(of: expandedYears) { _, _ in
@@ -171,6 +170,14 @@ struct ContentView: View {
     let year: Int
     let month: Int
     var id: String { "\(year)-\(month)" }
+  }
+
+  private func loadYears() {
+    let yearCounts = (try? photoLibraryManager.availableYearsWithCounts()) ?? []
+    years = yearCounts.map(\.year)
+    for (year, count) in yearCounts {
+      assetCountsByYear[year] = count
+    }
   }
 
   private func computeMonthsWithAssets(for year: Int) -> [Int] {
@@ -253,6 +260,34 @@ struct AuthorizationView: View {
     Task {
       _ = await photoLibraryManager.requestAuthorization()
       isRequestingAuthorization = false
+    }
+  }
+}
+
+struct YearRow: View {
+  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+
+  let year: Int
+  let totalAssets: Int
+
+  var body: some View {
+    let exported = exportRecordStore.yearExportedCount(year: year)
+    let total = totalAssets
+    HStack(spacing: 8) {
+      Text(verbatim: String(year))
+      Spacer()
+      if total > 0 && exported > 0 {
+        if exported >= total {
+          Image(systemName: "checkmark.seal.fill")
+            .foregroundColor(.green)
+            .font(.caption)
+        } else {
+          let pct = Int(Double(exported) / Double(total) * 100)
+          Text("\(pct)%")
+            .foregroundColor(.orange)
+            .font(.caption)
+        }
+      }
     }
   }
 }

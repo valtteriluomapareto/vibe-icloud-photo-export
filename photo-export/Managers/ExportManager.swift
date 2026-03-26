@@ -12,13 +12,23 @@ final class ExportManager: ObservableObject {
     let month: Int
   }
 
-  // MARK: - Published State
+  // MARK: - Published State (Export)
   @Published private(set) var isRunning: Bool = false
   @Published private(set) var queueCount: Int = 0
   @Published private(set) var isPaused: Bool = false
   @Published private(set) var totalJobsEnqueued: Int = 0
   @Published private(set) var totalJobsCompleted: Int = 0
   @Published private(set) var currentAssetFilename: String?
+
+  // MARK: - Published State (Import)
+  @Published private(set) var isImporting: Bool = false
+  @Published private(set) var importStage: BackupScanner.ImportStage?
+  @Published var importResult: ImportReport?
+
+  /// Whether the export queue is active (has pending/in-flight work).
+  var hasActiveExportWork: Bool {
+    isRunning || queueCount > 0 || isEnqueueingAll
+  }
 
   // MARK: - Dependencies
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
@@ -34,6 +44,7 @@ final class ExportManager: ObservableObject {
   private var generation: Int = 0
   private var isEnqueueingAll: Bool = false
   private var queuedCountsByYearMonth: [String: Int] = [:]
+  private var importTask: Task<Void, Never>?
 
   init(
     photoLibraryManager: PhotoLibraryManager,
@@ -453,4 +464,165 @@ final class ExportManager: ObservableObject {
       }
     }
   }
+
+  // MARK: - Import Existing Backup
+
+  /// Starts the "Import Existing Backup…" flow.
+  /// Scans the current export destination for YYYY/MM/ files, matches them
+  /// against the Photos library, and rebuilds local export records.
+  func startImport() {
+    guard !isImporting else { return }
+    guard !hasActiveExportWork else {
+      logger.warning("Cannot import while export is active")
+      return
+    }
+    guard let rootURL = exportDestinationManager.selectedFolderURL else {
+      logger.warning("Cannot import: no destination selected")
+      return
+    }
+
+    isImporting = true
+    importStage = .scanningBackupFolder
+    importResult = nil
+
+    let importGen = generation
+
+    importTask = Task { [weak self] in
+      guard let self else { return }
+
+      do {
+        // Acquire security-scoped access for the scan
+        guard let scopedURL = self.exportDestinationManager.beginScopedAccess() else {
+          self.logger.error("Failed to acquire security-scoped access for import")
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+        defer { self.exportDestinationManager.endScopedAccess(for: scopedURL) }
+
+        // Stage 1: Scan backup folder
+        self.importStage = .scanningBackupFolder
+        try Task.checkCancellation()
+        let scannedFiles = await Task.detached {
+          BackupScanner.scanBackupFolder(at: rootURL)
+        }.value
+
+        try Task.checkCancellation()
+        guard self.generation == importGen else {
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+
+        if scannedFiles.isEmpty {
+          self.importResult = ImportReport(
+            matchedCount: 0, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 0)
+          self.importStage = .done
+          self.isImporting = false
+          return
+        }
+
+        // Stage 2 & 3: Read Photos library and match
+        self.importStage = .readingPhotosLibrary
+        let matchResult = try await BackupScanner.matchFiles(
+          scannedFiles,
+          photoLibraryManager: self.photoLibraryManager
+        ) { [weak self] stage in
+          self?.importStage = stage
+        }
+
+        try Task.checkCancellation()
+        guard self.generation == importGen else {
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+
+        // Stage 4: Rebuild local state
+        self.importStage = .rebuildingLocalState
+
+        let now = Date()
+        let calendar = Calendar.current
+        var records: [ExportRecord] = []
+        records.reserveCapacity(matchResult.matched.count)
+
+        for (file, asset) in matchResult.matched {
+          let year: Int
+          let month: Int
+          if let creationDate = asset.creationDate {
+            year = calendar.component(.year, from: creationDate)
+            month = calendar.component(.month, from: creationDate)
+          } else {
+            year = file.year
+            month = file.month
+          }
+          let relPath = "\(year)/" + String(format: "%02d", month) + "/"
+
+          let record = ExportRecord(
+            id: asset.localIdentifier,
+            year: year,
+            month: month,
+            relPath: relPath,
+            filename: file.filename,
+            status: .done,
+            exportDate: now,
+            lastError: nil
+          )
+          records.append(record)
+        }
+
+        self.exportRecordStore.bulkImportRecords(records)
+
+        guard self.generation == importGen else {
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+
+        // Build report
+        self.importResult = ImportReport(
+          matchedCount: matchResult.matched.count,
+          ambiguousCount: matchResult.ambiguous.count,
+          unmatchedCount: matchResult.unmatched.count,
+          totalScanned: scannedFiles.count
+        )
+
+        self.importStage = .done
+        self.isImporting = false
+
+        self.logger.info(
+          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned"
+        )
+      } catch is CancellationError {
+        self.logger.info("Import task cancelled")
+        self.isImporting = false
+        self.importStage = nil
+      } catch {
+        self.logger.error(
+          "Import failed: \(error.localizedDescription, privacy: .public)")
+        self.isImporting = false
+        self.importStage = nil
+      }
+    }
+  }
+
+  /// Cancels an in-progress import.
+  func cancelImport() {
+    guard isImporting else { return }
+    importTask?.cancel()
+    importTask = nil
+    generation += 1
+    isImporting = false
+    importStage = nil
+    importResult = nil
+    logger.info("Import cancelled")
+  }
+}
+
+/// Summary report shown after the import completes.
+struct ImportReport: Equatable {
+  let matchedCount: Int
+  let ambiguousCount: Int
+  let unmatchedCount: Int
+  let totalScanned: Int
 }

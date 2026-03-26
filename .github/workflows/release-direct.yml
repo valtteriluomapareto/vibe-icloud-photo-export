@@ -290,7 +290,7 @@ jobs:
 
           echo ""
           echo "Running spctl assessment on DMG..."
-          spctl --assess --type open --context context:primary-signature --verbose=2 "${DMG_PATH}" || true
+          spctl --assess --type open --context context:primary-signature --verbose=2 "${DMG_PATH}"
 
           echo ""
           echo "Mounting DMG to verify app inside..."
@@ -300,7 +300,7 @@ jobs:
           ls -la "${MOUNT_POINT}/"
 
           echo "Running spctl assessment on app bundle..."
-          spctl --assess --type execute --verbose=2 "${MOUNT_POINT}/${APP_NAME}.app" || true
+          spctl --assess --type execute --verbose=2 "${MOUNT_POINT}/${APP_NAME}.app"
 
           echo "Detaching DMG..."
           hdiutil detach "${MOUNT_POINT}"

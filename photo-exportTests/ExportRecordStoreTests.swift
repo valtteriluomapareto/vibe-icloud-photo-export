@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import photo_export
+@testable import Photo_Export
 
 @MainActor
 struct ExportRecordStoreTests {

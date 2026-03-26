@@ -69,7 +69,7 @@ The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 
 ## Persistence
 
-The export record store keeps per-destination state under Application Support. A detailed format description lives in [`PERSISTENCE_STORE.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/photo-export/Resources/PERSISTENCE_STORE.md).
+The export record store keeps per-destination state under Application Support. A detailed format description lives in [`persistence-store.md`](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/docs/reference/persistence-store.md).
 
 ## Project Conventions
 

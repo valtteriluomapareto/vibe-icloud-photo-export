@@ -1,6 +1,6 @@
 # Swift and SwiftUI Best Practices
 
-This guide distills proven Swift and SwiftUI patterns for building a robust, scalable Photos backup/export app on macOS. It is tailored to the current codebase (e.g., `ContentView`, `MonthView`, `PhotoLibraryManager`, `AssetMetadata`, `TestPhotoAccessView`).
+This guide distills proven Swift and SwiftUI patterns for building a robust, scalable Photos backup/export app on macOS.
 
 Use this document as a checklist when writing code or reviewing PRs.
 
@@ -103,17 +103,7 @@ enum Formatters {
 
 ---
 
-## 6) ViewModel Recommendation for `MonthView`
-
-- Move fetching and image requests out of the view into a `MonthViewModel`:
-  - Inputs: `year`, `month`.
-  - Outputs: `assets`, `thumbnailsById`, `selectedAsset`, `selectedImage`, `isLoading`, `error`.
-  - Methods: `load()`, `select(asset:)` (cancels prior image request), `preheatThumbnails(for:)`.
-- Mark the ViewModel `@MainActor` and let it perform state mutations safely without `DispatchQueue.main.async`.
-
----
-
-## 7) Error Handling & User Messaging
+## 6) Error Handling & User Messaging
 
 - Create domain errors conforming to `LocalizedError` for user-friendly messages. Avoid surfacing raw system errors to the UI.
 - Centralize error presentation (e.g., `AlertState` or a small `ErrorBanner` component). Keep messages actionable.
@@ -121,7 +111,7 @@ enum Formatters {
 
 ---
 
-## 8) Logging & Instrumentation
+## 7) Logging & Instrumentation
 
 - Use Unified Logging (`os.Logger`) instead of `print`:
 ```swift
@@ -134,7 +124,7 @@ logger.error("Export failed: \(error.localizedDescription)")
 
 ---
 
-## 9) Performance & Memory
+## 8) Performance & Memory
 
 - Keep batches small and yield with `try await Task.sleep(nanoseconds: ...)` as you do; prefer cooperative cancellation checks (`Task.checkCancellation()`).
 - Cache thumbnails and reuse across views; clear when memory pressure occurs or when leaving the screen.
@@ -144,7 +134,7 @@ logger.error("Export failed: \(error.localizedDescription)")
 
 ---
 
-## 10) Code Style & API Design
+## 9) Code Style & API Design
 
 - Naming:
   - Functions are verbs, variables are nouns. Avoid abbreviations.
@@ -158,14 +148,14 @@ logger.error("Export failed: \(error.localizedDescription)")
 
 ---
 
-## 11) Photos Change Handling
+## 10) Photos Change Handling
 
 - Adopt `PHPhotoLibraryChangeObserver` to refresh lists when the library changes while the app is open.
 - Reconcile selected asset if it was deleted; fall back gracefully.
 
 ---
 
-## 12) Testing Matrix (Must-Haves)
+## 11) Testing Matrix (Must-Haves)
 
 - Authorization flows: first run, denied, restricted, limited, revoked mid-session.
 - Libraries: very small, large (10k–100k+), and iCloud-optimized with missing originals.
@@ -176,35 +166,7 @@ logger.error("Export failed: \(error.localizedDescription)")
 
 ---
 
-## 13) Concrete Follow-ups for Current Codebase
-
-- `ContentView.swift`
-  - Migrate to `NavigationSplitView` for a proper sidebar + detail layout on macOS.
-  - Extract `MonthView` to `Views/MonthView.swift`. Keep files focused.
-  - Replace `onAppear` + multiple `onChange` with `.task(id: (year, month))` in the month screen.
-  - Cache `DateFormatter` for month names instead of creating a new one per call.
-
-- `MonthView`
-  - Move logic to `MonthViewModel` (`@MainActor`), including loading, selection, thumbnail preheating, and error mapping.
-  - Cancel previous `requestFullImage` when selection changes.
-  - Adopt `PHCachingImageManager` for `thumbnails` and preheat around visible indices.
-  - Replace `DispatchQueue.main.async` with `await MainActor.run` or main-actor-isolated properties.
-
-- `PhotoLibraryManager`
-  - Mark as `final`. Add a protocol to enable mocking in tests.
-  - Remove unnecessary casts in fetch loops.
-  - Consider a dedicated `ImageRequesting` component that wraps `PHCachingImageManager` and `PHImageManager` interactions.
-  - Define error cases conforming to `LocalizedError` for UI messages.
-
-- `AssetMetadata`
-  - Keep as a `struct`. Consider adding a lightweight initializer from `PHAsset` and exposing only UI-needed fields to views.
-
-- Logging
-  - Replace `print`/`WARNING` with `os.Logger` and add categories: `Auth`, `Fetch`, `Thumbs`, `Export`.
-
----
-
-## 14) Example: Main-Actor-safe state updates
+## 12) Example: Main-Actor-safe state updates
 
 ```swift
 @MainActor
@@ -255,7 +217,7 @@ final class MonthViewModel: ObservableObject {
 
 ---
 
-## 15) References
+## 13) References
 
 - Photos framework programming guide
 - Apple Human Interface Guidelines (macOS)

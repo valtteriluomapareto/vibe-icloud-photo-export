@@ -44,5 +44,58 @@ struct PhotoExportApp: App {
           exportRecordStore.configure(for: newId)
         }
     }
+    .commands {
+      CommandGroup(replacing: .appInfo) {
+        AboutCommand()
+      }
+      CommandGroup(after: .importExport) {
+        ImportBackupCommand()
+      }
+    }
+
+    Window("About Photo Export", id: "about") {
+      AboutView()
+    }
+    .windowResizability(.contentSize)
+    .windowStyle(.hiddenTitleBar)
+  }
+}
+
+private struct AboutCommand: View {
+  @Environment(\.openWindow) private var openWindow
+
+  var body: some View {
+    Button("About Photo Export") {
+      openWindow(id: "about")
+    }
+  }
+}
+
+// MARK: - Import Backup Command
+
+struct ImportBackupAction {
+  let callAsFunction: () -> Void
+}
+
+struct ImportBackupActionKey: FocusedValueKey {
+  typealias Value = ImportBackupAction
+}
+
+extension FocusedValues {
+  var importBackupAction: ImportBackupAction? {
+    get { self[ImportBackupActionKey.self] }
+    set { self[ImportBackupActionKey.self] = newValue }
+  }
+}
+
+private struct ImportBackupCommand: View {
+  @FocusedValue(\.importBackupAction) private var importAction
+
+  var body: some View {
+    Button("Import Existing Backup\u{2026}") {
+      importAction?.callAsFunction()
+    }
+    .keyboardShortcut("i", modifiers: [.command, .shift])
+    .disabled(importAction == nil)
   }
 }

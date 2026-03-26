@@ -32,6 +32,12 @@ struct ContentView: View {
   // Import sheet
   @State private var isShowingImportSheet: Bool = false
 
+  private var canImport: Bool {
+    hasCompletedOnboarding && photoLibraryManager.isAuthorized
+      && exportDestinationManager.canImportNow && !exportManager.hasActiveExportWork
+      && !exportManager.isImporting
+  }
+
   var body: some View {
     Group {
       if photoLibraryManager.isAuthorized && !hasCompletedOnboarding {
@@ -153,6 +159,10 @@ struct ContentView: View {
       // Clear asset selection when month changes
       selectedAsset = nil
     }
+    .focusedSceneValue(\.importBackupAction, canImport ? ImportBackupAction {
+      isShowingImportSheet = true
+      exportManager.startImport()
+    } : nil)
     .frame(minWidth: 900, minHeight: 600)
     .background(Color(.windowBackgroundColor))
   }

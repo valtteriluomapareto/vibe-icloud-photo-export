@@ -43,6 +43,14 @@ UI tests exist in `photo-exportUITests/` but are skipped by default in the share
 
 **ViewModels:** `MonthViewModel` manages asset loading for a selected month.
 
+## Documentation
+
+- **User-facing docs** live in `website/src/content/docs/` (Astro + Starlight site). Run with `cd website && npm install && npm run dev`.
+- **Maintainer notes and plans** live in `docs/project/`. The index is `docs/README.md`.
+- **Reference material** (best practices, persistence format) lives in `docs/reference/`.
+- **Roadmap** is maintained only on the website (`website/src/content/docs/roadmap.md`) — do not duplicate elsewhere.
+- When changing user-visible behavior, update both the root `README.md` and the relevant page under `website/src/content/docs/`.
+
 ## Key Conventions
 
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.

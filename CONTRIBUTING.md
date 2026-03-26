@@ -68,7 +68,7 @@ npm run dev
 Reference material:
 
 - Architecture and style notes: [`docs/reference/swift-swiftui-best-practices.md`](docs/reference/swift-swiftui-best-practices.md)
-- Persistence details: [`photo-export/Resources/PERSISTENCE_STORE.md`](photo-export/Resources/PERSISTENCE_STORE.md)
+- Persistence details: [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
 
 ## Documentation Ownership
 

@@ -81,7 +81,7 @@ xcodebuild \
 - User docs: [`website/src/content/docs/`](website/src/content/docs/)
 - Contributor guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - Maintainer notes and plans: [`docs/README.md`](docs/README.md)
-- Persistence store reference: [`photo-export/Resources/PERSISTENCE_STORE.md`](photo-export/Resources/PERSISTENCE_STORE.md)
+- Persistence store reference: [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
 
 ## Repository Layout
 

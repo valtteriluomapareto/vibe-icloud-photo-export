@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       dry_run:
@@ -47,9 +49,11 @@ jobs:
             VERSION="${GITHUB_REF#refs/tags/v}"
             IS_DRY_RUN="false"
             echo "Tag push detected: v${VERSION}"
-          else
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             IS_DRY_RUN="${{ github.event.inputs.dry_run }}"
             echo "workflow_dispatch detected (dry_run=${IS_DRY_RUN})"
+          else
+            echo "Branch push detected — dry run"
           fi
 
           echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"

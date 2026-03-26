@@ -1,6 +1,6 @@
 import Photos
 import Testing
-@testable import photo_export
+@testable import Photo_Export
 
 struct AuthorizationMappingTests {
 

@@ -15,11 +15,13 @@ This repository keeps public-facing docs and maintainer-facing notes in separate
 - [`docs/project/github-actions-publishing-plan.md`](project/github-actions-publishing-plan.md): CI/release workflow planning
 - [`docs/project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md): backup import design notes
 - [`docs/project/refactoring-plan.md`](project/refactoring-plan.md): refactoring decisions and remaining test infrastructure work
+- [`docs/project/testing-improvement-plan.md`](project/testing-improvement-plan.md): test coverage gaps and step-by-step improvement plan
 
 ## Reference Material
 
 - [`docs/reference/swift-swiftui-best-practices.md`](reference/swift-swiftui-best-practices.md): architecture and implementation guidance
 - [`docs/reference/persistence-store.md`](reference/persistence-store.md): export record persistence format and behavior
+- [`docs/reference/competitors.md`](reference/competitors.md): competitor app research for comparison page
 - [`CLAUDE.md`](../CLAUDE.md): repository guidance for Claude Code
 
 ## Maintenance Rules

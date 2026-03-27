@@ -196,7 +196,7 @@ struct ExportRecordStoreRecoveryTests {
 
   // MARK: - Compaction trigger
 
-  @Test func compactionTriggersAfterThreshold() async throws {
+  @Test func compactionCreatesSnapshotFile() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "compact-test"
@@ -204,8 +204,9 @@ struct ExportRecordStoreRecoveryTests {
     let store = ExportRecordStore(baseDirectoryURL: base)
     store.configure(for: dest)
 
-    // Write many mutations to trigger compaction (threshold is 1000)
-    for i in 1...1001 {
+    // Write exactly the compaction threshold to trigger it
+    let threshold = ExportRecordStore.Constants.compactEveryNMutations
+    for i in 1...threshold {
       store.markExported(
         assetId: "asset-\(i)", year: 2025, month: (i % 12) + 1,
         relPath: "2025/\(String(format: "%02d", (i % 12) + 1))/",
@@ -223,12 +224,47 @@ struct ExportRecordStoreRecoveryTests {
 
     #expect(FileManager.default.fileExists(atPath: snapFile.path))
 
-    // Reload from disk — compaction snapshot should contain the bulk of records.
-    // Due to the async compaction race, the very last mutation(s) may be lost
-    // because the log is truncated after the snapshot is written.
+    // Verify the snapshot is valid JSON and contains the expected records
     let store2 = ExportRecordStore(baseDirectoryURL: base)
     store2.configure(for: dest)
-    #expect(store2.recordsById.count >= 1000)
+    #expect(store2.recordsById.count == threshold)
+  }
+
+  /// Documents a known durability issue: mutations written between the snapshot
+  /// capture and the log truncation can be lost on reload.
+  /// This test exists to detect if/when the compaction race is fixed — it should
+  /// start failing (count == threshold + 1) once the fix lands, at which point
+  /// the `.knownIssue` wrapper can be removed.
+  @Test func compactionRaceCanLoseRecentMutation() async throws {
+    let base = makeTempDir()
+    defer { try? FileManager.default.removeItem(at: base) }
+    let dest = "compact-race"
+
+    let store = ExportRecordStore(baseDirectoryURL: base)
+    store.configure(for: dest)
+
+    let threshold = ExportRecordStore.Constants.compactEveryNMutations
+    // Write threshold + 1 mutations — the extra one races with compaction
+    for i in 1...(threshold + 1) {
+      store.markExported(
+        assetId: "asset-\(i)", year: 2025, month: (i % 12) + 1,
+        relPath: "2025/\(String(format: "%02d", (i % 12) + 1))/",
+        filename: "IMG_\(i).JPG", exportedAt: Date())
+    }
+
+    let snapFile = snapshotURL(base: base, dest: dest)
+    let deadline = Date().addingTimeInterval(3)
+    while !FileManager.default.fileExists(atPath: snapFile.path) && Date() < deadline {
+      store.flushForTesting()
+      try await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    let store2 = ExportRecordStore(baseDirectoryURL: base)
+    store2.configure(for: dest)
+
+    withKnownIssue("Async compaction race can lose mutations written after snapshot capture") {
+      #expect(store2.recordsById.count == threshold + 1)
+    }
   }
 
   // MARK: - Delete mutation in log

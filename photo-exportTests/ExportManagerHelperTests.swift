@@ -13,7 +13,7 @@ struct ExportManagerHelperTests {
     let recordStore = ExportRecordStore(baseDirectoryURL: tempDir)
     recordStore.configure(for: "test")
     let photoLib = PhotoLibraryManager()
-    let destMgr = ExportDestinationManager()
+    let destMgr = ExportDestinationManager(skipRestore: true)
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: destMgr,

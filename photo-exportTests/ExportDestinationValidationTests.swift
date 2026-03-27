@@ -9,7 +9,7 @@ struct ExportDestinationValidationTests {
   // MARK: - No folder selected
 
   @Test func urlForMonthThrowsNoSelectionWhenNoFolderSelected() {
-    let mgr = ExportDestinationManager()
+    let mgr = ExportDestinationManager(skipRestore: true)
     #expect(throws: ExportDestinationManager.ExportDestinationError.noSelection) {
       try mgr.urlForMonth(year: 2025, month: 6)
     }
@@ -24,7 +24,7 @@ struct ExportDestinationValidationTests {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("ExportDestValidation-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let mgr = ExportDestinationManager()
+    let mgr = ExportDestinationManager(skipRestore: true)
     mgr.setSelectedFolderForTesting(dir)
     return (mgr, dir)
   }

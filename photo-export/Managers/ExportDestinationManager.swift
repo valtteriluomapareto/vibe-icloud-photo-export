@@ -73,8 +73,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   var canImportNow: Bool { selectedFolderURL != nil && isAvailable }
 
   // MARK: - Lifecycle
-  init() {
-    restoreBookmarkIfAvailable()
+  init(skipRestore: Bool = false) {
+    if !skipRestore {
+      restoreBookmarkIfAvailable()
+    }
     observeVolumeChanges()
   }
 

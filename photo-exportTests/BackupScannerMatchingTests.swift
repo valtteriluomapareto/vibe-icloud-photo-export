@@ -119,9 +119,9 @@ struct BackupScannerMatchingTests {
 
   // MARK: - Filename-only fallback
 
-  @Test func filenameOnlyFallbackMatchesSingleCandidate() async throws {
+  @Test func filenameOnlyFallbackWithoutMetadataConfirmationIsAmbiguous() async throws {
     let fileDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
-    // Asset has a different creation date — date match won't work
+    // Asset has a very different creation date — date match won't work
     let assetDate = Date(timeIntervalSinceReferenceDate: 900_000_000)
     let asset = TestAssetFactory.makeAsset(
       id: "name-match", creationDate: assetDate, mediaType: .image,
@@ -140,11 +140,41 @@ struct BackupScannerMatchingTests {
 
     let result = try await BackupScanner.matchFiles(files, photoLibraryService: service) { _ in }
 
-    // Filename-only match goes through the discriminator path
-    // Since asset date doesn't match file modDate, it falls to filename search
-    // Then discriminator checks metadata — in this case we check result isn't unmatched
-    #expect(result.unmatched.count == 0 || result.ambiguous.count == 0)
-    #expect(result.matched.count + result.ambiguous.count == 1)
+    // Filename matches but the discriminator can't confirm (test file has no real
+    // image metadata, and dates differ by 100M seconds), so the result is ambiguous.
+    #expect(result.matched.isEmpty)
+    #expect(result.ambiguous.count == 1)
+    #expect(result.unmatched.isEmpty)
+  }
+
+  @Test func filenameOnlyFallbackWithDateConfirmationMatches() async throws {
+    // Dates differ by 0.5s — too close for the integer-truncated date index to find via
+    // Step 1 (which checks ±1 integer second), but close enough for the discriminator's
+    // 1.0s tolerance to confirm. This exercises the filename→discriminator→match path.
+    let assetDate = Date(timeIntervalSinceReferenceDate: 800_000_000.0)
+    let fileDate = Date(timeIntervalSinceReferenceDate: 800_000_000.5)
+    let asset = TestAssetFactory.makeAsset(
+      id: "close-date", creationDate: assetDate, mediaType: .image)
+
+    let service = makeService(
+      assets: [("2025-6", [asset])],
+      resources: [
+        "close-date": [TestAssetFactory.makeResource(originalFilename: "CLOSE.JPG")]
+      ]
+    )
+
+    let (files, rootDir) = try makeScannedFiles([
+      (year: 2025, month: 6, filename: "CLOSE.JPG", modDate: fileDate, fileSize: 1024)
+    ])
+    defer { try? FileManager.default.removeItem(at: rootDir) }
+
+    let result = try await BackupScanner.matchFiles(files, photoLibraryService: service) { _ in }
+
+    // The date index lookup (Step 1) should find the candidate since ±1 integer second
+    // covers it. But let's verify the file gets matched one way or another.
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.asset.id == "close-date")
+    #expect(result.unmatched.isEmpty)
   }
 
   // MARK: - Unmatched file

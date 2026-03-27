@@ -4,6 +4,15 @@ import Testing
 
 @testable import Photo_Export
 
+/// Tests ExportManager control flow and error handling using protocol fakes.
+///
+/// These tests deliberately inject fakes for all dependencies (PhotoLibraryService,
+/// ExportDestination, AssetResourceWriter, FileSystemService) to isolate ExportManager's
+/// logic from the Photos framework and filesystem. This is by design: the real PhotoKit
+/// integration (ProductionAssetResourceWriter, PHAssetResourceManager) cannot be exercised
+/// in a hermetic test environment without a real Photos library. The production wiring is
+/// validated by manual testing and the app's own usage; these tests cover the orchestration
+/// layer that was previously untestable.
 @MainActor
 struct ExportPipelineTests {
   // MARK: - Test setup
@@ -161,11 +170,17 @@ struct ExportPipelineTests {
     let record = store.exportInfo(assetId: "write-fail-asset")
     #expect(record?.status == .failed)
     #expect(record?.lastError?.contains("Disk full") == true)
+
+    // Verify no .tmp files left behind (defer cleanup should have run)
+    let monthDir = try dest.urlForMonth(year: 2025, month: 4, createIfNeeded: false)
+    let leftoverTmp = try? FileManager.default.contentsOfDirectory(at: monthDir, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "tmp" }
+    #expect(leftoverTmp?.isEmpty != false)
   }
 
   // MARK: - Atomic move failure
 
-  @Test func moveFailureMarksFailure() async throws {
+  @Test func moveFailureMarksFailureAndCleansUpTempFile() async throws {
     let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
     defer { dest.cleanup() }
 
@@ -184,6 +199,12 @@ struct ExportPipelineTests {
     let record = store.exportInfo(assetId: "move-fail-asset")
     #expect(record?.status == .failed)
     #expect(record?.lastError?.contains("Permission denied") == true)
+
+    // Verify the .tmp file was cleaned up by the defer block
+    let monthDir = try dest.urlForMonth(year: 2025, month: 5, createIfNeeded: false)
+    let leftoverTmp = try? FileManager.default.contentsOfDirectory(at: monthDir, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "tmp" }
+    #expect(leftoverTmp?.isEmpty != false)
   }
 
   // MARK: - Pause/resume cycle

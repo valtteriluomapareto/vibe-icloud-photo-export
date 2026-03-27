@@ -18,7 +18,7 @@ const base = import.meta.env.BASE_URL;
 
 <style>
 	.site-footer {
-		background: #1a1a2e;
+		background: var(--site-footer-bg);
 		color: rgba(255, 255, 255, 0.7);
 		padding: 2rem;
 		text-align: center;
@@ -38,6 +38,8 @@ const base = import.meta.env.BASE_URL;
 		display: flex;
 		gap: 1.5rem;
 		justify-content: center;
+		flex-wrap: wrap;
+		row-gap: 0.75rem;
 	}
 
 	a {

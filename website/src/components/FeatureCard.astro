@@ -8,24 +8,26 @@ const { title, icon } = Astro.props;
 ---
 
 <div class="feature-card">
-	<span class="feature-icon">{icon}</span>
+	<span class="feature-icon" aria-hidden="true">{icon}</span>
 	<h3>{title}</h3>
 	<p><slot /></p>
 </div>
 
 <style>
 	.feature-card {
-		background: #f8f9fa;
-		border: 1px solid #e9ecef;
+		height: 100%;
+		background: var(--site-card-bg);
+		border: 1px solid var(--site-border);
 		border-radius: 12px;
 		padding: 1.5rem;
 		text-align: left;
+		box-shadow: var(--site-shadow);
 		transition: transform 0.15s ease, box-shadow 0.15s ease;
 	}
 
 	.feature-card:hover {
 		transform: translateY(-2px);
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+		box-shadow: var(--site-shadow-hover);
 	}
 
 	.feature-icon {
@@ -38,28 +40,13 @@ const { title, icon } = Astro.props;
 		font-size: 1.1rem;
 		font-weight: 700;
 		margin: 0 0 0.5rem;
-		color: #1a1a2e;
+		color: var(--site-text);
 	}
 
 	p {
 		font-size: 0.95rem;
-		color: #555;
+		color: var(--site-muted);
 		margin: 0;
 		line-height: 1.5;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		.feature-card {
-			background: #1e1e2e;
-			border-color: #2e2e3e;
-		}
-
-		h3 {
-			color: #e0e0e0;
-		}
-
-		p {
-			color: #aaa;
-		}
 	}
 </style>

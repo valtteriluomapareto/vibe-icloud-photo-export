@@ -1,212 +1,161 @@
 ---
+import MarketingLayout from '../layouts/MarketingLayout.astro';
 import Hero from '../components/Hero.astro';
 import FeatureCard from '../components/FeatureCard.astro';
 import Footer from '../components/Footer.astro';
 
 const base = import.meta.env.BASE_URL;
+const title = 'Photo Export - Back up your Apple Photos library';
+const description =
+	'A native macOS app that exports your Apple Photos library to local or external storage, organized by year and month.';
 ---
 
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Photo Export — Back up your Apple Photos library</title>
-		<meta
-			name="description"
-			content="A native macOS app that exports your Apple Photos library to local or external storage, organized by year and month."
-		/>
-		<link rel="sitemap" href={`${base}/sitemap-index.xml`} />
-	</head>
-	<body>
-		<Hero />
+<MarketingLayout title={title} description={description}>
+	<Hero />
 
-		<!-- Why Photo Export? -->
-		<section class="section">
-			<div class="container">
-				<h2>Why Photo Export?</h2>
-				<div class="value-props">
-					<div class="value-prop">
-						<strong>Your photos, your folders</strong>
-						<span>No cloud lock-in. Export originals to any drive you control.</span>
-					</div>
-					<div class="value-prop">
-						<strong>Organized automatically</strong>
-						<span>Assets sorted into a clean <code>Year/Month/</code> folder hierarchy.</span>
-					</div>
-					<div class="value-prop">
-						<strong>Incremental exports</strong>
-						<span>Only copies what's new. Never duplicates previously exported files.</span>
-					</div>
-					<div class="value-prop">
-						<strong>Resilient</strong>
-						<span>Pause, resume, and recover from interruptions. Individual failures don't stop the batch.</span>
-					</div>
+	<!-- Why Photo Export? -->
+	<section class="section" aria-labelledby="why-photo-export">
+		<div class="container">
+			<h2 id="why-photo-export">Why Photo Export?</h2>
+			<div class="value-props">
+				<div class="value-prop">
+					<strong>Your photos, your folders</strong>
+					<span>No cloud lock-in. Export originals to any drive you control.</span>
+				</div>
+				<div class="value-prop">
+					<strong>Organized automatically</strong>
+					<span>Assets sorted into a clean <code>Year/Month/</code> folder hierarchy.</span>
+				</div>
+				<div class="value-prop">
+					<strong>Incremental exports</strong>
+					<span>Only copies what's new. Never duplicates previously exported files.</span>
+				</div>
+				<div class="value-prop">
+					<strong>Resilient</strong>
+					<span>Pause, resume, and recover from interruptions. Individual failures don't stop the batch.</span>
 				</div>
 			</div>
-		</section>
+		</div>
+	</section>
 
-		<!-- Features -->
-		<section class="section section-alt">
-			<div class="container">
-				<h2>Features</h2>
-				<div class="feature-grid">
-					<FeatureCard title="Library Browsing" icon="📸">
-						Browse your entire Photos library with a year/month sidebar. See asset counts and export status at a glance.
-					</FeatureCard>
-					<FeatureCard title="Thumbnail Previews" icon="🖼">
-						Fast thumbnail grid with in-memory caching. Click any asset for a full-size preview.
-					</FeatureCard>
-					<FeatureCard title="Smart Export Tracking" icon="✅">
-						Tracks every export by asset identifier. Resume-safe — never re-exports what's already been copied.
-					</FeatureCard>
-					<FeatureCard title="Pause / Resume / Cancel" icon="⏯">
-						Full control over the export queue with sidebar controls. Pause a long export and pick it up later.
-					</FeatureCard>
-					<FeatureCard title="Persistent Folder Access" icon="📁">
-						Security-scoped bookmarks remember your chosen destination folder across app launches.
-					</FeatureCard>
-					<FeatureCard title="Graceful Error Handling" icon="🛡">
-						Handles denied access, unavailable drives, and individual asset failures without crashing the batch.
-					</FeatureCard>
+	<!-- Features -->
+	<section class="section section-alt" aria-labelledby="features">
+		<div class="container">
+			<h2 id="features">Features</h2>
+			<div class="feature-grid">
+				<FeatureCard title="Library Browsing" icon="📸">
+					Browse your entire Photos library with a year/month sidebar. See asset counts and export status at a glance.
+				</FeatureCard>
+				<FeatureCard title="Thumbnail Previews" icon="🖼">
+					Fast thumbnail grid with in-memory caching. Click any asset for a full-size preview.
+				</FeatureCard>
+				<FeatureCard title="Smart Export Tracking" icon="✅">
+					Tracks every export by asset identifier. Resume-safe — never re-exports what's already been copied.
+				</FeatureCard>
+				<FeatureCard title="Pause / Resume / Cancel" icon="⏯">
+					Full control over the export queue with sidebar controls. Pause a long export and pick it up later.
+				</FeatureCard>
+				<FeatureCard title="Persistent Folder Access" icon="📁">
+					Security-scoped bookmarks remember your chosen destination folder across app launches.
+				</FeatureCard>
+				<FeatureCard title="Graceful Error Handling" icon="🛡">
+					Handles denied access, unavailable drives, and individual asset failures without crashing the batch.
+				</FeatureCard>
+			</div>
+		</div>
+	</section>
+
+	<!-- How It Works -->
+	<section class="section" aria-labelledby="how-it-works">
+		<div class="container">
+			<h2 id="how-it-works">How It Works</h2>
+			<div class="steps">
+				<div class="step">
+					<div class="step-number">1</div>
+					<h3>Grant access & pick a folder</h3>
+					<p>Authorize Photos library access and choose a destination folder on any local or external drive.</p>
+				</div>
+				<div class="step">
+					<div class="step-number">2</div>
+					<h3>Browse your library</h3>
+					<p>Navigate by year and month. Preview thumbnails and inspect individual assets before exporting.</p>
+				</div>
+				<div class="step">
+					<div class="step-number">3</div>
+					<h3>Export</h3>
+					<p>Hit export and the app copies original files into an organized <code>Year/Month/</code> folder tree. Track progress in real time.</p>
 				</div>
 			</div>
-		</section>
+		</div>
+	</section>
 
-		<!-- How It Works -->
-		<section class="section">
-			<div class="container">
-				<h2>How It Works</h2>
-				<div class="steps">
-					<div class="step">
-						<div class="step-number">1</div>
-						<h3>Grant access & pick a folder</h3>
-						<p>Authorize Photos library access and choose a destination folder on any local or external drive.</p>
-					</div>
-					<div class="step">
-						<div class="step-number">2</div>
-						<h3>Browse your library</h3>
-						<p>Navigate by year and month. Preview thumbnails and inspect individual assets before exporting.</p>
-					</div>
-					<div class="step">
-						<div class="step-number">3</div>
-						<h3>Export</h3>
-						<p>Hit export and the app copies original files into an organized <code>Year/Month/</code> folder tree. Track progress in real time.</p>
-					</div>
+	<!-- Screenshots -->
+	<section class="section section-alt" aria-labelledby="screenshots">
+		<div class="container">
+			<h2 id="screenshots">Screenshots</h2>
+			<p class="section-note">
+				Screenshots coming soon. The app features a sidebar with year/month navigation, a thumbnail grid for browsing photos, full-size asset previews, and export progress controls.
+			</p>
+		</div>
+	</section>
+
+	<!-- Installation -->
+	<section class="section" aria-labelledby="installation">
+		<div class="container">
+			<h2 id="installation">Installation</h2>
+			<div class="install-steps">
+				<ol>
+					<li>Download the latest <code>.dmg</code> from <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases">GitHub Releases</a></li>
+					<li>Open the DMG and drag Photo Export to your Applications folder</li>
+					<li>Launch the app and grant Photos library access when prompted</li>
+				</ol>
+				<div class="requirements">
+					<strong>Requirements:</strong> macOS 15.0+. Signed and notarized by Apple.
 				</div>
 			</div>
-		</section>
+		</div>
+	</section>
 
-		<!-- Screenshots -->
-		<section class="section section-alt">
-			<div class="container">
-				<h2>Screenshots</h2>
-				<p class="section-note">
-					Screenshots coming soon. The app features a sidebar with year/month navigation, a thumbnail grid for browsing photos, full-size asset previews, and export progress controls.
-				</p>
+	<!-- Roadmap -->
+	<section class="section section-alt" aria-labelledby="roadmap">
+		<div class="container">
+			<h2 id="roadmap">Ideas for the future</h2>
+			<ul class="roadmap-list">
+				<li>Concurrent export pipeline for faster throughput</li>
+				<li>iCloud originals handling (download or skip remote-only assets)</li>
+				<li>Live Photos and paired asset support</li>
+				<li>Retry failed exports without restarting the batch</li>
+				<li>Media filtering and search within the library browser</li>
+				<li>Flexible naming schemes beyond year/month</li>
+			</ul>
+			<p><a href={`${base}/roadmap`}>See all ideas &rarr;</a></p>
+			<p class="feedback-cta">Missing a feature? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">Open an issue on GitHub</a> and let us know what you need.</p>
+		</div>
+	</section>
+
+	<!-- CTA -->
+	<section class="section cta-section" aria-labelledby="get-started">
+		<div class="container">
+			<h2 id="get-started">Get started</h2>
+			<p>Photo Export is free and open source. Download the app, grant Photos access, and start backing up your library today.</p>
+			<div class="cta-actions">
+				<a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases" class="btn btn-primary">Download</a>
+				<a href={`${base}/getting-started`} class="btn btn-secondary">Read the docs</a>
+				<a
+					href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export"
+					class="btn btn-secondary"
+				>
+					View on GitHub
+				</a>
 			</div>
-		</section>
+			<p class="feedback-note">Found a bug or have feedback? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">We'd love to hear from you.</a></p>
+		</div>
+	</section>
 
-		<!-- Installation -->
-		<section class="section">
-			<div class="container">
-				<h2>Installation</h2>
-				<div class="install-steps">
-					<ol>
-						<li>Download the latest <code>.dmg</code> from <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases">GitHub Releases</a></li>
-						<li>Open the DMG and drag Photo Export to your Applications folder</li>
-						<li>Launch the app and grant Photos library access when prompted</li>
-					</ol>
-					<div class="requirements">
-						<strong>Requirements:</strong> macOS 15.0+. Signed and notarized by Apple.
-					</div>
-				</div>
-			</div>
-		</section>
-
-		<!-- Roadmap -->
-		<section class="section section-alt">
-			<div class="container">
-				<h2>Ideas for the future</h2>
-				<ul class="roadmap-list">
-					<li>Concurrent export pipeline for faster throughput</li>
-					<li>iCloud originals handling (download or skip remote-only assets)</li>
-					<li>Live Photos and paired asset support</li>
-					<li>Retry failed exports without restarting the batch</li>
-					<li>Media filtering and search within the library browser</li>
-					<li>Flexible naming schemes beyond year/month</li>
-				</ul>
-				<p><a href={`${base}/roadmap`}>See all ideas &rarr;</a></p>
-				<p class="feedback-cta">Missing a feature? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">Open an issue on GitHub</a> and let us know what you need.</p>
-			</div>
-		</section>
-
-		<!-- CTA -->
-		<section class="section cta-section">
-			<div class="container">
-				<h2>Get started</h2>
-				<p>Photo Export is free and open source. Download the app, grant Photos access, and start backing up your library today.</p>
-				<div class="cta-actions">
-					<a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases" class="btn btn-primary">Download</a>
-					<a href={`${base}/getting-started`} class="btn btn-secondary">Read the docs</a>
-					<a
-						href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export"
-						class="btn btn-secondary"
-					>
-						View on GitHub
-					</a>
-				</div>
-				<p class="feedback-note">Found a bug or have feedback? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">We'd love to hear from you.</a></p>
-			</div>
-		</section>
-
-		<Footer />
-	</body>
-</html>
-
-<style is:global>
-	* {
-		margin: 0;
-		padding: 0;
-		box-sizing: border-box;
-	}
-
-	body {
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-		color: #1a1a2e;
-		line-height: 1.6;
-	}
-
-	code {
-		background: rgba(0, 0, 0, 0.06);
-		padding: 0.15rem 0.4rem;
-		border-radius: 4px;
-		font-size: 0.9em;
-	}
-</style>
+	<Footer />
+</MarketingLayout>
 
 <style>
-	.section {
-		padding: 4rem 2rem;
-	}
-
-	.section-alt {
-		background: #f8f9fa;
-	}
-
-	.container {
-		max-width: 56rem;
-		margin: 0 auto;
-	}
-
-	h2 {
-		font-size: 2rem;
-		font-weight: 800;
-		margin-bottom: 1.5rem;
-		text-align: center;
-		letter-spacing: -0.01em;
-	}
-
-	/* Value Props */
 	.value-props {
 		display: grid;
 		grid-template-columns: repeat(2, 1fr);
@@ -224,18 +173,16 @@ const base = import.meta.env.BASE_URL;
 	}
 
 	.value-prop span {
-		color: #555;
+		color: var(--site-muted);
 		font-size: 0.95rem;
 	}
 
-	/* Feature Grid */
 	.feature-grid {
 		display: grid;
 		grid-template-columns: repeat(3, 1fr);
 		gap: 1.25rem;
 	}
 
-	/* Steps */
 	.steps {
 		display: grid;
 		grid-template-columns: repeat(3, 1fr);
@@ -246,7 +193,7 @@ const base = import.meta.env.BASE_URL;
 	.step-number {
 		width: 2.5rem;
 		height: 2.5rem;
-		background: #4a9eff;
+		background: var(--site-accent);
 		color: white;
 		border-radius: 50%;
 		display: inline-flex;
@@ -263,20 +210,18 @@ const base = import.meta.env.BASE_URL;
 	}
 
 	.step p {
-		color: #555;
+		color: var(--site-muted);
 		font-size: 0.95rem;
 	}
 
-	/* Screenshots placeholder */
 	.section-note {
 		text-align: center;
-		color: #777;
+		color: var(--site-muted);
 		font-style: italic;
 		max-width: 36rem;
 		margin: 0 auto;
 	}
 
-	/* Installation */
 	.install-steps h3 {
 		font-size: 1.25rem;
 		margin-bottom: 0.75rem;
@@ -292,14 +237,13 @@ const base = import.meta.env.BASE_URL;
 	}
 
 	.requirements {
-		background: #e8f4fd;
-		border-left: 3px solid #4a9eff;
+		background: var(--site-surface-accent);
+		border-left: 3px solid var(--site-accent);
 		padding: 0.75rem 1rem;
 		border-radius: 0 8px 8px 0;
 		font-size: 0.95rem;
 	}
 
-	/* Roadmap */
 	.roadmap-list {
 		margin-left: 1.5rem;
 		margin-bottom: 1rem;
@@ -307,18 +251,18 @@ const base = import.meta.env.BASE_URL;
 
 	.roadmap-list li {
 		margin-bottom: 0.5rem;
-		color: #444;
+		color: var(--site-muted);
 	}
 
 	.feedback-cta {
 		text-align: center;
 		margin-top: 1.5rem;
-		color: #555;
+		color: var(--site-muted);
 		font-size: 0.95rem;
 	}
 
 	.feedback-cta a {
-		color: #4a9eff;
+		color: var(--site-accent);
 		text-decoration: none;
 		font-weight: 600;
 	}
@@ -337,10 +281,9 @@ const base = import.meta.env.BASE_URL;
 		text-decoration: underline;
 	}
 
-	/* CTA */
 	.cta-section {
 		text-align: center;
-		background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+		background: var(--site-brand-gradient);
 		color: white;
 	}
 
@@ -361,47 +304,11 @@ const base = import.meta.env.BASE_URL;
 		flex-wrap: wrap;
 	}
 
-	.btn {
-		display: inline-block;
-		padding: 0.75rem 2rem;
-		border-radius: 8px;
-		font-size: 1rem;
-		font-weight: 600;
-		text-decoration: none;
-		transition: transform 0.15s ease, box-shadow 0.15s ease;
-	}
-
-	.btn:hover {
-		transform: translateY(-1px);
-		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-	}
-
-	.btn-primary {
-		background: #4a9eff;
-		color: white;
-	}
-
-	.btn-secondary {
-		background: rgba(255, 255, 255, 0.12);
-		color: white;
-		border: 1px solid rgba(255, 255, 255, 0.25);
-	}
-
 	@media (max-width: 768px) {
 		.value-props,
 		.feature-grid,
 		.steps {
 			grid-template-columns: 1fr;
-		}
-
-		.section {
-			padding: 3rem 1.5rem;
-		}
-	}
-
-	@media (max-width: 640px) {
-		h2 {
-			font-size: 1.75rem;
 		}
 	}
 </style>

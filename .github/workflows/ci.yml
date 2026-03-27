@@ -10,6 +10,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install website dependencies
+        run: npm ci
+        working-directory: website
+
+      - name: Validate website
+        run: npm run validate
+        working-directory: website
+
   build-and-test:
     runs-on: macos-15
     steps:

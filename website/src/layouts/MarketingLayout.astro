@@ -1,0 +1,43 @@
+---
+import '../styles/site.css';
+
+interface Props {
+	title: string;
+	description: string;
+}
+
+const { title, description } = Astro.props;
+const base = import.meta.env.BASE_URL;
+const canonicalUrl = Astro.site ? new URL(Astro.url.pathname, Astro.site).toString() : Astro.url.toString();
+const socialImageUrl = new URL(`${base}/app-icon.png`, Astro.site ?? Astro.url).toString();
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<meta name="theme-color" content="#0f3460" />
+		<link rel="canonical" href={canonicalUrl} />
+		<link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+		<link rel="sitemap" href={`${base}/sitemap-index.xml`} />
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:url" content={canonicalUrl} />
+		<meta property="og:image" content={socialImageUrl} />
+		<meta property="og:image:alt" content="Photo Export app icon" />
+		<meta property="og:site_name" content="Photo Export" />
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+		<meta name="twitter:image" content={socialImageUrl} />
+	</head>
+	<body>
+		<a class="skip-link" href="#main-content">Skip to content</a>
+		<main id="main-content">
+			<slot />
+		</main>
+	</body>
+</html>

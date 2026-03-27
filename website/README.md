@@ -11,6 +11,8 @@ npm install
 npm run dev
 ```
 
+Use Node 22.12 or newer. The package manifest declares this in `engines`, and CI runs the website with Node 22.
+
 Useful commands:
 
 | Command | Purpose |
@@ -19,6 +21,7 @@ Useful commands:
 | `npm run build` | Build the static site into `dist/` |
 | `npm run preview` | Preview the production build locally |
 | `npm run check` | Run `astro check` |
+| `npm run validate` | Run the same validation used in CI (`astro check` + `astro build`) |
 
 ## Content Layout
 

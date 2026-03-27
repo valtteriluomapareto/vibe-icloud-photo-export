@@ -10,6 +10,20 @@ const { title, description } = Astro.props;
 const base = import.meta.env.BASE_URL;
 const canonicalUrl = Astro.site ? new URL(Astro.url.pathname, Astro.site).toString() : Astro.url.toString();
 const socialImageUrl = new URL(`${base}/app-icon.png`, Astro.site ?? Astro.url).toString();
+
+const structuredData = {
+	'@context': 'https://schema.org',
+	'@type': 'SoftwareApplication',
+	name: 'Photo Export',
+	description,
+	operatingSystem: 'macOS 15+',
+	applicationCategory: 'PhotographyApplication',
+	offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+	license: 'https://opensource.org/licenses/MIT',
+	url: canonicalUrl,
+	image: socialImageUrl,
+	downloadUrl: 'https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases',
+};
 ---
 
 <html lang="en">
@@ -33,6 +47,8 @@ const socialImageUrl = new URL(`${base}/app-icon.png`, Astro.site ?? Astro.url).
 		<meta name="twitter:title" content={title} />
 		<meta name="twitter:description" content={description} />
 		<meta name="twitter:image" content={socialImageUrl} />
+		<meta name="keywords" content="iCloud photos export, Apple Photos backup, export photos to external drive, macOS photo export, free photo backup app, iCloud photo backup, download iCloud photos" />
+		<script type="application/ld+json" set:html={JSON.stringify(structuredData)} />
 	</head>
 	<body>
 		<a class="skip-link" href="#main-content">Skip to content</a>

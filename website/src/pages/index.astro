@@ -5,18 +5,74 @@ import FeatureCard from '../components/FeatureCard.astro';
 import Footer from '../components/Footer.astro';
 
 const base = import.meta.env.BASE_URL;
-const title = 'Photo Export - Back up your Apple Photos library';
+const title = 'Photo Export — Free Mac App to Back Up iCloud & Apple Photos';
 const description =
-	'A native macOS app that exports your Apple Photos library to local or external storage, organized by year and month.';
+	'Free, open-source macOS app to export your iCloud and Apple Photos library to any external drive or local folder. Organized by year/month. No subscription, no cloud services.';
+
+const faqData = {
+	'@context': 'https://schema.org',
+	'@type': 'FAQPage',
+	mainEntity: [
+		{
+			'@type': 'Question',
+			name: 'Does this work with iCloud Photo Library?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'Yes. Photo Export reads your Apple Photos library, which includes all photos synced via iCloud. It can also download iCloud originals that are stored remotely on demand during export.',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'Can I export photos to an external hard drive?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'Absolutely. You can choose any local or external drive as your export destination. The app remembers your choice across launches.',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'Will it download iCloud originals that are stored remotely?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'Yes. During export, the app automatically downloads originals from iCloud when they are not stored locally on your Mac. No manual downloading required.',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'Is Photo Export really free?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'Yes. Photo Export is free, open-source software released under the MIT license. No subscriptions, no in-app purchases, no ads.',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'Does it export videos too?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'Yes. The app exports photos and videos. Live Photos are exported as a single still image — full motion export (paired image + video) is planned for a future release.',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'What happens if the export is interrupted?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: "The app tracks every exported photo. If the export is interrupted, you can resume and it will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again.",
+			},
+		},
+	],
+};
 ---
 
 <MarketingLayout title={title} description={description}>
+	<script type="application/ld+json" set:html={JSON.stringify(faqData)} />
 	<Hero />
 
 	<!-- Why Photo Export? -->
 	<section class="section" aria-labelledby="why-photo-export">
 		<div class="container">
-			<h2 id="why-photo-export">Why Photo Export?</h2>
+			<h2 id="why-photo-export">Why Use Photo Export for Your iCloud Backup?</h2>
 			<div class="value-props">
 				<div class="value-prop">
 					<strong>Your photos, your folders</strong>
@@ -24,14 +80,14 @@ const description =
 				</div>
 				<div class="value-prop">
 					<strong>Organized automatically</strong>
-					<span>Assets sorted into a clean <code>Year/Month/</code> folder hierarchy.</span>
+					<span>Photos sorted into a clean <code>Year/Month/</code> folder hierarchy.</span>
 				</div>
 				<div class="value-prop">
-					<strong>Incremental exports</strong>
-					<span>Only copies what's new. Never duplicates previously exported files.</span>
+					<strong>Only exports new photos</strong>
+					<span>Skips photos you've already exported. Never creates duplicates.</span>
 				</div>
 				<div class="value-prop">
-					<strong>Resilient</strong>
+					<strong>Handles interruptions</strong>
 					<span>Pause, resume, and recover from interruptions. Individual failures don't stop the batch.</span>
 				</div>
 			</div>
@@ -44,22 +100,22 @@ const description =
 			<h2 id="features">Features</h2>
 			<div class="feature-grid">
 				<FeatureCard title="Library Browsing" icon="📸">
-					Browse your entire Photos library with a year/month sidebar. See asset counts and export status at a glance.
+					Browse your entire Photos library with a year/month sidebar. See photo counts and export status at a glance.
 				</FeatureCard>
 				<FeatureCard title="Thumbnail Previews" icon="🖼">
-					Fast thumbnail grid with in-memory caching. Click any asset for a full-size preview.
+					Fast thumbnail grid with in-memory caching. Click any photo for a full-size preview.
 				</FeatureCard>
 				<FeatureCard title="Smart Export Tracking" icon="✅">
-					Tracks every export by asset identifier. Resume-safe — never re-exports what's already been copied.
+					Remembers every exported photo. Resume-safe — never re-exports what's already been copied.
 				</FeatureCard>
 				<FeatureCard title="Pause / Resume / Cancel" icon="⏯">
-					Full control over the export queue with sidebar controls. Pause a long export and pick it up later.
+					Full control over the export queue. Pause a long export and pick it up later.
 				</FeatureCard>
-				<FeatureCard title="Persistent Folder Access" icon="📁">
-					Security-scoped bookmarks remember your chosen destination folder across app launches.
+				<FeatureCard title="Remembers Your Folder" icon="📁">
+					Your chosen destination folder is remembered across app launches — no need to re-select it.
 				</FeatureCard>
 				<FeatureCard title="Graceful Error Handling" icon="🛡">
-					Handles denied access, unavailable drives, and individual asset failures without crashing the batch.
+					Handles denied access, unavailable drives, and individual photo failures without crashing the batch.
 				</FeatureCard>
 			</div>
 		</div>
@@ -68,7 +124,7 @@ const description =
 	<!-- How It Works -->
 	<section class="section" aria-labelledby="how-it-works">
 		<div class="container">
-			<h2 id="how-it-works">How It Works</h2>
+			<h2 id="how-it-works">How to Export Your iCloud Photos in 3 Steps</h2>
 			<div class="steps">
 				<div class="step">
 					<div class="step-number">1</div>
@@ -78,7 +134,7 @@ const description =
 				<div class="step">
 					<div class="step-number">2</div>
 					<h3>Browse your library</h3>
-					<p>Navigate by year and month. Preview thumbnails and inspect individual assets before exporting.</p>
+					<p>Navigate by year and month. Preview thumbnails and inspect individual photos before exporting.</p>
 				</div>
 				<div class="step">
 					<div class="step-number">3</div>
@@ -94,7 +150,7 @@ const description =
 		<div class="container">
 			<h2 id="screenshots">Screenshots</h2>
 			<p class="section-note">
-				Screenshots coming soon. The app features a sidebar with year/month navigation, a thumbnail grid for browsing photos, full-size asset previews, and export progress controls.
+				Screenshots coming soon. The app features a sidebar with year/month navigation, a thumbnail grid for browsing photos, full-size previews, and export progress controls.
 			</p>
 		</div>
 	</section>
@@ -122,14 +178,47 @@ const description =
 			<h2 id="roadmap">Ideas for the future</h2>
 			<ul class="roadmap-list">
 				<li>Concurrent export pipeline for faster throughput</li>
-				<li>iCloud originals handling (download or skip remote-only assets)</li>
-				<li>Live Photos and paired asset support</li>
+				<li>iCloud originals handling (download or skip remote-only photos)</li>
+				<li>Live Photos and paired media support</li>
 				<li>Retry failed exports without restarting the batch</li>
 				<li>Media filtering and search within the library browser</li>
 				<li>Flexible naming schemes beyond year/month</li>
 			</ul>
 			<p><a href={`${base}/roadmap`}>See all ideas &rarr;</a></p>
 			<p class="feedback-cta">Missing a feature? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">Open an issue on GitHub</a> and let us know what you need.</p>
+		</div>
+	</section>
+
+	<!-- FAQ -->
+	<section class="section" aria-labelledby="faq">
+		<div class="container">
+			<h2 id="faq">Frequently Asked Questions</h2>
+			<dl class="faq-list">
+				<div class="faq-item">
+					<dt>Does this work with iCloud Photo Library?</dt>
+					<dd>Yes. Photo Export reads your Apple Photos library, which includes all photos synced via iCloud. It can also download iCloud originals that are stored remotely on demand during export.</dd>
+				</div>
+				<div class="faq-item">
+					<dt>Can I export photos to an external hard drive?</dt>
+					<dd>Absolutely. You can choose any local or external drive as your export destination. The app remembers your choice across launches.</dd>
+				</div>
+				<div class="faq-item">
+					<dt>Will it download iCloud originals that are stored remotely?</dt>
+					<dd>Yes. During export, the app automatically downloads originals from iCloud when they aren't stored locally on your Mac. No manual downloading required.</dd>
+				</div>
+				<div class="faq-item">
+					<dt>Is it really free?</dt>
+					<dd>Yes. Photo Export is free, open-source software released under the MIT license. No subscriptions, no in-app purchases, no ads.</dd>
+				</div>
+				<div class="faq-item">
+					<dt>Does it export videos too?</dt>
+					<dd>Yes. The app exports photos and videos. Live Photos are exported as a single still image — full motion export (paired image + video) is planned for a future release.</dd>
+				</div>
+				<div class="faq-item">
+					<dt>What happens if the export is interrupted?</dt>
+					<dd>The app tracks every exported photo. If the export is interrupted, you can resume and it will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again.</dd>
+				</div>
+			</dl>
 		</div>
 	</section>
 
@@ -302,6 +391,28 @@ const description =
 		gap: 1rem;
 		justify-content: center;
 		flex-wrap: wrap;
+	}
+
+	.faq-list {
+		max-width: 42rem;
+		margin: 0 auto;
+	}
+
+	.faq-item {
+		margin-bottom: 1.5rem;
+	}
+
+	.faq-item dt {
+		font-weight: 700;
+		font-size: 1.05rem;
+		margin-bottom: 0.35rem;
+	}
+
+	.faq-item dd {
+		color: var(--site-muted);
+		font-size: 0.95rem;
+		margin-left: 0;
+		line-height: 1.6;
 	}
 
 	@media (max-width: 768px) {

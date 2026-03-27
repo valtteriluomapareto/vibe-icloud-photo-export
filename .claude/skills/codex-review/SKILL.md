@@ -2,9 +2,8 @@
 name: codex-review
 description: Use Codex CLI to review code changes — uncommitted work, a specific commit, or a range against a base branch. Optionally accepts a focus area for targeted review.
 user-invocable: true
-disable-model-invocation: true
+disable-model-invocation: false
 argument-hint: "[uncommitted | <commit-sha> | --base <branch>] [--focus <area>]"
-allowed-tools: Bash
 ---
 
 Run `codex review` to get an AI code review of the requested changes.

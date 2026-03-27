@@ -10,7 +10,7 @@ export default defineConfig({
 		starlight({
 			title: 'Photo Export',
 			description:
-				'Back up your Apple Photos library to local or external storage, organized by year and month.',
+				'Free macOS app to export and back up your iCloud and Apple Photos library to any drive, organized by year and month.',
 			social: [
 				{
 					icon: 'github',
@@ -20,6 +20,7 @@ export default defineConfig({
 			],
 			sidebar: [
 				{ label: 'Getting Started', slug: 'getting-started' },
+				{ label: 'Export iCloud Photos to External Drive', slug: 'export-icloud-photos' },
 				{ label: 'Features', slug: 'features' },
 				{ label: 'Architecture', slug: 'architecture' },
 				{ label: 'Ideas', slug: 'roadmap' },

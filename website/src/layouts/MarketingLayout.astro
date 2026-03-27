@@ -49,6 +49,7 @@ const structuredData = {
 		<meta name="twitter:image" content={socialImageUrl} />
 		<meta name="keywords" content="iCloud photos export, Apple Photos backup, export photos to external drive, macOS photo export, free photo backup app, iCloud photo backup, download iCloud photos" />
 		<script type="application/ld+json" set:html={JSON.stringify(structuredData)} />
+		<slot name="head" />
 	</head>
 	<body>
 		<a class="skip-link" href="#main-content">Skip to content</a>

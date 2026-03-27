@@ -12,15 +12,15 @@ struct MonthContentView: View {
 
   let year: Int
   let month: Int
-  @Binding var selectedAssetId: String?
+  @Binding var selectedAsset: AssetDescriptor?
 
   init(
-    year: Int, month: Int, selectedAssetId: Binding<String?>,
+    year: Int, month: Int, selectedAsset: Binding<AssetDescriptor?>,
     photoLibraryService: any PhotoLibraryService
   ) {
     self.year = year
     self.month = month
-    self._selectedAssetId = selectedAssetId
+    self._selectedAsset = selectedAsset
     _viewModel = StateObject(
       wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
@@ -59,13 +59,13 @@ struct MonthContentView: View {
             ThumbnailView(
               asset: asset,
               state: viewModel.thumbnailState(for: asset),
-              isSelected: asset.id == selectedAssetId,
+              isSelected: asset.id == selectedAsset?.id,
               isExported: exportRecordStore.isExported(assetId: asset.id),
               onRetry: { viewModel.retryThumbnail(for: asset.id) }
             )
             .frame(width: 120, height: 120)
             .onTapGesture {
-              selectedAssetId = asset.id
+              selectedAsset = asset
               viewModel.select(assetId: asset.id)
             }
           }
@@ -77,8 +77,11 @@ struct MonthContentView: View {
     .overlay(overlayViews)
     .task(id: "\(year)-\(month)") {
       await viewModel.loadAssets(forYear: year, month: month)
-      if selectedAssetId == nil, let id = viewModel.selectedAssetId {
-        selectedAssetId = id
+      if selectedAsset == nil,
+        let id = viewModel.selectedAssetId,
+        let initialAsset = viewModel.assets.first(where: { $0.id == id })
+      {
+        selectedAsset = initialAsset
       }
     }
     .onChange(of: exportManager.isRunning) { _, newValue in

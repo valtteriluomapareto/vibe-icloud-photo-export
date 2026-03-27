@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Photos
 import Testing
@@ -62,6 +63,32 @@ struct BackupScannerMatchingTests {
       ))
     }
     return (scannedFiles, rootDir)
+  }
+
+  private func writeTestImage(at url: URL, width: Int, height: Int) throws {
+    guard
+      let imageRep = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: width,
+        pixelsHigh: height,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ),
+      let imageData = imageRep.representation(using: .png, properties: [:])
+    else {
+      throw NSError(
+        domain: "BackupScannerMatchingTests",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Failed to create test image"]
+      )
+    }
+
+    try imageData.write(to: url)
   }
 
   // MARK: - Exact date match
@@ -147,33 +174,32 @@ struct BackupScannerMatchingTests {
     #expect(result.unmatched.isEmpty)
   }
 
-  @Test func filenameOnlyFallbackWithDateConfirmationMatches() async throws {
-    // Dates differ by 0.5s — too close for the integer-truncated date index to find via
-    // Step 1 (which checks ±1 integer second), but close enough for the discriminator's
-    // 1.0s tolerance to confirm. This exercises the filename→discriminator→match path.
-    let assetDate = Date(timeIntervalSinceReferenceDate: 800_000_000.0)
-    let fileDate = Date(timeIntervalSinceReferenceDate: 800_000_000.5)
+  @Test func filenameOnlyFallbackWithImageDimensionConfirmationMatches() async throws {
+    let assetDate = Date(timeIntervalSinceReferenceDate: 900_000_000)
+    let fileDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
     let asset = TestAssetFactory.makeAsset(
-      id: "close-date", creationDate: assetDate, mediaType: .image)
+      id: "dimension-match", creationDate: assetDate, mediaType: .image,
+      pixelWidth: 64, pixelHeight: 48)
 
     let service = makeService(
       assets: [("2025-6", [asset])],
       resources: [
-        "close-date": [TestAssetFactory.makeResource(originalFilename: "CLOSE.JPG")]
+        "dimension-match": [TestAssetFactory.makeResource(originalFilename: "DIMENSION.png")]
       ]
     )
 
     let (files, rootDir) = try makeScannedFiles([
-      (year: 2025, month: 6, filename: "CLOSE.JPG", modDate: fileDate, fileSize: 1024)
+      (year: 2025, month: 6, filename: "DIMENSION.png", modDate: fileDate, fileSize: 1024)
     ])
     defer { try? FileManager.default.removeItem(at: rootDir) }
+    try writeTestImage(at: files[0].url, width: 64, height: 48)
 
     let result = try await BackupScanner.matchFiles(files, photoLibraryService: service) { _ in }
 
-    // The date index lookup (Step 1) should find the candidate since ±1 integer second
-    // covers it. But let's verify the file gets matched one way or another.
+    // The far-apart dates force the matcher into the filename-only fallback path,
+    // where the real image dimensions confirm the single candidate.
     #expect(result.matched.count == 1)
-    #expect(result.matched.first?.asset.id == "close-date")
+    #expect(result.matched.first?.asset.id == "dimension-match")
     #expect(result.unmatched.isEmpty)
   }
 

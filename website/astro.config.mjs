@@ -11,6 +11,10 @@ export default defineConfig({
 			title: 'Photo Export',
 			description:
 				'Free macOS app to export and back up your iCloud and Apple Photos library to any drive, organized by year and month.',
+			logo: {
+				light: './src/assets/photo-export-logo-light.svg',
+				dark: './src/assets/photo-export-logo-dark.svg',
+			},
 			social: [
 				{
 					icon: 'github',
@@ -18,6 +22,10 @@ export default defineConfig({
 					href: 'https://github.com/valtteriluomapareto/vibe-icloud-photo-export',
 				},
 			],
+			editLink: {
+				baseUrl:
+					'https://github.com/valtteriluomapareto/vibe-icloud-photo-export/edit/main/website/src/content/docs/',
+			},
 			sidebar: [
 				{ label: 'Getting Started', slug: 'getting-started' },
 				{ label: 'Export iCloud Photos to External Drive', slug: 'export-icloud-photos' },

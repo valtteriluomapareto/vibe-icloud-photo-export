@@ -24,7 +24,7 @@ struct PhotoExportApp: App {
     _exportRecordStore = StateObject(wrappedValue: ers)
     _exportManager = StateObject(
       wrappedValue: ExportManager(
-        photoLibraryManager: plm, exportDestinationManager: edm, exportRecordStore: ers))
+        photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers))
   }
 
   var body: some Scene {

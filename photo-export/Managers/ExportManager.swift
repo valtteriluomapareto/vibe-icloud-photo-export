@@ -32,27 +32,34 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Dependencies
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
-  private let photoLibraryManager: PhotoLibraryManager
-  private let exportDestinationManager: ExportDestinationManager
-  private let exportRecordStore: ExportRecordStore
+  let photoLibraryService: any PhotoLibraryService
+  let exportDestination: any ExportDestination
+  let exportRecordStore: ExportRecordStore
+  let assetResourceWriter: any AssetResourceWriter
+  let fileSystem: any FileSystemService
 
   // MARK: - Internals
-  private var pendingJobs: [ExportJob] = []
+  private(set) var pendingJobs: [ExportJob] = []
   private var isProcessing: Bool = false
   private var currentTask: Task<Void, Never>?
-  private var currentJobAssetId: String?
-  private var generation: Int = 0
-  private var isEnqueueingAll: Bool = false
-  private var queuedCountsByYearMonth: [String: Int] = [:]
+  private(set) var currentJobAssetId: String?
+  private(set) var generation: Int = 0
+  private(set) var isEnqueueingAll: Bool = false
+  private(set) var queuedCountsByYearMonth: [String: Int] = [:]
   private var importTask: Task<Void, Never>?
 
   init(
-    photoLibraryManager: PhotoLibraryManager,
-    exportDestinationManager: ExportDestinationManager, exportRecordStore: ExportRecordStore
+    photoLibraryService: any PhotoLibraryService,
+    exportDestination: any ExportDestination,
+    exportRecordStore: ExportRecordStore,
+    assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
+    fileSystem: any FileSystemService = FileIOService()
   ) {
-    self.photoLibraryManager = photoLibraryManager
-    self.exportDestinationManager = exportDestinationManager
+    self.photoLibraryService = photoLibraryService
+    self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
+    self.assetResourceWriter = assetResourceWriter
+    self.fileSystem = fileSystem
   }
 
   // MARK: - Public API
@@ -101,7 +108,7 @@ final class ExportManager: ObservableObject {
         return
       }
       do {
-        let allYears = try photoLibraryManager.availableYears()
+        let allYears = try photoLibraryService.availableYears()
         for year in allYears {
           try await enqueueYear(year: year, generation: gen)
           guard self.generation == gen else {
@@ -168,14 +175,14 @@ final class ExportManager: ObservableObject {
   // MARK: - Queue Handling
   private func enqueueMonth(year: Int, month: Int, generation gen: Int) async throws {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryManager.isAuthorized else { return }
-    let assets = try await photoLibraryManager.fetchAssets(year: year, month: month)
+    guard photoLibraryService.isAuthorized else { return }
+    let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
     let unexported = assets.filter { asset in
-      !(exportRecordStore.isExported(assetId: asset.localIdentifier))
+      !(exportRecordStore.isExported(assetId: asset.id))
     }
     let newJobs = unexported.map {
-      ExportJob(assetLocalIdentifier: $0.localIdentifier, year: year, month: month)
+      ExportJob(assetLocalIdentifier: $0.id, year: year, month: month)
     }
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
@@ -186,8 +193,8 @@ final class ExportManager: ObservableObject {
 
   private func enqueueYear(year: Int, generation gen: Int) async throws {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryManager.isAuthorized else { return }
-    let assets = try await photoLibraryManager.fetchAssets(year: year, month: nil)
+    guard photoLibraryService.isAuthorized else { return }
+    let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
     let calendar = Calendar.current
     var newJobs: [ExportJob] = []
@@ -195,9 +202,9 @@ final class ExportManager: ObservableObject {
     for asset in assets {
       guard let created = asset.creationDate else { continue }
       let m = calendar.component(.month, from: created)
-      if !exportRecordStore.isExported(assetId: asset.localIdentifier) {
+      if !exportRecordStore.isExported(assetId: asset.id) {
         newJobs.append(
-          ExportJob(assetLocalIdentifier: asset.localIdentifier, year: year, month: m))
+          ExportJob(assetLocalIdentifier: asset.id, year: year, month: m))
       }
     }
     pendingJobs.append(contentsOf: newJobs)
@@ -209,7 +216,7 @@ final class ExportManager: ObservableObject {
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
   }
 
-  private func processQueueIfNeeded() {
+  func processQueueIfNeeded() {
     guard !isProcessing else { return }
     guard !isPaused else { return }
     guard !pendingJobs.isEmpty else { return }
@@ -281,10 +288,9 @@ final class ExportManager: ObservableObject {
     do {
       try throwIfCancelledOrStale(gen)
 
-      // Resolve PHAsset from local identifier
-      let fetchResult = PHAsset.fetchAssets(
-        withLocalIdentifiers: [job.assetLocalIdentifier], options: nil)
-      guard let asset = fetchResult.firstObject else {
+      // Resolve asset descriptor
+      guard let descriptor = photoLibraryService.fetchAssetDescriptor(for: job.assetLocalIdentifier)
+      else {
         try throwIfCancelledOrStale(gen)
         exportRecordStore.markFailed(
           assetId: job.assetLocalIdentifier, error: "Asset not found", at: Date())
@@ -293,11 +299,11 @@ final class ExportManager: ObservableObject {
         return
       }
       logger.debug(
-        "Export begin id: \(asset.localIdentifier, privacy: .public) type: \(asset.mediaType.rawValue) created: \(String(describing: asset.creationDate), privacy: .public) dims: \(asset.pixelWidth)x\(asset.pixelHeight)"
+        "Export begin id: \(descriptor.id, privacy: .public) type: \(descriptor.mediaType.rawValue) created: \(String(describing: descriptor.creationDate), privacy: .public) dims: \(descriptor.pixelWidth)x\(descriptor.pixelHeight)"
       )
 
       // Ensure security-scoped access for destination during all filesystem work
-      guard let scopedURL = exportDestinationManager.beginScopedAccess() else {
+      guard let scopedURL = exportDestination.beginScopedAccess() else {
         throw NSError(
           domain: "Export", code: 1,
           userInfo: [
@@ -305,24 +311,24 @@ final class ExportManager: ObservableObject {
           ])
       }
       logger.debug("Begin scoped access for: \(scopedURL.path, privacy: .public)")
-      defer { exportDestinationManager.endScopedAccess(for: scopedURL) }
+      defer { exportDestination.endScopedAccess(for: scopedURL) }
 
       // Determine destination directory
-      let destDir = try exportDestinationManager.urlForMonth(
+      let destDir = try exportDestination.urlForMonth(
         year: job.year, month: job.month, createIfNeeded: true)
       let relPath = "\(job.year)/" + String(format: "%02d", job.month) + "/"
 
       // Select primary resource (prefer photo/video original)
-      let resources = PHAssetResource.assetResources(for: asset)
+      let resources = photoLibraryService.resources(for: descriptor.id)
       let resourceSummary = resources.map { "\($0.type.rawValue):\($0.originalFilename)" }.joined(
         separator: ", ")
       logger.debug("Asset resources: \(resourceSummary, privacy: .public)")
       guard let resource = selectPrimaryResource(from: resources) else {
         try throwIfCancelledOrStale(gen)
         exportRecordStore.markFailed(
-          assetId: asset.localIdentifier, error: "No exportable resource", at: Date())
+          assetId: descriptor.id, error: "No exportable resource", at: Date())
         logger.error(
-          "No exportable resource for id: \(asset.localIdentifier, privacy: .public)")
+          "No exportable resource for id: \(descriptor.id, privacy: .public)")
         return
       }
       logger.debug(
@@ -334,34 +340,35 @@ final class ExportManager: ObservableObject {
       let finalURL = uniqueFileURL(in: destDir, baseName: baseName, ext: ext)
       let tempURL = finalURL.appendingPathExtension("tmp")
       defer {
-        if FileManager.default.fileExists(atPath: tempURL.path) {
-          try? FileManager.default.removeItem(at: tempURL)
+        if fileSystem.fileExists(atPath: tempURL.path) {
+          try? fileSystem.removeItem(at: tempURL)
         }
       }
 
       try throwIfCancelledOrStale(gen)
       currentAssetFilename = finalURL.lastPathComponent
       exportRecordStore.markInProgress(
-        assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath,
+        assetId: descriptor.id, year: job.year, month: job.month, relPath: relPath,
         filename: finalURL.lastPathComponent)
       didMarkInProgress = true
 
       // Clean up any stale temp file at destination
-      if FileManager.default.fileExists(atPath: tempURL.path) {
-        try? FileManager.default.removeItem(at: tempURL)
+      if fileSystem.fileExists(atPath: tempURL.path) {
+        try? fileSystem.removeItem(at: tempURL)
       }
 
-      try await writeResource(resource, to: tempURL)
+      try await assetResourceWriter.writeResource(resource, forAssetId: descriptor.id, to: tempURL)
       try throwIfCancelledOrStale(gen)
 
-      // Atomic move to final location (off main)
-      try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue.global(qos: .utility).async {
+      // Atomic move to final location
+      try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Void, Error>) in
+        DispatchQueue.global(qos: .utility).async { [fileSystem] in
           do {
             self.logger.debug(
               "Move begin: \(tempURL.lastPathComponent, privacy: .public) -> \(finalURL.lastPathComponent, privacy: .public)"
             )
-            try FileIOService.moveItemAtomically(from: tempURL, to: finalURL)
+            try fileSystem.moveItemAtomically(from: tempURL, to: finalURL)
             self.logger.debug("Move done -> \(finalURL.lastPathComponent, privacy: .public)")
             continuation.resume(returning: ())
           } catch {
@@ -372,13 +379,13 @@ final class ExportManager: ObservableObject {
       }
       try throwIfCancelledOrStale(gen)
 
-      // Apply timestamps based on asset creation date (off main)
-      if let createdAt = asset.creationDate {
+      // Apply timestamps based on asset creation date
+      if let createdAt = descriptor.creationDate {
         await withCheckedContinuation { continuation in
-          DispatchQueue.global(qos: .utility).async {
-            FileIOService.applyTimestamps(creationDate: createdAt, to: finalURL)
+          DispatchQueue.global(qos: .utility).async { [fileSystem] in
+            fileSystem.applyTimestamps(creationDate: createdAt, to: finalURL)
             self.logger.debug(
-              "Applied timestamps for id: \(asset.localIdentifier, privacy: .public)")
+              "Applied timestamps for id: \(descriptor.id, privacy: .public)")
             continuation.resume()
           }
         }
@@ -386,7 +393,7 @@ final class ExportManager: ObservableObject {
       }
 
       exportRecordStore.markExported(
-        assetId: asset.localIdentifier, year: job.year, month: job.month, relPath: relPath,
+        assetId: descriptor.id, year: job.year, month: job.month, relPath: relPath,
         filename: finalURL.lastPathComponent, exportedAt: Date())
       logger.info(
         "Exported \(finalURL.lastPathComponent, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
@@ -408,7 +415,7 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Helpers
-  private func selectPrimaryResource(from resources: [PHAssetResource]) -> PHAssetResource? {
+  private func selectPrimaryResource(from resources: [ResourceDescriptor]) -> ResourceDescriptor? {
     if let photo = resources.first(where: { $0.type == .photo }) { return photo }
     if let video = resources.first(where: { $0.type == .video }) { return video }
     if let alternatePhoto = resources.first(where: { $0.type == .alternatePhoto }) {
@@ -426,43 +433,15 @@ final class ExportManager: ObservableObject {
   }
 
   func uniqueFileURL(in directory: URL, baseName: String, ext: String) -> URL {
-    let fm = FileManager.default
     var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(ext)
     var index = 1
-    while fm.fileExists(atPath: candidate.path) {
+    while fileSystem.fileExists(atPath: candidate.path) {
       let nextName = "\(baseName) (\(index))"
       candidate = directory.appendingPathComponent(nextName).appendingPathExtension(ext)
       index += 1
       if index > 10_000 { break }
     }
     return candidate
-  }
-
-  private func writeResource(_ resource: PHAssetResource, to url: URL) async throws {
-    let start = Date()
-    logger.debug(
-      "writeResource begin type: \(resource.type.rawValue) filename: \(resource.originalFilename, privacy: .public) -> \(url.lastPathComponent, privacy: .public)"
-    )
-    return try await withCheckedThrowingContinuation { continuation in
-      let options = PHAssetResourceRequestOptions()
-      options.isNetworkAccessAllowed = true
-      // Write directly to the provided URL
-      PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) {
-        error in
-        let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-        if let error {
-          self.logger.error(
-            "writeResource failed after \(elapsedMs)ms: \(error.localizedDescription, privacy: .public)"
-          )
-          continuation.resume(throwing: error)
-        } else {
-          self.logger.debug(
-            "writeResource success after \(elapsedMs)ms -> \(url.lastPathComponent, privacy: .public)"
-          )
-          continuation.resume(returning: ())
-        }
-      }
-    }
   }
 
   // MARK: - Import Existing Backup
@@ -476,7 +455,7 @@ final class ExportManager: ObservableObject {
       logger.warning("Cannot import while export is active")
       return
     }
-    guard let rootURL = exportDestinationManager.selectedFolderURL else {
+    guard let rootURL = exportDestination.selectedFolderURL else {
       logger.warning("Cannot import: no destination selected")
       return
     }
@@ -492,13 +471,13 @@ final class ExportManager: ObservableObject {
 
       do {
         // Acquire security-scoped access for the scan
-        guard let scopedURL = self.exportDestinationManager.beginScopedAccess() else {
+        guard let scopedURL = self.exportDestination.beginScopedAccess() else {
           self.logger.error("Failed to acquire security-scoped access for import")
           self.isImporting = false
           self.importStage = nil
           return
         }
-        defer { self.exportDestinationManager.endScopedAccess(for: scopedURL) }
+        defer { self.exportDestination.endScopedAccess(for: scopedURL) }
 
         // Stage 1: Scan backup folder
         self.importStage = .scanningBackupFolder
@@ -526,7 +505,7 @@ final class ExportManager: ObservableObject {
         self.importStage = .readingPhotosLibrary
         let matchResult = try await BackupScanner.matchFiles(
           scannedFiles,
-          photoLibraryManager: self.photoLibraryManager
+          photoLibraryService: self.photoLibraryService
         ) { [weak self] stage in
           self?.importStage = stage
         }
@@ -542,14 +521,14 @@ final class ExportManager: ObservableObject {
         self.importStage = .rebuildingLocalState
 
         let now = Date()
-        let calendar = Calendar.current
         var records: [ExportRecord] = []
         records.reserveCapacity(matchResult.matched.count)
 
-        for (file, asset) in matchResult.matched {
+        for (file, descriptor) in matchResult.matched {
           let year: Int
           let month: Int
-          if let creationDate = asset.creationDate {
+          if let creationDate = descriptor.creationDate {
+            let calendar = Calendar.current
             year = calendar.component(.year, from: creationDate)
             month = calendar.component(.month, from: creationDate)
           } else {
@@ -559,7 +538,7 @@ final class ExportManager: ObservableObject {
           let relPath = "\(year)/" + String(format: "%02d", month) + "/"
 
           let record = ExportRecord(
-            id: asset.localIdentifier,
+            id: descriptor.id,
             year: year,
             month: month,
             relPath: relPath,

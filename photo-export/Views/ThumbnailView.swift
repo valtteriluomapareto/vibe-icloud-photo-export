@@ -9,7 +9,7 @@ enum ThumbnailState {
 }
 
 struct ThumbnailView: View {
-  let asset: PHAsset
+  let asset: AssetDescriptor
   let state: ThumbnailState
   let isSelected: Bool
   let isExported: Bool

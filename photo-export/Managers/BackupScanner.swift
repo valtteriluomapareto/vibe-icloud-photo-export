@@ -30,7 +30,7 @@ struct BackupScanner {
   /// The outcome of matching scanned backup files against the Photos library.
   struct MatchResult {
     /// Files that matched exactly one Photos asset with strong confirmation.
-    var matched: [(file: ScannedFile, asset: PHAsset)] = []
+    var matched: [(file: ScannedFile, asset: AssetDescriptor)] = []
     /// Files where multiple Photos assets fit equally well.
     var ambiguous: [ScannedFile] = []
     /// Files with no matching Photos asset found.
@@ -140,8 +140,8 @@ struct BackupScanner {
 
   // MARK: - Asset fingerprint (cheap, built once per asset)
 
-  /// Value-type snapshot of a PHAsset's metadata, built once per asset batch.
-  /// Avoids repeated PHAssetResource lookups during matching.
+  /// Value-type snapshot of an asset's metadata, built once per asset batch.
+  /// Avoids repeated resource lookups during matching.
   struct AssetFingerprint {
     let localIdentifier: String
     let mediaType: PHAssetMediaType
@@ -151,19 +151,22 @@ struct BackupScanner {
     let pixelWidth: Int
     let pixelHeight: Int
     let duration: TimeInterval
-    /// Original filenames from PHAssetResource (cached once)
+    /// Original filenames from resources (cached once)
     let originalFilenames: [String]
   }
 
-  /// Builds fingerprints for a batch of PHAssets. Calls PHAssetResource once per asset.
-  static func buildFingerprints(for assets: [PHAsset]) -> [AssetFingerprint] {
+  /// Builds fingerprints for a batch of AssetDescriptors with resource info from the service.
+  @MainActor
+  static func buildFingerprints(
+    for assets: [AssetDescriptor], using service: any PhotoLibraryService
+  ) -> [AssetFingerprint] {
     assets.map { asset in
-      let resources = PHAssetResource.assetResources(for: asset)
+      let resources = service.resources(for: asset.id)
       let filenames = resources.map { $0.originalFilename }
       let creationSecond: Int? =
         asset.creationDate.map { Int($0.timeIntervalSinceReferenceDate) }
       return AssetFingerprint(
-        localIdentifier: asset.localIdentifier,
+        localIdentifier: asset.id,
         mediaType: asset.mediaType,
         creationDate: asset.creationDate,
         creationSecond: creationSecond,
@@ -180,7 +183,7 @@ struct BackupScanner {
   /// Matches scanned backup files against Photos library assets.
   ///
   /// Hybrid matching strategy:
-  /// 1. Build AssetFingerprint snapshots once per asset (O(assets) PHAssetResource calls)
+  /// 1. Build AssetFingerprint snapshots once per asset (O(assets) resource calls)
   /// 2. Index fingerprints by (mediaType, creation-second) for fast lookup
   /// 3. For each file, use modification date as primary lookup key
   /// 4. If not unique, intersect with filename matches from cached fingerprints
@@ -189,7 +192,7 @@ struct BackupScanner {
   /// Adjacent months are included to handle time-zone boundary drift.
   static func matchFiles(
     _ scannedFiles: [ScannedFile],
-    photoLibraryManager: PhotoLibraryManager,
+    photoLibraryService: any PhotoLibraryService,
     progress: @MainActor (ImportStage) -> Void
   ) async throws -> MatchResult {
     var result = MatchResult()
@@ -202,7 +205,7 @@ struct BackupScanner {
     }
 
     // Caches: assets and fingerprints per year-month
-    var assetsByYearMonth: [String: [PHAsset]] = [:]
+    var assetsByYearMonth: [String: [AssetDescriptor]] = [:]
     var fingerprintsByYearMonth: [String: [AssetFingerprint]] = [:]
 
     let totalFiles = scannedFiles.count
@@ -219,10 +222,10 @@ struct BackupScanner {
         if assetsByYearMonth[k] == nil {
           try Task.checkCancellation()
           await progress(.readingPhotosLibrary)
-          let assets = (try? await photoLibraryManager.fetchAssets(year: y, month: m)) ?? []
+          let assets = (try? await photoLibraryService.fetchAssets(year: y, month: m)) ?? []
           assetsByYearMonth[k] = assets
-          // Build fingerprints once — this is the only PHAssetResource call site
-          fingerprintsByYearMonth[k] = buildFingerprints(for: assets)
+          // Build fingerprints once — this is the only resource call site
+          fingerprintsByYearMonth[k] = await buildFingerprints(for: assets, using: photoLibraryService)
         }
       }
 
@@ -241,15 +244,15 @@ struct BackupScanner {
         }
       }
 
-      // Combine assets for result references (matched result needs PHAsset)
-      var combinedAssets: [PHAsset] = []
+      // Combine assets for result references
+      var combinedAssets: [AssetDescriptor] = []
       for (y, m) in monthsToFetch {
         combinedAssets.append(contentsOf: assetsByYearMonth["\(y)-\(m)"] ?? [])
       }
-      // Build localIdentifier → PHAsset lookup
-      var assetById: [String: PHAsset] = [:]
+      // Build id → AssetDescriptor lookup
+      var assetById: [String: AssetDescriptor] = [:]
       for asset in combinedAssets {
-        assetById[asset.localIdentifier] = asset
+        assetById[asset.id] = asset
       }
 
       for file in files {

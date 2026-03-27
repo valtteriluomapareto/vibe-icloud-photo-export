@@ -12,17 +12,17 @@ struct MonthContentView: View {
 
   let year: Int
   let month: Int
-  @Binding var selectedAsset: PHAsset?
+  @Binding var selectedAssetId: String?
 
   init(
-    year: Int, month: Int, selectedAsset: Binding<PHAsset?>,
-    photoLibraryManager: PhotoLibraryManager
+    year: Int, month: Int, selectedAssetId: Binding<String?>,
+    photoLibraryService: any PhotoLibraryService
   ) {
     self.year = year
     self.month = month
-    self._selectedAsset = selectedAsset
+    self._selectedAssetId = selectedAssetId
     _viewModel = StateObject(
-      wrappedValue: MonthViewModel(photoLibraryManager: photoLibraryManager))
+      wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
   var body: some View {
@@ -55,18 +55,18 @@ struct MonthContentView: View {
           GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 10, alignment: .top)
         ]
         LazyVGrid(columns: columns, spacing: 10) {
-          ForEach(viewModel.assets, id: \.localIdentifier) { asset in
+          ForEach(viewModel.assets) { asset in
             ThumbnailView(
               asset: asset,
               state: viewModel.thumbnailState(for: asset),
-              isSelected: asset.localIdentifier == selectedAsset?.localIdentifier,
-              isExported: exportRecordStore.isExported(assetId: asset.localIdentifier),
-              onRetry: { viewModel.retryThumbnail(for: asset) }
+              isSelected: asset.id == selectedAssetId,
+              isExported: exportRecordStore.isExported(assetId: asset.id),
+              onRetry: { viewModel.retryThumbnail(for: asset.id) }
             )
             .frame(width: 120, height: 120)
             .onTapGesture {
-              selectedAsset = asset
-              viewModel.select(asset: asset)
+              selectedAssetId = asset.id
+              viewModel.select(assetId: asset.id)
             }
           }
         }
@@ -77,10 +77,8 @@ struct MonthContentView: View {
     .overlay(overlayViews)
     .task(id: "\(year)-\(month)") {
       await viewModel.loadAssets(forYear: year, month: month)
-      if selectedAsset == nil, let id = viewModel.selectedAssetId,
-        let asset = viewModel.assets.first(where: { $0.localIdentifier == id })
-      {
-        selectedAsset = asset
+      if selectedAssetId == nil, let id = viewModel.selectedAssetId {
+        selectedAssetId = id
       }
     }
     .onChange(of: exportManager.isRunning) { _, newValue in

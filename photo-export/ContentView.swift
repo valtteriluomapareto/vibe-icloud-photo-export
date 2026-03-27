@@ -27,8 +27,9 @@ struct ContentView: View {
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
 
-  // Detail selection
-  @State private var selectedAsset: PHAsset?
+  // Detail selection — tracked by asset ID string
+  @State private var selectedAssetId: String?
+  @State private var selectedAsset: AssetDescriptor?
 
   // Import sheet
   @State private var isShowingImportSheet: Bool = false
@@ -84,8 +85,8 @@ struct ContentView: View {
             if let selected = selectedYearMonth {
               MonthContentView(
                 year: selected.year, month: selected.month,
-                selectedAsset: $selectedAsset,
-                photoLibraryManager: photoLibraryManager
+                selectedAssetId: $selectedAssetId,
+                photoLibraryService: photoLibraryManager
               )
               .environmentObject(photoLibraryManager)
               .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -156,7 +157,14 @@ struct ContentView: View {
     }
     .onChange(of: selectedYearMonth) { _, _ in
       // Clear asset selection when month changes
-      selectedAsset = nil
+      selectedAssetId = nil
+    }
+    .onChange(of: selectedAssetId) { _, newId in
+      if let newId {
+        selectedAsset = photoLibraryManager.fetchAssetDescriptor(for: newId)
+      } else {
+        selectedAsset = nil
+      }
     }
     .focusedSceneValue(\.importBackupAction, canImport ? ImportBackupAction {
       isShowingImportSheet = true

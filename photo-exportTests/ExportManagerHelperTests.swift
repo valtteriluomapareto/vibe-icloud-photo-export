@@ -15,8 +15,8 @@ struct ExportManagerHelperTests {
     let photoLib = PhotoLibraryManager()
     let destMgr = ExportDestinationManager()
     let manager = ExportManager(
-      photoLibraryManager: photoLib,
-      exportDestinationManager: destMgr,
+      photoLibraryService: photoLib,
+      exportDestination: destMgr,
       exportRecordStore: recordStore)
     return (manager, recordStore)
   }

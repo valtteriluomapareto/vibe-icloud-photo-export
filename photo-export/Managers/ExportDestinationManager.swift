@@ -5,7 +5,7 @@ import SwiftUI
 import os
 
 @MainActor
-final class ExportDestinationManager: ObservableObject {
+final class ExportDestinationManager: ObservableObject, ExportDestination {
   // MARK: - Published State
   @Published private(set) var selectedFolderURL: URL?
   @Published private(set) var isAvailable: Bool = false
@@ -21,7 +21,25 @@ final class ExportDestinationManager: ObservableObject {
   private var volumeObservers: [NSObjectProtocol] = []
 
   // MARK: - Errors
-  enum ExportDestinationError: LocalizedError {
+  enum ExportDestinationError: LocalizedError, Equatable {
+    static func == (lhs: ExportDestinationError, rhs: ExportDestinationError) -> Bool {
+      switch (lhs, rhs) {
+      case (.noSelection, .noSelection),
+        (.notAvailable, .notAvailable),
+        (.notWritable, .notWritable),
+        (.invalidYear, .invalidYear),
+        (.invalidMonth, .invalidMonth),
+        (.scopeAccessDenied, .scopeAccessDenied),
+        (.pathTooLong, .pathTooLong):
+        return true
+      case (.notDirectory(let l), .notDirectory(let r)):
+        return l == r
+      case (.failedToCreateFolder(let lURL, _), .failedToCreateFolder(let rURL, _)):
+        return lURL == rURL
+      default:
+        return false
+      }
+    }
     case noSelection
     case notAvailable
     case notWritable
@@ -160,6 +178,17 @@ final class ExportDestinationManager: ObservableObject {
       )
       throw ExportDestinationError.failedToCreateFolder(url, underlying: error)
     }
+  }
+
+  // MARK: - Testing Support
+
+  /// Directly sets the folder URL without going through NSOpenPanel/bookmark.
+  /// Only intended for unit tests — skips bookmark persistence and validation.
+  func setSelectedFolderForTesting(_ url: URL) {
+    selectedFolderURL = url
+    isAvailable = true
+    isWritable = true
+    statusMessage = nil
   }
 
   // MARK: - Internal Helpers

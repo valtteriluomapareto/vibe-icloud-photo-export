@@ -7,7 +7,7 @@ struct AssetDetailView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
-  let asset: PHAsset?
+  let asset: AssetDescriptor?
 
   @State private var fullImage: NSImage?
   @State private var isLoading: Bool = false
@@ -50,7 +50,7 @@ struct AssetDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .task(id: asset?.localIdentifier) {
+    .task(id: asset?.id) {
       await loadFullImage()
     }
   }
@@ -66,16 +66,16 @@ struct AssetDetailView: View {
     errorMessage = nil
     fullImage = nil
     logger.debug(
-      "Preview start id: \(asset.localIdentifier, privacy: .public) dims: \(asset.pixelWidth)x\(asset.pixelHeight)"
+      "Preview start id: \(asset.id, privacy: .public) dims: \(asset.pixelWidth)x\(asset.pixelHeight)"
     )
     do {
-      let image = try await photoLibraryManager.requestFullImage(for: asset)
+      let image = try await photoLibraryManager.requestFullImage(for: asset.id)
       await MainActor.run {
         fullImage = image
         isLoading = false
       }
       logger.debug(
-        "Preview loaded id: \(asset.localIdentifier, privacy: .public) size: \(Int(image.size.width))x\(Int(image.size.height))"
+        "Preview loaded id: \(asset.id, privacy: .public) size: \(Int(image.size.width))x\(Int(image.size.height))"
       )
     } catch {
       await MainActor.run {
@@ -83,28 +83,16 @@ struct AssetDetailView: View {
         errorMessage = "Failed to load image: \(error.localizedDescription)"
       }
       logger.error(
-        "Preview failed id: \(asset.localIdentifier, privacy: .public) error: \(error.localizedDescription, privacy: .public)"
+        "Preview failed id: \(asset.id, privacy: .public) error: \(error.localizedDescription, privacy: .public)"
       )
     }
   }
 
-  private func metadataView(for asset: PHAsset) -> some View {
-    let resources = PHAssetResource.assetResources(for: asset)
-    let primaryResource = resources.first(where: { $0.type == .photo })
-      ?? resources.first(where: { $0.type == .video })
-      ?? resources.first
-    let originalFilename = primaryResource?.originalFilename
-    // Note: "fileSize" is an undocumented KVC property on PHAssetResource.
-    // It works at runtime but is not part of the public API. Fails gracefully to nil.
-    let fileSize: Int64? = {
-      guard let r = primaryResource,
-        let size = r.value(forKey: "fileSize") as? Int64, size > 0
-      else { return nil }
-      return size
-    }()
+  private func metadataView(for asset: AssetDescriptor) -> some View {
+    let details = photoLibraryManager.assetDetails(for: asset.id)
 
     return VStack(alignment: .leading, spacing: 6) {
-      if let name = originalFilename {
+      if let name = details?.originalFilename {
         Text(name)
           .fontWeight(.medium)
       }
@@ -113,14 +101,14 @@ struct AssetDetailView: View {
       }
       Text(mediaTypeString(from: asset.mediaType))
       Text("Dimensions: \(asset.pixelWidth) \u{00d7} \(asset.pixelHeight)")
-      if let bytes = fileSize {
+      if let bytes = details?.fileSize {
         Text("File size: \(formattedFileSize(bytes))")
       }
       if asset.mediaType == .video {
         let durationString = String(format: "%.0fs", asset.duration)
         Text("Duration: \(durationString)")
       }
-      let id = asset.localIdentifier
+      let id = asset.id
       if let export = exportRecordStore.exportInfo(assetId: id) {
         switch export.status {
         case .done:

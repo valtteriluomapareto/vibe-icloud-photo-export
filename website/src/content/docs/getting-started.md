@@ -5,11 +5,18 @@ description: How to install and use Photo Export on your Mac.
 
 Photo Export is a native macOS app that exports your Apple Photos library to local or external storage, organized by year and month.
 
+## Prerequisites
+
+- **macOS 15.0** or later
+- **iCloud Photos enabled** — Photo Export reads your local Photos library via Apple's PhotoKit framework. It sees exactly what the built-in Photos app sees. For your iCloud photos to appear, iCloud Photos must be turned on: go to **System Settings → Apple Account → iCloud → Photos** and make sure it's enabled.
+
+:::note
+Photo Export uses only Apple's official PhotoKit API — no private APIs, no reverse engineering, no iCloud credentials. This means it works reliably across macOS updates and never accesses anything outside what the Photos app itself can see.
+:::
+
 ## Download
 
 Download the latest DMG from the [GitHub Releases page](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases). Open the DMG and drag Photo Export to your Applications folder.
-
-**Requirements:** macOS 15.0+
 
 The app is signed and notarized by Apple, so it will open without Gatekeeper warnings.
 

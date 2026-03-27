@@ -73,6 +73,12 @@ const faqData = {
 	<section class="section" aria-labelledby="why-photo-export">
 		<div class="container">
 			<h2 id="why-photo-export">Why Use Photo Export for Your iCloud Backup?</h2>
+			<p class="section-lead">
+				Photo Export uses Apple's <strong>PhotoKit framework</strong> — the same system API that powers the built-in Photos app. It sees exactly what your Photos app sees: every photo, video, and album synced through iCloud Photos. No reverse engineering, no private APIs, no workarounds.
+			</p>
+			<p class="section-lead">
+				This matters because PhotoKit is <strong>the only supported way</strong> to read the Photos library on macOS. It means the app works reliably across macOS updates, respects your privacy settings, and can request iCloud originals on demand through Apple's own infrastructure. Your credentials never leave your Mac.
+			</p>
 			<div class="value-props">
 				<div class="value-prop">
 					<strong>Your photos, your folders</strong>
@@ -125,6 +131,7 @@ const faqData = {
 	<section class="section" aria-labelledby="how-it-works">
 		<div class="container">
 			<h2 id="how-it-works">How to Export Your iCloud Photos in 3 Steps</h2>
+			<p class="section-note"><strong>Prerequisite:</strong> Make sure iCloud Photos is enabled on your Mac (<strong>System Settings → Apple Account → iCloud → Photos</strong>). Photo Export reads your local Photos library, so your iCloud photos need to be syncing to this Mac.</p>
 			<div class="steps">
 				<div class="step">
 					<div class="step-number">1</div>
@@ -259,6 +266,19 @@ const faqData = {
 
 	.value-prop strong {
 		font-size: 1.05rem;
+	}
+
+	.section-lead {
+		max-width: 40rem;
+		margin: 0 auto 1rem;
+		color: var(--site-muted);
+		font-size: 1rem;
+		line-height: 1.7;
+		text-align: center;
+	}
+
+	.section-lead:last-of-type {
+		margin-bottom: 2.5rem;
 	}
 
 	.value-prop span {

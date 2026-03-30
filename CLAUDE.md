@@ -54,6 +54,7 @@ UI tests exist in `photo-exportUITests/` but are skipped by default in the share
 ## Workflow
 
 - After completing a new feature or significant change, run `/codex-review` to get an AI code review before committing.
+- **Releasing:** Always run `scripts/bump-version.sh <version>` before pushing a tag. The release pipeline validates that the tag matches `MARKETING_VERSION` and will fail if they diverge.
 
 ## Key Conventions
 
@@ -63,3 +64,4 @@ UI tests exist in `photo-exportUITests/` but are skipped by default in the share
 - Use `.task(id:)` for cancellation-aware async loading in views.
 - SwiftLint config (`.swiftlint.yml`): line length 140, several rules disabled (see file). CI runs `--strict`.
 - swift-format config (`.swift-format.json`): 4-space indentation, 120-char line length.
+- Website uses Prettier (with `prettier-plugin-astro`) and oxlint. Run `npm run format:check` and `npm run lint` from `website/`. Both are enforced in CI.

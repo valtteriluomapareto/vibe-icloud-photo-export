@@ -28,7 +28,7 @@ struct ContentView: View {
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
 
   // Detail selection
-  @State private var selectedAsset: PHAsset?
+  @State private var selectedAsset: AssetDescriptor?
 
   // Import sheet
   @State private var isShowingImportSheet: Bool = false
@@ -85,7 +85,7 @@ struct ContentView: View {
               MonthContentView(
                 year: selected.year, month: selected.month,
                 selectedAsset: $selectedAsset,
-                photoLibraryManager: photoLibraryManager
+                photoLibraryService: photoLibraryManager
               )
               .environmentObject(photoLibraryManager)
               .frame(maxWidth: .infinity, maxHeight: .infinity)

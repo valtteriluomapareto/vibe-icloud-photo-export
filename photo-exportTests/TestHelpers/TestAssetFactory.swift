@@ -1,0 +1,31 @@
+import Foundation
+import Photos
+
+@testable import Photo_Export
+
+enum TestAssetFactory {
+  static func makeAsset(
+    id: String = UUID().uuidString,
+    creationDate: Date? = Date(),
+    mediaType: PHAssetMediaType = .image,
+    pixelWidth: Int = 4032,
+    pixelHeight: Int = 3024,
+    duration: TimeInterval = 0
+  ) -> AssetDescriptor {
+    AssetDescriptor(
+      id: id,
+      creationDate: creationDate,
+      mediaType: mediaType,
+      pixelWidth: pixelWidth,
+      pixelHeight: pixelHeight,
+      duration: duration
+    )
+  }
+
+  static func makeResource(
+    type: PHAssetResourceType = .photo,
+    originalFilename: String = "IMG_0001.JPG"
+  ) -> ResourceDescriptor {
+    ResourceDescriptor(type: type, originalFilename: originalFilename)
+  }
+}

@@ -5,23 +5,23 @@ import SwiftUI
 
 @MainActor
 final class MonthViewModel: ObservableObject {
-  @Published private(set) var assets: [PHAsset] = []
+  @Published private(set) var assets: [AssetDescriptor] = []
   @Published private(set) var thumbnailsById: [String: NSImage] = [:]
   @Published private(set) var failedThumbnailIds: Set<String> = []
   @Published var isLoading: Bool = false
   @Published var errorMessage: String?
 
-  // Selection is tracked via id to avoid retaining PHAsset strongly across updates
+  // Selection is tracked via id to avoid retaining assets strongly across updates
   @Published var selectedAssetId: String?
   @Published private(set) var isExportRunning: Bool = false
 
-  private let photoLibraryManager: PhotoLibraryManager
+  private let photoLibraryService: any PhotoLibraryService
 
   // Control initial thumbnail batch size
   private let initialThumbnailBatchSize: Int = 40
 
   // Track cached assets to manage PHCachingImageManager preheating
-  private var cachedAssets: [PHAsset] = []
+  private var cachedAssets: [AssetDescriptor] = []
 
   // Track which thumbnails have been upgraded to high quality
   private var highQualityIds: Set<String> = []
@@ -29,8 +29,8 @@ final class MonthViewModel: ObservableObject {
   // Task for background HQ upgrades so we can cancel on month change
   private var hqUpgradeTask: Task<Void, Never>?
 
-  init(photoLibraryManager: PhotoLibraryManager) {
-    self.photoLibraryManager = photoLibraryManager
+  init(photoLibraryService: any PhotoLibraryService) {
+    self.photoLibraryService = photoLibraryService
   }
 
   func loadAssets(forYear year: Int, month: Int) async {
@@ -41,7 +41,7 @@ final class MonthViewModel: ObservableObject {
     hqUpgradeTask = nil
     // Stop caching for previous month
     if !cachedAssets.isEmpty {
-      photoLibraryManager.stopCachingThumbnails(for: cachedAssets)
+      photoLibraryService.stopCachingThumbnails(for: cachedAssets)
       cachedAssets = []
     }
     assets = []
@@ -51,10 +51,10 @@ final class MonthViewModel: ObservableObject {
     selectedAssetId = nil
 
     do {
-      let monthAssets = try await photoLibraryManager.fetchAssets(year: year, month: month)
+      let monthAssets = try await photoLibraryService.fetchAssets(year: year, month: month)
       assets = monthAssets
       // Start caching for new month
-      photoLibraryManager.startCachingThumbnails(for: monthAssets)
+      photoLibraryService.startCachingThumbnails(for: monthAssets)
       cachedAssets = monthAssets
 
       // Preload an initial batch of fast thumbnails
@@ -62,12 +62,12 @@ final class MonthViewModel: ObservableObject {
       var initialThumbs: [String: NSImage] = [:]
 
       for asset in initialBatch {
-        if let thumb = await photoLibraryManager.loadThumbnail(
-          for: asset, allowNetwork: false)
+        if let thumb = await photoLibraryService.loadThumbnail(
+          for: asset.id, allowNetwork: false)
         {
-          initialThumbs[asset.localIdentifier] = thumb
+          initialThumbs[asset.id] = thumb
         } else {
-          failedThumbnailIds.insert(asset.localIdentifier)
+          failedThumbnailIds.insert(asset.id)
         }
       }
       thumbnailsById = initialThumbs
@@ -75,7 +75,7 @@ final class MonthViewModel: ObservableObject {
 
       // Auto-select first asset if available
       if let first = monthAssets.first {
-        selectedAssetId = first.localIdentifier
+        selectedAssetId = first.id
       }
 
       // Load remaining fast thumbnails in background, then upgrade all to HQ
@@ -84,12 +84,12 @@ final class MonthViewModel: ObservableObject {
         // First: load fast thumbnails for remaining assets
         for asset in monthAssets.dropFirst(self.initialThumbnailBatchSize) {
           guard !Task.isCancelled else { return }
-          await self.loadAndStoreThumbnail(for: asset)
+          await self.loadAndStoreThumbnail(for: asset.id)
         }
         // Then: upgrade all to high quality
         for asset in monthAssets {
           guard !Task.isCancelled else { return }
-          await self.upgradeThumbnailToHighQuality(for: asset)
+          await self.upgradeThumbnailToHighQuality(for: asset.id)
         }
       }
     } catch {
@@ -98,12 +98,12 @@ final class MonthViewModel: ObservableObject {
     }
   }
 
-  func thumbnail(for asset: PHAsset) -> NSImage? {
-    thumbnailsById[asset.localIdentifier]
+  func thumbnail(for asset: AssetDescriptor) -> NSImage? {
+    thumbnailsById[asset.id]
   }
 
-  func thumbnailState(for asset: PHAsset) -> ThumbnailState {
-    let id = asset.localIdentifier
+  func thumbnailState(for asset: AssetDescriptor) -> ThumbnailState {
+    let id = asset.id
     if let image = thumbnailsById[id] {
       return .loaded(image)
     } else if failedThumbnailIds.contains(id) {
@@ -113,45 +113,43 @@ final class MonthViewModel: ObservableObject {
     }
   }
 
-  func retryThumbnail(for asset: PHAsset) {
-    let id = asset.localIdentifier
-    failedThumbnailIds.remove(id)
+  func retryThumbnail(for assetId: String) {
+    failedThumbnailIds.remove(assetId)
     Task { [weak self] in
       guard let self else { return }
-      await self.loadAndStoreThumbnail(for: asset)
-      if self.thumbnailsById[id] != nil {
-        await self.upgradeThumbnailToHighQuality(for: asset)
+      await self.loadAndStoreThumbnail(for: assetId)
+      if self.thumbnailsById[assetId] != nil {
+        await self.upgradeThumbnailToHighQuality(for: assetId)
       }
     }
   }
 
-  func select(asset: PHAsset?) {
-    selectedAssetId = asset?.localIdentifier
+  func select(assetId: String?) {
+    selectedAssetId = assetId
   }
 
   func setExportRunning(_ running: Bool) {
     isExportRunning = running
   }
 
-  private func loadAndStoreThumbnail(for asset: PHAsset) async {
-    if let thumb = await photoLibraryManager.loadThumbnail(
-      for: asset, allowNetwork: false)
+  private func loadAndStoreThumbnail(for assetId: String) async {
+    if let thumb = await photoLibraryService.loadThumbnail(
+      for: assetId, allowNetwork: false)
     {
-      thumbnailsById[asset.localIdentifier] = thumb
+      thumbnailsById[assetId] = thumb
     } else {
-      failedThumbnailIds.insert(asset.localIdentifier)
+      failedThumbnailIds.insert(assetId)
     }
   }
 
-  private func upgradeThumbnailToHighQuality(for asset: PHAsset) async {
-    let id = asset.localIdentifier
-    guard !highQualityIds.contains(id) else { return }
-    guard !failedThumbnailIds.contains(id) else { return }
-    if let hqThumb = await photoLibraryManager.loadThumbnailHighQuality(
-      for: asset, allowNetwork: !isExportRunning)
+  private func upgradeThumbnailToHighQuality(for assetId: String) async {
+    guard !highQualityIds.contains(assetId) else { return }
+    guard !failedThumbnailIds.contains(assetId) else { return }
+    if let hqThumb = await photoLibraryService.loadThumbnailHighQuality(
+      for: assetId, allowNetwork: !isExportRunning)
     {
-      thumbnailsById[id] = hqThumb
-      highQualityIds.insert(id)
+      thumbnailsById[assetId] = hqThumb
+      highQualityIds.insert(assetId)
     }
   }
 }

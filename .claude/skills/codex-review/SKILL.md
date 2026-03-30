@@ -26,7 +26,7 @@ Raw arguments: $ARGUMENTS
 
 ## Review instructions
 
-Always append the following to the `codex review` command via `--instructions`:
+Build a custom prompt string with the following content:
 
 ```
 In addition to correctness and security, always evaluate:
@@ -42,13 +42,19 @@ Pay special attention to: <focus area>
 
 ## Execution
 
-Build and run the appropriate `codex review` command:
+Build and run the appropriate `codex review` command.
+
+**Important:** `codex review` does NOT have an `--instructions` flag. Custom review instructions must be passed as the `[PROMPT]` positional argument. However, `[PROMPT]` cannot be combined with `--commit`. Use these patterns:
 
 | Target | Command |
 |--------|---------|
-| empty or `uncommitted` | `codex review --uncommitted --instructions "<instructions>"` |
-| looks like a commit SHA (hex, 7-40 chars) | `codex review --commit <sha> --instructions "<instructions>"` (once per SHA) |
-| starts with `--base` | `codex review --base <branch> --instructions "<instructions>"` |
+| empty or `uncommitted` | `codex review --uncommitted "<prompt>"` |
+| looks like a commit SHA (hex, 7-40 chars) | `codex review --commit <sha>` (no custom prompt — codex uses its default review prompt) |
+| starts with `--base` | `codex review --base <branch> "<prompt>"` |
+
+For `--commit` reviews where you want custom instructions, there is no way to pass them. Just run `codex review --commit <sha>` and rely on the default review behavior.
+
+For multiple commit SHAs, run `codex review --commit <sha>` once per SHA.
 
 Run the command from the project root. Stream the output directly to the user — do not summarise or filter it.
 

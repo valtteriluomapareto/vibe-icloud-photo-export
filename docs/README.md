@@ -12,10 +12,11 @@ This repository keeps public-facing docs and maintainer-facing notes in separate
 
 - [`docs/project/implementation-tasks.md`](project/implementation-tasks.md): open work items
 - [`docs/project/release-process.md`](project/release-process.md): how to cut a release (version bump, tag, publish)
-- [`docs/project/github-actions-publishing-plan.md`](project/github-actions-publishing-plan.md): CI/release workflow planning
-- [`docs/project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md): backup import design notes
-- [`docs/project/refactoring-plan.md`](project/refactoring-plan.md): refactoring decisions and remaining test infrastructure work
-- [`docs/project/testing-improvement-plan.md`](project/testing-improvement-plan.md): test coverage gaps and step-by-step improvement plan
+- [`docs/project/app-store-plan.md`](project/app-store-plan.md): Mac App Store distribution plan
+- [`docs/project/github-actions-publishing-plan.md`](project/github-actions-publishing-plan.md): CI/release workflow planning (implemented — kept as a decision record)
+- [`docs/project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md): backup import design notes (Phase 1 implemented)
+- [`docs/project/refactoring-plan.md`](project/refactoring-plan.md): refactoring decisions (Phases 1–4 complete)
+- [`docs/project/testing-improvement-plan.md`](project/testing-improvement-plan.md): test coverage gaps and improvement plan
 
 ## Reference Material
 

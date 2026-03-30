@@ -403,44 +403,38 @@ Phase 1 must show at minimum a progress view with the current stage label. Scann
 
 ### Result report
 
-Report:
+Report (as implemented in Phase 1):
 
-- imported matches
-- ambiguous files skipped
-- files on disk with no matching Photos asset
-- Photos assets still not backed up
-- stale sidecar entries, if any
+- imported matches (matched count)
+- ambiguous files skipped (ambiguous count)
+- files on disk with no matching Photos asset (unmatched count)
+- total files scanned
 
-Offer:
+Not yet implemented:
 
-- `Close`
-- `Export Remaining`
+- "Photos assets still not backed up" count (requires cross-referencing all library assets against import results — deferred)
+- stale sidecar entries (Phase 2)
 
-No per-file confirmation UI in v1.
+Current UI offers `Close` and `Export Remaining` (calls `startExportAll()`).
 
 ---
 
 ## Phase Plan
 
-## Phase 1: Manual legacy import MVP
+## Phase 1: Manual legacy import MVP — DONE
 
-This is the first phase because it directly addresses the current user problem.
+Implemented. `BackupScanner` handles folder enumeration and conservative matching. `ImportView` provides the UI flow with progress stages and a result report. Import is blocked while export is active.
 
-Scope:
+What shipped:
 
-- add `Import Existing Backup…`
-- scan `YYYY/MM/` backup folders
-- conservatively match files to Photos assets
-- rebuild local export records
-- show import summary
-- block import while export is active
+- `Import Existing Backup…` action in the UI
+- scans `YYYY/MM/` backup folders
+- conservative two-stage matching (filename + date/metadata discriminators)
+- rebuilds local export records
+- shows import summary with matched/skipped/unmatched counts
+- blocks import while export is active
 
-Acceptance criteria:
-
-- fresh install + existing backup folder can rebuild enough state to avoid obvious duplicate exports
-- ambiguous cases are skipped, not guessed
-
-## Phase 2: Sidecar write/read for future reliability
+## Phase 2: Sidecar write/read for future reliability — NOT STARTED
 
 Scope:
 
@@ -469,18 +463,17 @@ Acceptance criteria:
 
 ---
 
-## Likely File Impact
+## File Impact
 
-- `photo-export/Managers/ExportManager.swift`
-  - own import flow and progress
-- `photo-export/Managers/ExportRecordStore.swift`
-  - add an import/rebuild API
-- `photo-export/Managers/ExportDestinationManager.swift`
-  - expose sidecar root helpers under security scope
-- `photo-export/Views/ExportToolbarView.swift`
-  - add `Import Existing Backup…`
-- new helper: `photo-export/Managers/BackupSidecarStore.swift`
-- new helper: `photo-export/Managers/BackupScanner.swift`
+Phase 1 (done):
+- `photo-export/Managers/BackupScanner.swift` — folder enumeration and matching
+- `photo-export/Managers/ExportManager.swift` — import flow orchestration
+- `photo-export/Managers/ExportRecordStore.swift` — import/rebuild API
+- `photo-export/Views/ImportView.swift` — import UI with progress and results
+
+Phase 2 (future):
+- new: `photo-export/Managers/BackupSidecarStore.swift` — sidecar read/write
+- `photo-export/Managers/ExportDestinationManager.swift` — sidecar root helpers under security scope
 
 ---
 

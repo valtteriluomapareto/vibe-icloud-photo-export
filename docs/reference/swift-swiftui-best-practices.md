@@ -15,7 +15,8 @@ Use this document as a checklist when writing code or reviewing PRs.
   - **Models**: Plain value types and domain types.
 - Keep each view in its own file. Avoid multiple large `View` types in one file (e.g., move `MonthView` out of `ContentView.swift`).
 - Make types `final` by default unless subclassing is intended. Mark helpers `private` and prefer `internal` over `public` unless needed.
-- Prefer protocol-driven boundaries for testability (e.g., `PhotoLibraryManaging` protocol implemented by `PhotoLibraryManager`).
+- Prefer protocol-driven boundaries for testability. The app uses `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, and `ExportDestination` protocols (see `photo-export/Protocols/`).
+- Use app-owned value types (`AssetDescriptor`, `ResourceDescriptor`) at non-framework boundaries instead of passing `PHAsset`/`PHAssetResource` directly.
 
 ---
 
@@ -116,7 +117,7 @@ enum Formatters {
 - Use Unified Logging (`os.Logger`) instead of `print`:
 ```swift
 import os
-let logger = Logger(subsystem: "com.your.bundleid.photo-export", category: "Photos")
+let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
 logger.info("Fetched \(assets.count) assets for \(year)-\(month)")
 logger.error("Export failed: \(error.localizedDescription)")
 ```
@@ -171,17 +172,17 @@ logger.error("Export failed: \(error.localizedDescription)")
 ```swift
 @MainActor
 final class MonthViewModel: ObservableObject {
-    @Published private(set) var assets: [PHAsset] = []
+    @Published private(set) var assets: [AssetDescriptor] = []
     @Published private(set) var thumbnailsById: [String: NSImage] = [:]
-    @Published var selectedAsset: PHAsset?
+    @Published var selectedAsset: AssetDescriptor?
     @Published var selectedImage: NSImage?
     @Published var isLoading = false
     @Published var errorMessage: String?
 
-    private let library: PhotoLibraryManaging
+    private let library: PhotoLibraryService
     private var imageLoadTask: Task<Void, Never>?
 
-    init(library: PhotoLibraryManaging) { self.library = library }
+    init(library: PhotoLibraryService) { self.library = library }
 
     func loadAssets(forYear year: Int, month: Int) async {
         isLoading = true
@@ -191,25 +192,24 @@ final class MonthViewModel: ObservableObject {
         do {
             let monthAssets = try await library.fetchAssets(year: year, month: month)
             assets = monthAssets
-            // kick off initial thumbnail preheat here
         } catch {
             errorMessage = error.localizedDescription
         }
         isLoading = false
     }
 
-    func select(_ asset: PHAsset) {
+    func select(_ asset: AssetDescriptor) {
         imageLoadTask?.cancel()
         selectedAsset = asset
         selectedImage = nil
         imageLoadTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let image = try await library.requestFullImage(for: asset)
+                let image = try await library.requestFullImage(for: asset.id)
                 try Task.checkCancellation()
-                await MainActor.run { self.selectedImage = image }
+                self.selectedImage = image
             } catch is CancellationError { /* no-op */ }
-            catch { await MainActor.run { self.errorMessage = error.localizedDescription } }
+            catch { self.errorMessage = error.localizedDescription }
         }
     }
 }

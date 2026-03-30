@@ -10,7 +10,8 @@ This document explains how the app persists export status for Photos assets.
 
 ## Files & Locations
 
-- Directory: `~/Library/Application Support/<bundle id>/ExportRecords/`
+- Directory (sandboxed): `~/Library/Containers/<bundle id>/Data/Library/Application Support/<bundle id>/ExportRecords/<destinationId>/`
+  - `destinationId` is a SHA-256 hash of the destination bookmark data, so each export destination gets its own isolated record store
 - Files:
   - `export-records.jsonl` — append-only mutation log (one JSON object per line)
   - `export-records.json` — compacted snapshot of the current state (single JSON object mapping `id` → `ExportRecord`)

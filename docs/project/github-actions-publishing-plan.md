@@ -2,9 +2,11 @@
 
 ## Status
 
-This document is a plan only. Nothing described here is implemented.
+**Fully implemented.** The release workflow shipped with v1.0.0 and is in active use. This document is kept as a decision record — it explains why the workflow was built the way it was.
 
-Written against the repository state on 2026-03-25.
+Written against the repository state on 2026-03-25. The current release workflow is [`release-direct.yml`](../../.github/workflows/release-direct.yml) and the release process is documented in [`release-process.md`](release-process.md).
+
+For App Store distribution planning, see [`app-store-plan.md`](app-store-plan.md).
 
 ## Scope
 
@@ -22,49 +24,19 @@ If direct distribution works and the app gets real usage, write a separate App S
 
 ---
 
-## 1. Validated Current State
+## 1. State When Written (2026-03-25)
 
-These points were checked against the repo before updating this plan.
+These items described the repo state when this plan was written. All have since been addressed:
 
-### Code and project state
-
-- `MARKETING_VERSION` is still `1.0`
-- app bundle ID is still `valtteriluoma.photo-export`
-- logger subsystems already use `com.valtteriluoma.photo-export`
-- `PhotoLibraryManager.swift` still has 3 production `print()` calls
-- Release build settings do not currently set Hardened Runtime in the project
-- app category is not currently set in the project
-- deployment target is currently `15.4`
-
-### CI state
-
-Current [ci.yml](/Users/valtsu/personal/photo-export/.github/workflows/ci.yml):
-
-- uses a best-effort Xcode selection instead of a pinned path
-- installs lint tools with `brew install ... || true`
-- runs `swiftlint --strict || true`
-- runs `swift-format lint ... || true`
-- does not use concurrency control
-- already generates `TestResults.xcresult` and uploads coverage to Codecov via `xccov2lcov.sh`
-- does not upload `.xcresult` as a downloadable GHA artifact (useful for debugging test failures)
-
-### App icon state
-
-- [AppIcon.appiconset](/Users/valtsu/personal/photo-export/photo-export/Assets.xcassets/AppIcon.appiconset) contains only [Contents.json](/Users/valtsu/personal/photo-export/photo-export/Assets.xcassets/AppIcon.appiconset/Contents.json)
-- there are slot entries for standard macOS sizes
-- there are no actual image files in the asset catalog
-- this is a release blocker — see section 3.1 for details
-
-### Privacy manifest state
-
-Do not treat `PrivacyInfo.xcprivacy` as a blocker for direct GitHub Releases right now.
-
-- Apple’s current privacy-manifest enforcement is documented around App Store Connect uploads, not Developer ID notarization
-- this repo does use APIs like `UserDefaults` and file metadata APIs, so if a privacy manifest is added later it must be accurate, not a stub
-
-### Architecture
-
-- the release workflow builds a universal binary (`arm64` + `x86_64`)
+- `MARKETING_VERSION` was `1.0` → now `1.0.2`
+- bundle ID was `valtteriluoma.photo-export` → now `com.valtteriluoma.photo-export`
+- `PhotoLibraryManager.swift` had `print()` calls → replaced with `os.Logger`
+- Hardened Runtime was not set → now enabled for Release
+- app category was not set → now `public.app-category.photography`
+- deployment target was `15.4` → now `15.0`
+- CI used `|| true` for lints → now strict
+- app icon had no image files → `appstore.png` (1024x1024) now present
+- privacy manifest did not exist → `PrivacyInfo.xcprivacy` now present and complete
 
 ---
 
@@ -88,58 +60,31 @@ No updater is planned for `v1.0.0`. Users update by downloading the latest relea
 
 ---
 
-## 3. What Needs To Be Done
+## 3. What Was Done
 
-Two work buckets, sequenced around the Apple Developer enrollment blocker.
+Everything below is complete. Kept for decision-record context.
 
-### 3.1 While waiting for enrollment
+### 3.1 While waiting for enrollment (all done)
 
-These are all unblocked now.
+- CI hardening: Xcode pinned, `|| true` removed, concurrency control added, `.xcresult` uploaded
+- Code fixes: `MARKETING_VERSION` set, bundle ID aligned, `print()` replaced with `os.Logger`, Hardened Runtime enabled, app category set
+- App icon: `appstore.png` (1024x1024) added to asset catalog
 
-#### CI hardening
+### 3.2 After enrollment is complete (all done)
 
-1. Pin Xcode to a specific installed version path
-2. Remove `|| true` from the blocking lint steps
-3. Add workflow concurrency to cancel stale runs
-4. Upload `.xcresult` as a downloadable GHA artifact (complements the existing Codecov upload)
-5. Keep the Release build in CI with `CODE_SIGNING_ALLOWED=NO`
+Created `release-direct.yml`. The implemented workflow differs from the original plan in one way: it also triggers on `push.branches: [main]` (in addition to `v*` tags and `workflow_dispatch`), so every merge to `main` runs the full build/sign/notarize pipeline against the protected `direct-release` environment.
 
-Note on `swift-format`:
-
-- current CI already uses `lint`, not `format`
-- if the repo is not clean enough to make it blocking immediately, use a short warning-only transition and then make it blocking
-
-#### Code fixes
-
-1. Change `MARKETING_VERSION` to `1.0.0`
-2. Align the app bundle ID to `com.valtteriluoma.photo-export`
-3. Replace the 3 `print()` calls in [PhotoLibraryManager.swift](/Users/valtsu/personal/photo-export/photo-export/Managers/PhotoLibraryManager.swift) with `os.Logger`
-4. Enable Hardened Runtime for the Release configuration in the Xcode project
-5. Add `LSApplicationCategoryType = public.app-category.photography`
-
-#### App icon (design dependency)
-
-The icon is the only release blocker that requires design work, not just code changes.
-
-- [AppIcon.appiconset](/Users/valtsu/personal/photo-export/photo-export/Assets.xcassets/AppIcon.appiconset) has `Contents.json` slot entries but no actual image files
-- a 1024x1024 source image is needed; Xcode 16 can generate all required sizes from it
-- this cannot be parallelized with engineering work — it either needs to be designed or commissioned
-
-### 3.2 After enrollment is complete
-
-Create one workflow: `release-direct.yml`
-
-Operational requirements:
+Original operational requirements (all met):
 
 - pin the macOS runner image and exact Xcode path, just like CI hardening
 - add release-specific concurrency so two release runs do not race
 - grant `contents: write` so the workflow can create a draft GitHub Release
 - keep Automatic signing for local development; override to Manual signing inside the release workflow only
-- allow `workflow_dispatch` only as a dry-run from `main`; it should build, sign, notarize, and upload workflow artifacts but must not create a GitHub Release
+- `workflow_dispatch` runs build, sign, notarize, and upload workflow artifacts but do not create a GitHub Release
 
-It should:
+It does:
 
-1. trigger on `v*` tags and optional `workflow_dispatch` dry-runs
+1. trigger on `v*` tags, `push` to `main`, and optional `workflow_dispatch` dry-runs
 2. create a temporary keychain, unlock it, add it to the keychain search list, import the Developer ID Application certificate, and run `security set-key-partition-list` so `codesign` can use the identity non-interactively
 3. store `notarytool` credentials in that temporary keychain
 4. archive a universal Release build with `ARCHS=arm64 x86_64`, `CODE_SIGN_STYLE=Manual`, `CODE_SIGN_IDENTITY="Developer ID Application"`, `DEVELOPMENT_TEAM=$APPLE_TEAM_ID`, and `OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"`
@@ -227,7 +172,7 @@ These are valid future topics, but not part of `v1.0.0`:
 - Homebrew
 - provenance attestation
 - fancy DMG layout
-- lowering deployment target below `15.4` (verify against codebase first)
+- lowering deployment target below `15.0` (verify against codebase first; currently `15.0`)
 - separate per-architecture builds (currently shipping universal)
 
 If any of those become real requirements, plan them in separate documents when they are actually next.

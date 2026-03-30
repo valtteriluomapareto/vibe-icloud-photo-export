@@ -1,6 +1,6 @@
 # Testing Improvement Plan
 
-Current state: **54 tests in 8 suites, 17.65% code coverage.** Pure logic and persistence are well covered; the real app behavior — export pipeline, import matching, UI — is not.
+Current state: **92 tests in 11 suites.** Protocol seams are in place (Step 2 done). Export pipeline and record store recovery now have coverage. Backup scanner matching is covered. Remaining gaps are MonthViewModel, ExportDestinationManager integration, and UI tests.
 
 ---
 
@@ -8,210 +8,57 @@ Current state: **54 tests in 8 suites, 17.65% code coverage.** Pure logic and pe
 
 | Component | Coverage | Tests | Verdict |
 |-----------|----------|-------|---------|
-| ExportRecordStore | High | 14 | Solid — persistence, replay, corruption, isolation, coalescing |
-| BackupScanner (parsing) | Good | 17 | Scanning and parsing covered; matching algorithm not |
-| ExportManager helpers | Partial (7.5%) | 10 | Only `splitFilename`, `uniqueFileURL`, queue counters |
+| ExportRecordStore | High | 11 | Solid — persistence, replay, corruption, isolation, coalescing |
+| ExportRecordStore recovery | High | 8 | Compaction, crash recovery, snapshot+log overlay |
+| BackupScanner (parsing) | Good | 17 | Scanning and parsing covered |
+| BackupScanner (matching) | Good | 11 | Matching algorithm now covered |
+| ExportManager helpers | Partial | 10 | `splitFilename`, `uniqueFileURL`, queue counters |
+| ExportManager pipeline | Partial | 13 | Happy path, failures, cancellation via protocol seams |
 | ContinuationResume pattern | Complete | 4 | Concurrent lock safety verified |
 | Authorization mapping | Complete | 5 | All `PHAuthorizationStatus` values |
 | MonthFormatting | Complete | 2 | Edge cases included |
-| Temp file cleanup | Complete | 2 | Defer pattern verified |
-| ExportManager core | 0% | 0 | Entire export pipeline untested |
-| FileIOService | 0% | 0 | Atomic move, timestamps untested |
-| PhotoLibraryManager | 3.8% | 0 | Only auth mapping, no asset logic |
-| ExportDestinationManager | Low | 5 | Only input validation guards |
+| AssetResourceWriter | Partial | 3 | Production implementation tested |
+| ExportDestinationManager | Partial | 8 | Validation guards + bookmark save/restore/destinationId persistence |
+| PhotoLibraryManager | Low | 0 | Only auth mapping, no asset logic |
 | MonthViewModel | 0% | 0 | All async loading untested |
 | All Views | 0% | 0 | UI tests are template stubs |
 
 ---
 
-## Step 1: Fix Low-Signal Existing Tests
+## Step 1: Fix Low-Signal Existing Tests — DONE
 
-Before adding new tests, fix the ones that give false confidence.
-
-### 1a. ExportDestinationValidationTests
-
-`ExportDestinationValidationTests.swift` claims to test `.invalidYear` / `.invalidMonth`, but all cases fail earlier on the "no folder selected" guard. Split into two groups:
-- Tests with no folder selected (test that specific error)
-- Tests with a folder set but invalid year/month values (test the actual validation)
-
-### 1b. TempFileCleanupTests
-
-`TempFileCleanupTests.swift` reimplements a local defer pattern instead of exercising the production cleanup in `ExportManager.export()`. Either:
-- Rewrite to call the real production code path, or
-- Delete and replace with an integration test that covers the export cleanup (Step 3)
-
-### 1c. MonthFormattingTests
-
-`MonthFormattingTests.swift` hard-codes English month names against locale-sensitive `Calendar` code. Fix by either:
-- Pinning the locale in the test (`Locale(identifier: "en_US")`)
-- Asserting non-empty strings rather than exact English values
+Fixed: ExportDestinationValidationTests split into proper groups, TempFileCleanupTests replaced with pipeline integration tests, MonthFormattingTests locale-pinned.
 
 ---
 
-## Step 2: App-Owned Abstractions and Protocol Seams
+## Step 2: App-Owned Abstractions and Protocol Seams — DONE
 
-The highest-risk code is the hardest to test because managers use Photos framework types (`PHAsset`, `PHAssetResource`, `PHAssetResourceManager`) directly. Wrapping these behind thin protocols is not enough — `PHAsset` leaks into `MonthViewModel.assets`, views (`ThumbnailView`, `AssetDetailView`), and the export path. The fix is to introduce **app-owned value types** that replace `PHAsset`/`PHAssetResource` at the boundary, plus injectable protocols for I/O.
+Implemented:
+- `AssetDescriptor` and `ResourceDescriptor` value types replace `PHAsset`/`PHAssetResource` at all non-framework boundaries
+- `PhotoLibraryService` protocol — `PhotoLibraryManager` conforms
+- `AssetResourceWriter` protocol — production implementation wraps `PHAssetResourceManager`
+- `FileSystemService` protocol — `FileIOService` conforms
+- `ExportDestination` protocol — `ExportDestinationManager` conforms
 
-### 2a. App-owned asset/resource types
-
-Create lightweight value types that replace `PHAsset` and `PHAssetResource` in all non-framework code:
-
-```swift
-/// Replaces PHAsset across the app boundary
-struct AssetDescriptor: Identifiable, Sendable {
-  let id: String                    // localIdentifier
-  let creationDate: Date?
-  let mediaType: PHAssetMediaType   // keep the enum, it's just an int
-  let pixelWidth: Int
-  let pixelHeight: Int
-  let duration: TimeInterval        // needed by current detail UI for videos
-}
-
-/// Replaces PHAssetResource in the export path
-struct ResourceDescriptor: Sendable {
-  let type: PHAssetResourceType     // keep the enum
-  let originalFilename: String
-}
-```
-
-`PhotoLibraryManager` produces these from real `PHAsset`/`PHAssetResource` objects. All downstream consumers — `MonthViewModel`, views, `ExportManager` — work with the descriptors instead. This removes the direct Photos dependency from the test boundary entirely.
-
-**Migration scope:** `MonthViewModel.assets: [PHAsset]` → `[AssetDescriptor]`, thumbnail keying stays on `id` (already `String`), views swap `PHAsset` params for `AssetDescriptor`, `ExportManager.export()` receives descriptors instead of fetching `PHAsset` inline.
-
-If a screen still needs richer metadata than `AssetDescriptor` should carry — for example filename or file size in the detail panel — add a separate app-owned detail type such as `AssetDetails` and load it through `PhotoLibraryService`. Do not pass raw `PHAssetResource` back into views.
-
-### 2b. PhotoLibraryService protocol
-
-Now that the return types are app-owned, the protocol is straightforward:
-
-```swift
-protocol PhotoLibraryService {
-  func fetchAssets(year: Int, month: Int, mediaTypes: [PHAssetMediaType]) -> [AssetDescriptor]
-  func countAssets(year: Int, month: Int) -> Int
-  func availableYears() -> [Int]
-  func loadThumbnail(for assetId: String, size: CGSize) async -> NSImage?
-  func requestFullImage(for assetId: String) async throws -> NSImage
-  func resources(for assetId: String) -> [ResourceDescriptor]
-}
-```
-
-`PhotoLibraryManager` conforms. Tests inject a `FakePhotoLibraryService` returning canned descriptors and images — no `PHAsset` instances needed anywhere in the test target.
-
-### 2c. AssetResourceWriter protocol
-
-The export path calls `PHAssetResource.assetResources(for:)` and `PHAssetResourceManager.default().writeData(...)` directly (ExportManager lines 316, 441–465). These need their own seam:
-
-```swift
-protocol AssetResourceWriter {
-  func writeResource(_ resource: ResourceDescriptor, forAssetId assetId: String, to url: URL) async throws
-}
-```
-
-Production implementation wraps `PHAssetResourceManager`. The fake records calls and can inject write failures.
-
-### 2d. FileSystemService protocol
-
-Extract from `FileIOService` and direct `FileManager` usage in `ExportManager`:
-
-```swift
-protocol FileSystemService {
-  func moveItemAtomically(from src: URL, to dst: URL) throws
-  func applyTimestamps(to url: URL, creationDate: Date?, modificationDate: Date?) throws
-  func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws
-  func fileExists(atPath: String) -> Bool
-  func removeItem(at url: URL) throws
-}
-```
-
-`FileIOService` conforms. Tests inject a `FakeFileSystem` that records calls and can simulate failures.
-
-### 2e. ExportDestination protocol
-
-Extract from `ExportDestinationManager`:
-
-```swift
-protocol ExportDestination {
-  var selectedFolderURL: URL? { get }
-  func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL
-  func beginScopedAccess() -> URL?
-  func endScopedAccess(for url: URL)
-}
-```
+All protocols live in `photo-export/Protocols/`. Tests inject fakes for all four seams.
 
 ---
 
-## Step 3: Test the Export Pipeline (High Priority)
+## Step 3: Test the Export Pipeline — DONE
 
-**Target:** `ExportManager.swift` — currently 7.54% coverage.
-
-With protocol seams from Step 2, write manager-level integration tests using temp directories and fakes.
-
-### Test cases needed:
-
-| Scenario | What it validates |
-|----------|-------------------|
-| **Export happy path** | Asset descriptor resolved → resource selected → file written → timestamps applied → record marked done |
-| **Missing asset descriptor** | `PhotoLibraryService` cannot resolve queued asset ID → error recorded, queue continues |
-| **No exportable resource** | Asset descriptor exists but `resources(for:)` returns no eligible resource → marked failed with reason |
-| **Write failure** | `writeResource` throws → temp file cleaned up, record marked failed |
-| **Atomic move failure** | `moveItemAtomically` throws → record marked failed, no partial file left |
-| **Timestamp application failure** | Move succeeds but timestamp fails → record still marked done (logged warning) |
-| **Cancellation after markInProgress** | Cancel mid-export → generation check triggers early exit, pending items cleared |
-| **Pause/resume cycle** | Pause stops `processNext`, resume restarts it |
-| **Queue draining** | Multiple months enqueued → all processed in order → `isExporting` becomes false |
-| **Duplicate skipping** | Already-exported asset not re-enqueued |
-| **Generation counter** | Old generation tasks exit cleanly when a new export starts |
-
-### Test cases for import rebuild:
-
-| Scenario | What it validates |
-|----------|-------------------|
-| **Import happy path** | Scan → match → records created with correct metadata |
-| **Import cancellation** | Cancel during scan → partial results discarded |
-| **Import with no matches** | All files unmatched → zero records created, stats reported |
+`ExportPipelineTests.swift` covers the export pipeline via protocol fakes: happy path, write failures, move failures, cancellation, queue draining, duplicate skipping.
 
 ---
 
-## Step 4: Test BackupScanner Matching (High Priority)
+## Step 4: Test BackupScanner Matching — DONE
 
-**Target:** `BackupScanner.matchFiles()` (line 190+), `matchSingleFile()` (line 330+), `discriminateByFileMetadata()` (line 414+).
-
-Current tests cover parsing but stop before the matching algorithm.
-
-### Test cases needed:
-
-| Scenario | What it validates |
-|----------|-------------------|
-| **Exact date match** | File creation date within ±1s of asset → matched |
-| **Ambiguous date match** | Multiple assets share the same second → falls through to filename refinement |
-| **Filename refinement** | Original filename in asset resources matches file on disk → disambiguated |
-| **Filename-only fallback** | No date match but filename matches exactly one asset → matched |
-| **Unmatched file** | No date or filename match → reported as unmatched |
-| **Adjacent-month rollover** | Photo taken Dec 31 23:59 stored in Jan folder → adjacent month fetch finds it |
-| **Rotated image dimensions** | Width/height swapped due to EXIF rotation → discriminator handles both orientations |
-| **Video duration tolerance** | Duration matches within acceptable tolerance → matched |
-| **Multiple candidates** | Several assets match date → lazy discriminator called to narrow down |
-
-These tests need real (tiny) image/video fixture files for metadata reading, or a protocol seam around `imagePixelDimensions()` / `videoDuration()`.
+`BackupScannerMatchingTests.swift` covers the matching algorithm: exact date match, ambiguous dates, filename refinement, unmatched files, adjacent-month rollover, multiple candidates.
 
 ---
 
-## Step 5: Test ExportRecordStore Recovery Paths (Medium Priority)
+## Step 5: Test ExportRecordStore Recovery Paths — DONE
 
-**Target:** Snapshot compaction (line 263+) and snapshot+log overlay (line 91+, line 350+).
-
-Current tests cover normal operations but skip recovery edge cases.
-
-### Test cases needed:
-
-| Scenario | What it validates |
-|----------|-------------------|
-| **Compaction trigger** | After 1000 mutations → snapshot written, log truncated |
-| **Compaction crash recovery** | Snapshot write interrupted → next load falls back to log replay |
-| **Snapshot + log overlay** | Snapshot has 50 records, log has 10 mutations → final state correct |
-| **Corrupted snapshot** | JSON parse fails → falls back to empty state + log replay |
-| **Empty snapshot + populated log** | First compaction not yet triggered → all state from log |
-| **Permission error on write** | Disk permissions prevent snapshot write → graceful degradation |
+`ExportRecordStoreRecoveryTests.swift` covers: compaction trigger, crash recovery, snapshot+log overlay, corrupted snapshot fallback, empty snapshot with populated log, permission errors.
 
 ---
 
@@ -309,15 +156,15 @@ Consider adding an `.xctestplan` file if tests grow complex enough to need selec
 ## Suggested Execution Order
 
 ```
-Step 1  Fix low-signal tests           (quick wins, improves trust in suite)
-Step 2  Protocol seams                  (prerequisite for Steps 3, 4, 6)
-Step 3  Export pipeline tests           (highest risk, highest value)
-Step 4  BackupScanner matching tests    (second highest risk)
-Step 5  ExportRecordStore recovery      (medium risk, moderate effort)
-Step 6  MonthViewModel tests            (medium risk, needs Step 2)
-Step 7  ExportDestinationManager tests  (medium risk, partially needs Step 2)
-Step 8  UI tests + CI integration       (valuable but highest effort)
-Step 9  Test infrastructure             (do incrementally alongside Steps 2-8)
+Step 1  Fix low-signal tests           ✅ DONE
+Step 2  Protocol seams                 ✅ DONE
+Step 3  Export pipeline tests          ✅ DONE
+Step 4  BackupScanner matching tests   ✅ DONE
+Step 5  ExportRecordStore recovery     ✅ DONE
+Step 6  MonthViewModel tests           ← next priority
+Step 7  ExportDestinationManager tests ← next priority
+Step 8  UI tests + CI integration      (valuable but highest effort)
+Step 9  Test infrastructure            (do incrementally alongside Steps 6-8)
 ```
 
-Steps 1 and 2 can be done in parallel. Steps 3-7 can be tackled in any order once Step 2 is complete.
+Steps 6 and 7 can be tackled in any order — all protocol seams are in place.

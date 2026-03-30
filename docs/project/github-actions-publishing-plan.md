@@ -64,8 +64,7 @@ Do not treat `PrivacyInfo.xcprivacy` as a blocker for direct GitHub Releases rig
 
 ### Architecture
 
-- the first public build is intentionally `arm64`-only
-- the release workflow must explicitly set `ARCHS=arm64` to prevent a universal binary
+- the release workflow builds a universal binary (`arm64` + `x86_64`)
 
 ---
 
@@ -143,7 +142,7 @@ It should:
 1. trigger on `v*` tags and optional `workflow_dispatch` dry-runs
 2. create a temporary keychain, unlock it, add it to the keychain search list, import the Developer ID Application certificate, and run `security set-key-partition-list` so `codesign` can use the identity non-interactively
 3. store `notarytool` credentials in that temporary keychain
-4. archive a Release build with `ARCHS=arm64`, `CODE_SIGN_STYLE=Manual`, `CODE_SIGN_IDENTITY="Developer ID Application"`, `DEVELOPMENT_TEAM=$APPLE_TEAM_ID`, and `OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"`
+4. archive a universal Release build with `ARCHS=arm64 x86_64`, `CODE_SIGN_STYLE=Manual`, `CODE_SIGN_IDENTITY="Developer ID Application"`, `DEVELOPMENT_TEAM=$APPLE_TEAM_ID`, and `OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"`
 5. export the archive with an `ExportOptions.plist` using `method = developer-id`, `signingStyle = manual`, `signingCertificate = Developer ID Application`, and `teamID = $APPLE_TEAM_ID`
 6. create a `.dmg` with an `/Applications` symlink
 7. notarize the `.dmg` and staple the `.dmg` because the `.dmg` is the shipped artifact users actually download
@@ -229,6 +228,6 @@ These are valid future topics, but not part of `v1.0.0`:
 - provenance attestation
 - fancy DMG layout
 - lowering deployment target below `15.4` (verify against codebase first)
-- universal binary (`arm64` + `x86_64`)
+- separate per-architecture builds (currently shipping universal)
 
 If any of those become real requirements, plan them in separate documents when they are actually next.

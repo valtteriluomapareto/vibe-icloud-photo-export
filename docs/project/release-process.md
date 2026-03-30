@@ -31,7 +31,7 @@ git push && git push origin v1.2.0
 
 Pushing the `v*` tag triggers the **release-direct** workflow which:
 
-1. Builds the app (Release, arm64)
+1. Builds a universal binary (Release, arm64 + x86_64)
 2. Signs with Developer ID Application certificate
 3. Creates a styled DMG with drag-to-Applications installer
 4. Notarizes the DMG with Apple and staples the ticket

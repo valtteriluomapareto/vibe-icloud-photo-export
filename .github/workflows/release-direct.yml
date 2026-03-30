@@ -144,7 +144,7 @@ jobs:
           ARCHIVE_PATH="${RUNNER_TEMP}/photo-export.xcarchive"
 
           echo "Archiving Release build..."
-          echo "  ARCHS=arm64"
+          echo "  ARCHS=arm64 x86_64 (universal)"
           echo "  CODE_SIGN_STYLE=Manual"
           echo "  CODE_SIGN_IDENTITY=Developer ID Application"
           echo "  DEVELOPMENT_TEAM=${APPLE_TEAM_ID}"
@@ -157,7 +157,7 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             -archivePath "${ARCHIVE_PATH}" \
-            ARCHS=arm64 \
+            "ARCHS=arm64 x86_64" \
             CODE_SIGN_STYLE=Manual \
             "CODE_SIGN_IDENTITY=Developer ID Application" \
             DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
@@ -238,7 +238,7 @@ jobs:
       - name: Create DMG
         run: |
           echo "::group::DMG creation"
-          DMG_NAME="PhotoExport-${{ steps.ctx.outputs.version }}-arm64.dmg"
+          DMG_NAME="PhotoExport-${{ steps.ctx.outputs.version }}-universal.dmg"
           DMG_PATH="${RUNNER_TEMP}/${DMG_NAME}"
 
           echo "Creating DMG: ${DMG_NAME}..."

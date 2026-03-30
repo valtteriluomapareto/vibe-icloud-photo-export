@@ -14,7 +14,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   @Published private(set) var destinationId: String?
 
   // MARK: - Keys & Logger
-  private let bookmarkDefaultsKey = "ExportDestinationBookmark"
+  private let userDefaults: UserDefaults
+  private let bookmarkDefaultsKey: String
   private let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "ExportDestination")
 
@@ -73,7 +74,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   var canImportNow: Bool { selectedFolderURL != nil && isAvailable }
 
   // MARK: - Lifecycle
-  init(skipRestore: Bool = false) {
+  init(
+    skipRestore: Bool = false,
+    userDefaults: UserDefaults = .standard,
+    bookmarkDefaultsKey: String = "ExportDestinationBookmark"
+  ) {
+    self.userDefaults = userDefaults
+    self.bookmarkDefaultsKey = bookmarkDefaultsKey
     if !skipRestore {
       restoreBookmarkIfAvailable()
     }
@@ -113,7 +120,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isWritable = false
     statusMessage = "No export folder selected"
     destinationId = nil
-    UserDefaults.standard.removeObject(forKey: bookmarkDefaultsKey)
+    userDefaults.removeObject(forKey: bookmarkDefaultsKey)
     logger.info("Cleared export destination selection")
   }
 
@@ -184,13 +191,17 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   // MARK: - Testing Support
 
-  /// Directly sets the folder URL without going through NSOpenPanel/bookmark.
-  /// Only intended for unit tests — skips bookmark persistence and validation.
+  /// Directly sets the folder URL for unit tests.
   func setSelectedFolderForTesting(_ url: URL) {
     selectedFolderURL = url
     isAvailable = true
     isWritable = true
     statusMessage = nil
+  }
+
+  /// Exercises the production bookmark save path for unit tests.
+  func persistSelectedFolderForTesting(_ url: URL) {
+    setSelectedFolder(url)
   }
 
   // MARK: - Internal Helpers
@@ -216,7 +227,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         includingResourceValuesForKeys: nil,
         relativeTo: nil
       )
-      UserDefaults.standard.set(data, forKey: bookmarkDefaultsKey)
+      userDefaults.set(data, forKey: bookmarkDefaultsKey)
       destinationId = computeDestinationId(from: data)
       return true
     } catch {
@@ -227,7 +238,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   private func restoreBookmarkIfAvailable() {
-    guard let data = UserDefaults.standard.data(forKey: bookmarkDefaultsKey) else {
+    guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else {
       statusMessage = "No export folder selected"
       destinationId = nil
       return

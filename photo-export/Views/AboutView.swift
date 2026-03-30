@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct AboutView: View {
+  private let websiteURL = URL(string: "https://valtteriluomapareto.github.io/vibe-icloud-photo-export")!
+  private let privacyURL = URL(
+    string: "https://valtteriluomapareto.github.io/vibe-icloud-photo-export/privacy")!
+  private let supportURL = URL(
+    string: "https://valtteriluomapareto.github.io/vibe-icloud-photo-export/support")!
   private let repoURL = URL(string: "https://github.com/valtteriluomapareto/vibe-icloud-photo-export")!
 
   private var appVersion: String {
@@ -24,8 +29,16 @@ struct AboutView: View {
       Text("by Valtteri Luoma")
         .font(.callout)
 
-      Link("GitHub", destination: repoURL)
-        .font(.callout)
+      Divider()
+        .padding(.vertical, 4)
+
+      VStack(spacing: 6) {
+        Link("Website", destination: websiteURL)
+        Link("Privacy Policy", destination: privacyURL)
+        Link("Support", destination: supportURL)
+        Link("GitHub", destination: repoURL)
+      }
+      .font(.callout)
     }
     .padding(40)
     .frame(width: 300)

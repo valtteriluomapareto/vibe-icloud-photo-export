@@ -417,7 +417,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Photo Export";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				"INFOPLIST_KEY_NSHumanReadableCopyright" = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "This app needs access to your Photos library to back up your photos and videos to external storage.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo Export needs access to your Photos library to browse your photos and videos and export them to a folder you choose.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -446,8 +446,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Photo Export";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-				"INFOPLIST_KEY_NSHumanReadableCopyright" = "Copyright © 2025 Valtteri Luoma. All rights reserved.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "This app needs access to your Photos library to back up your photos and videos to external storage.";
+				"INFOPLIST_KEY_NSHumanReadableCopyright" = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo Export needs access to your Photos library to browse your photos and videos and export them to a folder you choose.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

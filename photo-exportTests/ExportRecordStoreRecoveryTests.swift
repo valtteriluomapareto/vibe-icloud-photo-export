@@ -230,12 +230,7 @@ struct ExportRecordStoreRecoveryTests {
     #expect(store2.recordsById.count == threshold)
   }
 
-  /// Documents a known durability issue: mutations written between the snapshot
-  /// capture and the log truncation can be lost on reload.
-  /// This test exists to detect if/when the compaction race is fixed — it should
-  /// start failing (count == threshold + 1) once the fix lands, at which point
-  /// the `.knownIssue` wrapper can be removed.
-  @Test func compactionRaceCanLoseRecentMutation() async throws {
+  @Test func compactionPreservesRecentMutation() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "compact-race"
@@ -262,9 +257,7 @@ struct ExportRecordStoreRecoveryTests {
     let store2 = ExportRecordStore(baseDirectoryURL: base)
     store2.configure(for: dest)
 
-    withKnownIssue("Async compaction race can lose mutations written after snapshot capture") {
-      #expect(store2.recordsById.count == threshold + 1)
-    }
+    #expect(store2.recordsById.count == threshold + 1)
   }
 
   // MARK: - Delete mutation in log

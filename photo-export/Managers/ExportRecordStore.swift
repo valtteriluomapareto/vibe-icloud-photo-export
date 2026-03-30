@@ -235,17 +235,31 @@ final class ExportRecordStore: ObservableObject {
     scheduleCoalescedNotify()
 
     // If not configured to any destination, do not persist
-    guard let logURL = self.logFileURL, let snapshotURL = self.snapshotFileURL else { return }
+    guard
+      let storeDirURL = self.currentStoreDirURL,
+      let logURL = self.logFileURL,
+      let snapshotURL = self.snapshotFileURL
+    else { return }
 
     // Prepare data for log write off the main actor
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
-    let currentRecords = self.recordsById
     let mutationData: Data
     do { mutationData = try encoder.encode(mutation) } catch {
       logger.error(
         "Failed to encode mutation: \(String(describing: error), privacy: .public)")
       return
+    }
+    let nextMutationCount = mutationCountSinceCompact + 1
+    let recordsSnapshot: [String: ExportRecord]?
+    if nextMutationCount >= Constants.compactEveryNMutations {
+      // Capture a COW snapshot now and serialize it later on the IO queue after
+      // this append is durable, so newer mutations cannot slip in before log truncation.
+      recordsSnapshot = recordsById
+      mutationCountSinceCompact = 0
+    } else {
+      recordsSnapshot = nil
+      mutationCountSinceCompact = nextMutationCount
     }
 
     ioQueue.async { [weak self] in
@@ -255,32 +269,40 @@ final class ExportRecordStore: ObservableObject {
       } catch {
         self.logger.error(
           "Failed to persist mutation: \(String(describing: error), privacy: .public)")
+        Task { @MainActor [weak self] in
+          self?.restoreMutationCountAfterPersistenceFailure(
+            for: storeDirURL,
+            restoredCount: nextMutationCount - 1
+          )
+        }
+        return
       }
-      // After log write, update counters on main actor and possibly compact
-      Task { @MainActor [weak self] in
-        guard let self else { return }
-        self.mutationCountSinceCompact += 1
-        if self.mutationCountSinceCompact >= Constants.compactEveryNMutations {
-          self.mutationCountSinceCompact = 0
-          let recordsSnapshot = currentRecords
-          let snapURL = snapshotURL
-          let logFile = logURL
-          self.ioQueue.async { [weak self] in
-            guard let self else { return }
-            do {
-              let snapshotData = try encoder.encode(recordsSnapshot)
-              try writeSnapshotAndTruncate(
-                snapshotData: snapshotData, snapshotFileURL: snapURL,
-                logFileURL: logFile)
-            } catch {
-              self.logger.error(
-                "Failed to compact snapshot: \(String(describing: error), privacy: .public)"
-              )
-            }
-          }
+
+      guard let recordsSnapshot else { return }
+      do {
+        let snapshotData = try encoder.encode(recordsSnapshot)
+        try writeSnapshotAndTruncate(
+          snapshotData: snapshotData,
+          snapshotFileURL: snapshotURL,
+          logFileURL: logURL
+        )
+      } catch {
+        self.logger.error(
+          "Failed to compact snapshot: \(String(describing: error), privacy: .public)"
+        )
+        Task { @MainActor [weak self] in
+          self?.restoreMutationCountAfterPersistenceFailure(
+            for: storeDirURL,
+            restoredCount: Constants.compactEveryNMutations - 1
+          )
         }
       }
     }
+  }
+
+  private func restoreMutationCountAfterPersistenceFailure(for storeDirURL: URL, restoredCount: Int) {
+    guard currentStoreDirURL == storeDirURL else { return }
+    mutationCountSinceCompact = max(mutationCountSinceCompact, restoredCount)
   }
 
   private func apply(_ mutation: ExportRecordMutation) {

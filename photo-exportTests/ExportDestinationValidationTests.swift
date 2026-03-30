@@ -81,4 +81,38 @@ struct ExportDestinationValidationTests {
     #expect(FileManager.default.fileExists(atPath: result.path, isDirectory: &isDir))
     #expect(isDir.boolValue)
   }
+
+  @Test func persistedBookmarkRestoresFolderAcrossManagerInstances() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ExportDestBookmark-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let suiteName = "ExportDestinationTests-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let bookmarkKey = "ExportDestinationBookmark-\(UUID().uuidString)"
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let writer = ExportDestinationManager(
+      skipRestore: true,
+      userDefaults: defaults,
+      bookmarkDefaultsKey: bookmarkKey
+    )
+    writer.persistSelectedFolderForTesting(dir)
+
+    let restored = ExportDestinationManager(
+      userDefaults: defaults,
+      bookmarkDefaultsKey: bookmarkKey
+    )
+
+    #expect(restored.selectedFolderURL?.standardizedFileURL == dir.standardizedFileURL)
+    #expect(restored.canExportNow)
+    #expect(restored.destinationId == writer.destinationId)
+
+    let scopedURL = restored.beginScopedAccess()
+    #expect(scopedURL?.standardizedFileURL == dir.standardizedFileURL)
+    if let scopedURL {
+      restored.endScopedAccess(for: scopedURL)
+    }
+  }
 }

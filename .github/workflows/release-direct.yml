@@ -65,6 +65,19 @@ jobs:
           echo "is_dry_run=${IS_DRY_RUN}"
           echo "::endgroup::"
 
+      - name: Verify MARKETING_VERSION matches tag
+        if: steps.ctx.outputs.is_tag == 'true'
+        run: |
+          TAG_VERSION="${{ steps.ctx.outputs.version }}"
+          PROJECT_VERSION=$(grep -m1 'MARKETING_VERSION' photo-export.xcodeproj/project.pbxproj | sed 's/.*= *\(.*\);/\1/')
+          echo "Tag version:     ${TAG_VERSION}"
+          echo "Project version: ${PROJECT_VERSION}"
+          if [[ "$TAG_VERSION" != "$PROJECT_VERSION" ]]; then
+            echo "::error::Tag v${TAG_VERSION} does not match MARKETING_VERSION ${PROJECT_VERSION} in project.pbxproj. Run scripts/bump-version.sh ${TAG_VERSION} before tagging."
+            exit 1
+          fi
+          echo "Versions match."
+
       # ── Xcode selection ───────────────────────────────────────────────
       - name: Select Xcode
         run: |

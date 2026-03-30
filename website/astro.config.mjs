@@ -28,7 +28,10 @@ export default defineConfig({
 			},
 			sidebar: [
 				{ label: 'Getting Started', slug: 'getting-started' },
-				{ label: 'Export iCloud Photos to External Drive', slug: 'export-icloud-photos' },
+				{
+					label: 'Export iCloud Photos to External Drive',
+					slug: 'export-icloud-photos',
+				},
 				{ label: 'Features', slug: 'features' },
 				{ label: 'Architecture', slug: 'architecture' },
 				{ label: 'Ideas', slug: 'roadmap' },

@@ -9,73 +9,113 @@ const base = import.meta.env.BASE_URL;
 ---
 
 <MarketingLayout title={title} description={description}>
-		<section class="info-page-shell">
-			<div class="info-page-card">
-				<p class="info-page-kicker">Photo Export</p>
-				<h1 class="info-page-title">Support</h1>
-				<p class="info-page-meta">Help, bug reports, and release information</p>
-				<p class="info-page-lead">
-					Photo Export is a small macOS utility focused on exporting Apple Photos originals to storage you control. The fastest support path today is the project&apos;s documentation and GitHub issue tracker.
-				</p>
+	<section class="info-page-shell">
+		<div class="info-page-card">
+			<p class="info-page-kicker">Photo Export</p>
+			<h1 class="info-page-title">Support</h1>
+			<p class="info-page-meta">Help, bug reports, and release information</p>
+			<p class="info-page-lead">
+				Photo Export is a small macOS utility focused on exporting Apple Photos
+				originals to storage you control. The fastest support path today is the
+				project&apos;s documentation and GitHub issue tracker.
+			</p>
 
-				<section class="info-page-section" aria-labelledby="support-channels">
-					<h2 id="support-channels">Support channels</h2>
-					<div class="info-page-grid">
-						<div class="info-page-panel">
-							<h3>Documentation</h3>
-							<p>
-								Start with the <a href={`${base}/getting-started`}>getting started guide</a> for setup, permissions, and troubleshooting basics.
-							</p>
-						</div>
-						<div class="info-page-panel">
-							<h3>Bug reports and feature requests</h3>
-							<p>
-								Use the <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">GitHub issue tracker</a> for bugs, regressions, and feature ideas.
-							</p>
-						</div>
-						<div class="info-page-panel">
-							<h3>Downloads</h3>
-							<p>
-								Get the latest signed build from <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases">GitHub Releases</a>.
-							</p>
-						</div>
-						<div class="info-page-panel">
-							<h3>Source code</h3>
-							<p>
-								Review the project on <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export">GitHub</a> if you need implementation details or want to contribute.
-							</p>
-						</div>
+			<section class="info-page-section" aria-labelledby="support-channels">
+				<h2 id="support-channels">Support channels</h2>
+				<div class="info-page-grid">
+					<div class="info-page-panel">
+						<h3>Documentation</h3>
+						<p>
+							Start with the <a href={`${base}/getting-started`}
+								>getting started guide</a
+							> for setup, permissions, and troubleshooting basics.
+						</p>
 					</div>
-				</section>
+					<div class="info-page-panel">
+						<h3>Bug reports and feature requests</h3>
+						<p>
+							Use the <a
+								href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues"
+								>GitHub issue tracker</a
+							> for bugs, regressions, and feature ideas.
+						</p>
+					</div>
+					<div class="info-page-panel">
+						<h3>Downloads</h3>
+						<p>
+							Get the latest signed build from <a
+								href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases"
+								>GitHub Releases</a
+							>.
+						</p>
+					</div>
+					<div class="info-page-panel">
+						<h3>Source code</h3>
+						<p>
+							Review the project on <a
+								href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export"
+								>GitHub</a
+							> if you need implementation details or want to contribute.
+						</p>
+					</div>
+				</div>
+			</section>
 
-				<section class="info-page-section" aria-labelledby="support-before-reporting">
-					<h2 id="support-before-reporting">Before you report a problem</h2>
-					<ul class="info-page-list">
-						<li>Confirm Photos access is enabled in <strong>System Settings → Privacy &amp; Security → Photos</strong>.</li>
-						<li>Confirm the export destination drive is mounted and writable.</li>
-						<li>Check whether the affected asset exists only in iCloud and needs to be downloaded.</li>
-						<li>Retry with the latest published build if you are on an older release.</li>
-					</ul>
-				</section>
+			<section
+				class="info-page-section"
+				aria-labelledby="support-before-reporting"
+			>
+				<h2 id="support-before-reporting">Before you report a problem</h2>
+				<ul class="info-page-list">
+					<li>
+						Confirm Photos access is enabled in <strong
+							>System Settings → Privacy &amp; Security → Photos</strong
+						>.
+					</li>
+					<li>Confirm the export destination drive is mounted and writable.</li>
+					<li>
+						Check whether the affected asset exists only in iCloud and needs to
+						be downloaded.
+					</li>
+					<li>
+						Retry with the latest published build if you are on an older
+						release.
+					</li>
+				</ul>
+			</section>
 
-				<section class="info-page-section" aria-labelledby="support-issue-template">
-					<h2 id="support-issue-template">What to include in a bug report</h2>
-					<ul class="info-page-list">
-						<li>macOS version</li>
-						<li>Photo Export version</li>
-						<li>Whether the problem happened during browsing, export, or import</li>
-						<li>Whether the destination was an internal disk, external drive, or network volume</li>
-						<li>Steps to reproduce the problem</li>
-						<li>Any visible error message or Console log that helps explain the failure</li>
-					</ul>
-				</section>
+			<section
+				class="info-page-section"
+				aria-labelledby="support-issue-template"
+			>
+				<h2 id="support-issue-template">What to include in a bug report</h2>
+				<ul class="info-page-list">
+					<li>macOS version</li>
+					<li>Photo Export version</li>
+					<li>
+						Whether the problem happened during browsing, export, or import
+					</li>
+					<li>
+						Whether the destination was an internal disk, external drive, or
+						network volume
+					</li>
+					<li>Steps to reproduce the problem</li>
+					<li>
+						Any visible error message or Console log that helps explain the
+						failure
+					</li>
+				</ul>
+			</section>
 
-				<section class="info-page-section" aria-labelledby="support-review">
-					<h2 id="support-review">App Review and privacy</h2>
-					<p>
-						If you are reviewing the app for distribution, the privacy policy is available at <a href={`${base}/privacy`}>{`${base}/privacy`}</a>. The app uses Photos access only for browsing and export, and file-system access only for folders the user explicitly selects.
-					</p>
-				</section>
+			<section class="info-page-section" aria-labelledby="support-review">
+				<h2 id="support-review">App Review and privacy</h2>
+				<p>
+					If you are reviewing the app for distribution, the privacy policy is
+					available at <a href={`${base}/privacy`}>{`${base}/privacy`}</a>. The
+					app uses Photos access only for browsing and export, and file-system
+					access only for folders the user explicitly selects.
+				</p>
+			</section>
 		</div>
 	</section>
 

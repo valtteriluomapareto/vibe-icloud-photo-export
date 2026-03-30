@@ -57,15 +57,15 @@ Orchestrates the export queue. Depends on the other three managers.
 
 The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 
-| Type | Responsibility |
-|------|----------------|
-| `ContentView` | Main `NavigationSplitView` shell and year/month selection |
-| `MonthContentView` | Thumbnail grid for the selected month |
-| `AssetDetailView` | Full-size image or video preview |
-| `ExportToolbarView` | Export destination and queue controls |
-| `OnboardingView` | First-run flow for permissions and destination setup |
-| `ImportView` | Progress and results for importing an existing backup |
-| `MonthViewModel` | Cancellation-aware loading for month content |
+| Type                | Responsibility                                            |
+| ------------------- | --------------------------------------------------------- |
+| `ContentView`       | Main `NavigationSplitView` shell and year/month selection |
+| `MonthContentView`  | Thumbnail grid for the selected month                     |
+| `AssetDetailView`   | Full-size image or video preview                          |
+| `ExportToolbarView` | Export destination and queue controls                     |
+| `OnboardingView`    | First-run flow for permissions and destination setup      |
+| `ImportView`        | Progress and results for importing an existing backup     |
+| `MonthViewModel`    | Cancellation-aware loading for month content              |
 
 ## Persistence
 

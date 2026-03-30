@@ -15,12 +15,12 @@ Use Node 22.12 or newer. The package manifest declares this in `engines`, and CI
 
 Useful commands:
 
-| Command | Purpose |
-| :------ | :------ |
-| `npm run dev` | Start the local dev server |
-| `npm run build` | Build the static site into `dist/` |
-| `npm run preview` | Preview the production build locally |
-| `npm run check` | Run `astro check` |
+| Command            | Purpose                                                            |
+| :----------------- | :----------------------------------------------------------------- |
+| `npm run dev`      | Start the local dev server                                         |
+| `npm run build`    | Build the static site into `dist/`                                 |
+| `npm run preview`  | Preview the production build locally                               |
+| `npm run check`    | Run `astro check`                                                  |
 | `npm run validate` | Run the same validation used in CI (`astro check` + `astro build`) |
 
 ## Content Layout

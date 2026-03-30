@@ -9,7 +9,12 @@
 	--site-border: #dbe3ef;
 	--site-accent: #4a9eff;
 	--site-accent-strong: #2f7edb;
-	--site-brand-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+	--site-brand-gradient: linear-gradient(
+		135deg,
+		#1a1a2e 0%,
+		#16213e 50%,
+		#0f3460 100%
+	);
 	--site-footer-bg: #101827;
 	--site-code-bg: rgba(15, 23, 42, 0.08);
 	--site-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
@@ -46,7 +51,9 @@ html {
 
 body {
 	margin: 0;
-	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+	font-family:
+		-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+		sans-serif;
 	background: var(--site-bg);
 	color: var(--site-text);
 	line-height: 1.6;

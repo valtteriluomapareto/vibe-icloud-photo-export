@@ -31,6 +31,14 @@ jobs:
         run: npm ci
         working-directory: website
 
+      - name: Prettier (check)
+        run: npm run format:check
+        working-directory: website
+
+      - name: oxlint
+        run: npm run lint
+        working-directory: website
+
       - name: Validate website
         run: npm run validate
         working-directory: website

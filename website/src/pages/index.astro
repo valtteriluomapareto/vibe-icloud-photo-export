@@ -60,7 +60,7 @@ const faqData = {
 			name: 'What happens if the export is interrupted?',
 			acceptedAnswer: {
 				'@type': 'Answer',
-				text: "The app tracks every exported photo. If the export is interrupted, you can resume and it will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again.",
+				text: 'The app tracks every exported photo. If the export is interrupted, you can resume and it will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again.',
 			},
 		},
 	],
@@ -68,35 +68,57 @@ const faqData = {
 ---
 
 <MarketingLayout title={title} description={description}>
-	<script type="application/ld+json" set:html={JSON.stringify(faqData)} slot="head" />
+	<script
+		type="application/ld+json"
+		set:html={JSON.stringify(faqData)}
+		slot="head"
+	/>
 	<Hero />
 
 	<!-- Why Photo Export? -->
 	<section class="section" aria-labelledby="why-photo-export">
 		<div class="container">
-			<h2 id="why-photo-export">Why Use Photo Export for Your iCloud Backup?</h2>
+			<h2 id="why-photo-export">
+				Why Use Photo Export for Your iCloud Backup?
+			</h2>
 			<p class="section-lead">
-				Photo Export uses Apple's <strong>PhotoKit framework</strong> — the same system API that powers the built-in Photos app. It sees exactly what your Photos app sees: every photo, video, and album synced through iCloud Photos. No reverse engineering, no private APIs, no workarounds.
+				Photo Export uses Apple's <strong>PhotoKit framework</strong> — the same system
+				API that powers the built-in Photos app. It sees exactly what your Photos
+				app sees: every photo, video, and album synced through iCloud Photos. No reverse
+				engineering, no private APIs, no workarounds.
 			</p>
 			<p class="section-lead">
-				This matters because PhotoKit is <strong>the only supported way</strong> to read the Photos library on macOS. It means the app works reliably across macOS updates, respects your privacy settings, and can request iCloud originals on demand through Apple's own infrastructure. Your credentials never leave your Mac.
+				This matters because PhotoKit is <strong>the only supported way</strong> to
+				read the Photos library on macOS. It means the app works reliably across macOS
+				updates, respects your privacy settings, and can request iCloud originals
+				on demand through Apple's own infrastructure. Your credentials never leave
+				your Mac.
 			</p>
 			<div class="value-props">
 				<div class="value-prop">
 					<strong>Your photos, your folders</strong>
-					<span>No cloud lock-in. Export originals to any drive you control.</span>
+					<span
+						>No cloud lock-in. Export originals to any drive you control.</span
+					>
 				</div>
 				<div class="value-prop">
 					<strong>Organized automatically</strong>
-					<span>Photos sorted into a clean <code>Year/Month/</code> folder hierarchy.</span>
+					<span
+						>Photos sorted into a clean <code>Year/Month/</code> folder hierarchy.</span
+					>
 				</div>
 				<div class="value-prop">
 					<strong>Only exports new photos</strong>
-					<span>Skips photos you've already exported. Never creates duplicates.</span>
+					<span
+						>Skips photos you've already exported. Never creates duplicates.</span
+					>
 				</div>
 				<div class="value-prop">
 					<strong>Handles interruptions</strong>
-					<span>Pause, resume, and recover from interruptions. Individual failures don't stop the batch.</span>
+					<span
+						>Pause, resume, and recover from interruptions. Individual failures
+						don't stop the batch.</span
+					>
 				</div>
 			</div>
 		</div>
@@ -108,22 +130,28 @@ const faqData = {
 			<h2 id="features">Features</h2>
 			<div class="feature-grid">
 				<FeatureCard title="Library Browsing" icon="📸">
-					Browse your entire Photos library with a year/month sidebar. See photo counts and export status at a glance.
+					Browse your entire Photos library with a year/month sidebar. See photo
+					counts and export status at a glance.
 				</FeatureCard>
 				<FeatureCard title="Thumbnail Previews" icon="🖼">
-					Fast thumbnail grid with in-memory caching. Click any photo for a full-size preview.
+					Fast thumbnail grid with in-memory caching. Click any photo for a
+					full-size preview.
 				</FeatureCard>
 				<FeatureCard title="Smart Export Tracking" icon="✅">
-					Remembers every exported photo. Resume-safe — never re-exports what's already been copied.
+					Remembers every exported photo. Resume-safe — never re-exports what's
+					already been copied.
 				</FeatureCard>
 				<FeatureCard title="Pause / Resume / Cancel" icon="⏯">
-					Full control over the export queue. Pause a long export and pick it up later.
+					Full control over the export queue. Pause a long export and pick it up
+					later.
 				</FeatureCard>
 				<FeatureCard title="Remembers Your Folder" icon="📁">
-					Your chosen destination folder is remembered across app launches — no need to re-select it.
+					Your chosen destination folder is remembered across app launches — no
+					need to re-select it.
 				</FeatureCard>
 				<FeatureCard title="Graceful Error Handling" icon="🛡">
-					Handles denied access, unavailable drives, and individual photo failures without crashing the batch.
+					Handles denied access, unavailable drives, and individual photo
+					failures without crashing the batch.
 				</FeatureCard>
 			</div>
 		</div>
@@ -133,22 +161,37 @@ const faqData = {
 	<section class="section" aria-labelledby="how-it-works">
 		<div class="container">
 			<h2 id="how-it-works">How to Export Your iCloud Photos in 3 Steps</h2>
-			<p class="section-note"><strong>Prerequisite:</strong> Make sure iCloud Photos is enabled on your Mac (<strong>System Settings → Apple Account → iCloud → Photos</strong>). Photo Export reads your local Photos library, so your iCloud photos need to be syncing to this Mac.</p>
+			<p class="section-note">
+				<strong>Prerequisite:</strong> Make sure iCloud Photos is enabled on your
+				Mac (<strong>System Settings → Apple Account → iCloud → Photos</strong
+				>). Photo Export reads your local Photos library, so your iCloud photos
+				need to be syncing to this Mac.
+			</p>
 			<div class="steps">
 				<div class="step">
 					<div class="step-number">1</div>
 					<h3>Grant access & pick a folder</h3>
-					<p>Authorize Photos library access and choose a destination folder on any local or external drive.</p>
+					<p>
+						Authorize Photos library access and choose a destination folder on
+						any local or external drive.
+					</p>
 				</div>
 				<div class="step">
 					<div class="step-number">2</div>
 					<h3>Browse your library</h3>
-					<p>Navigate by year and month. Preview thumbnails and inspect individual photos before exporting.</p>
+					<p>
+						Navigate by year and month. Preview thumbnails and inspect
+						individual photos before exporting.
+					</p>
 				</div>
 				<div class="step">
 					<div class="step-number">3</div>
 					<h3>Export</h3>
-					<p>Hit export and the app copies original files into an organized <code>Year/Month/</code> folder tree. Track progress in real time.</p>
+					<p>
+						Hit export and the app copies original files into an organized <code
+							>Year/Month/</code
+						> folder tree. Track progress in real time.
+					</p>
 				</div>
 			</div>
 		</div>
@@ -176,8 +219,15 @@ const faqData = {
 			<h2 id="installation">Installation</h2>
 			<div class="install-steps">
 				<ol>
-					<li>Download the latest <code>.dmg</code> from <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases">GitHub Releases</a></li>
-					<li>Open the DMG and drag Photo Export to your Applications folder</li>
+					<li>
+						Download the latest <code>.dmg</code> from <a
+							href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases"
+							>GitHub Releases</a
+						>
+					</li>
+					<li>
+						Open the DMG and drag Photo Export to your Applications folder
+					</li>
 					<li>Launch the app and grant Photos library access when prompted</li>
 				</ol>
 				<div class="requirements">
@@ -200,7 +250,12 @@ const faqData = {
 				<li>Flexible naming schemes beyond year/month</li>
 			</ul>
 			<p><a href={`${base}/roadmap`}>See all ideas &rarr;</a></p>
-			<p class="feedback-cta">Missing a feature? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">Open an issue on GitHub</a> and let us know what you need.</p>
+			<p class="feedback-cta">
+				Missing a feature? <a
+					href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues"
+					>Open an issue on GitHub</a
+				> and let us know what you need.
+			</p>
 		</div>
 	</section>
 
@@ -211,27 +266,49 @@ const faqData = {
 			<dl class="faq-list">
 				<div class="faq-item">
 					<dt>Does this work with iCloud Photo Library?</dt>
-					<dd>Yes. Photo Export reads your Apple Photos library, which includes all photos synced via iCloud. It can also download iCloud originals that are stored remotely on demand during export.</dd>
+					<dd>
+						Yes. Photo Export reads your Apple Photos library, which includes
+						all photos synced via iCloud. It can also download iCloud originals
+						that are stored remotely on demand during export.
+					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>Can I export photos to an external hard drive?</dt>
-					<dd>Absolutely. You can choose any local or external drive as your export destination. The app remembers your choice across launches.</dd>
+					<dd>
+						Absolutely. You can choose any local or external drive as your
+						export destination. The app remembers your choice across launches.
+					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>Will it download iCloud originals that are stored remotely?</dt>
-					<dd>Yes. During export, the app automatically downloads originals from iCloud when they aren't stored locally on your Mac. No manual downloading required.</dd>
+					<dd>
+						Yes. During export, the app automatically downloads originals from
+						iCloud when they aren't stored locally on your Mac. No manual
+						downloading required.
+					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>Is it really free?</dt>
-					<dd>Yes. Photo Export is free, open-source software released under the MIT license. No subscriptions, no in-app purchases, no ads.</dd>
+					<dd>
+						Yes. Photo Export is free, open-source software released under the
+						MIT license. No subscriptions, no in-app purchases, no ads.
+					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>Does it export videos too?</dt>
-					<dd>Yes. The app exports photos and videos. Live Photos are exported as a single still image — full motion export (paired image + video) is planned for a future release.</dd>
+					<dd>
+						Yes. The app exports photos and videos. Live Photos are exported as
+						a single still image — full motion export (paired image + video) is
+						planned for a future release.
+					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>What happens if the export is interrupted?</dt>
-					<dd>The app tracks every exported photo. If the export is interrupted, you can resume and it will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again.</dd>
+					<dd>
+						The app tracks every exported photo. If the export is interrupted,
+						you can resume and it will skip most already-exported files. In rare
+						cases (e.g. a crash mid-write), a file may be copied again.
+					</dd>
 				</div>
 			</dl>
 		</div>
@@ -241,10 +318,18 @@ const faqData = {
 	<section class="section cta-section" aria-labelledby="get-started">
 		<div class="container">
 			<h2 id="get-started">Get started</h2>
-			<p>Photo Export is free and open source. Download the app, grant Photos access, and start backing up your library today.</p>
+			<p>
+				Photo Export is free and open source. Download the app, grant Photos
+				access, and start backing up your library today.
+			</p>
 			<div class="cta-actions">
-				<a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases" class="btn btn-primary">Download</a>
-				<a href={`${base}/getting-started`} class="btn btn-secondary">Read the docs</a>
+				<a
+					href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases"
+					class="btn btn-primary">Download</a
+				>
+				<a href={`${base}/getting-started`} class="btn btn-secondary"
+					>Read the docs</a
+				>
 				<a
 					href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export"
 					class="btn btn-secondary"
@@ -252,7 +337,12 @@ const faqData = {
 					View on GitHub
 				</a>
 			</div>
-			<p class="feedback-note">Found a bug or have feedback? <a href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues">We'd love to hear from you.</a></p>
+			<p class="feedback-note">
+				Found a bug or have feedback? <a
+					href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues"
+					>We'd love to hear from you.</a
+				>
+			</p>
 		</div>
 	</section>
 

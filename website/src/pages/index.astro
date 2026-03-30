@@ -1,8 +1,10 @@
 ---
+import { Image } from 'astro:assets';
 import MarketingLayout from '../layouts/MarketingLayout.astro';
 import Hero from '../components/Hero.astro';
 import FeatureCard from '../components/FeatureCard.astro';
 import Footer from '../components/Footer.astro';
+import screenshot from '../assets/photo_export_screenshot.png';
 
 const base = import.meta.env.BASE_URL;
 const title = 'Photo Export — Free Mac App to Back Up iCloud & Apple Photos';
@@ -156,9 +158,15 @@ const faqData = {
 	<section class="section section-alt" aria-labelledby="screenshots">
 		<div class="container">
 			<h2 id="screenshots">Screenshots</h2>
-			<p class="section-note">
-				Screenshots coming soon. The app features a sidebar with year/month navigation, a thumbnail grid for browsing photos, full-size previews, and export progress controls.
-			</p>
+			<div class="screenshot-wrapper">
+				<Image
+					src={screenshot}
+					alt="Photo Export app showing the year/month sidebar, thumbnail grid, and full-size photo preview"
+					class="screenshot"
+					widths={[600, 900, 1200]}
+					sizes="(max-width: 768px) 100vw, 900px"
+				/>
+			</div>
 		</div>
 	</section>
 
@@ -434,6 +442,17 @@ const faqData = {
 		font-size: 0.95rem;
 		margin-left: 0;
 		line-height: 1.6;
+	}
+
+	.screenshot-wrapper {
+		text-align: center;
+	}
+
+	.screenshot {
+		max-width: 100%;
+		height: auto;
+		border-radius: 12px;
+		box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 	}
 
 	@media (max-width: 768px) {

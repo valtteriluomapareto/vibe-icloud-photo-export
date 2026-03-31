@@ -36,9 +36,13 @@ Validated against the repo:
 - In-app links for website, privacy, and support exist in [`AboutView.swift`](photo-export/Views/AboutView.swift)
 - Website has privacy and support pages
 - Sandbox and bookmark persistence bugs are fixed
-- `CURRENT_PROJECT_VERSION` is hardcoded to `1` — CI does not currently override it (this plan adds that)
+- `CURRENT_PROJECT_VERSION` is hardcoded to `1` in `project.pbxproj`; `release-direct.yml` overrides it at build time with `github.run_number`
 - Deployment target is macOS 15.0 (Sequoia). This limits the addressable market to Sequoia and later. This is a conscious choice — the app uses macOS 15 APIs.
-- README and website only show GitHub Releases as a download channel
+- README and website show both GitHub Releases and "Coming soon" for the Mac App Store
+- Support page has real contact email (valtteri.e.luoma@gmail.com)
+- App icon (`appstore.png`) alpha channel has been removed
+- `REGISTER_APP_GROUPS` set to `NO`
+- Release process docs cover dual-channel flow
 
 ## Entitlements Audit
 
@@ -56,7 +60,7 @@ All entitlements are App Store-compatible in principle. The `network.client` ent
 
 The same entitlements file is used for both channels. The bundle identifier override at build time does not affect entitlements.
 
-Project flag note: `REGISTER_APP_GROUPS` is enabled in the build settings but no `com.apple.security.application-groups` entitlement is declared. This is harmless but misleading. Clean it up by setting `REGISTER_APP_GROUPS = NO`.
+Project flag note: `REGISTER_APP_GROUPS` has been set to `NO`. No app groups are used.
 
 ## Privacy Manifest Audit
 
@@ -156,7 +160,7 @@ Build number strategy per channel:
 | Set by | `release-app-store.yml` (or manually for first submission) | `release-direct.yml` |
 | Constraint | Must be higher than the last upload to App Store Connect | No constraint — `run_number` is always increasing |
 
-The value of `CURRENT_PROJECT_VERSION` in `project.pbxproj` stays at `1` as a checked-in default. After this plan is implemented, both workflows will override it at build time via `xcodebuild CURRENT_PROJECT_VERSION=<N>`. Currently, neither workflow passes this override — adding it is a required engineering task. Do not commit build-number changes to `project.pbxproj`.
+The value of `CURRENT_PROJECT_VERSION` in `project.pbxproj` stays at `1` as a checked-in default. `release-direct.yml` already overrides it at build time via `xcodebuild CURRENT_PROJECT_VERSION=${{ github.run_number }}`. The future `release-app-store.yml` will do the same with a build number from App Store Connect. Do not commit build-number changes to `project.pbxproj`.
 
 For the manual first App Store submission, archive from the terminal (not the Xcode GUI — the GUI doesn't support build-time overrides):
 
@@ -229,13 +233,11 @@ The GitHub Release can be published within minutes. The App Store fix is gated b
 
 ## Repo Changes Required
 
-### 1. Build number and bundle ID automation
+### 1. Build number and bundle ID automation — DONE (partial)
 
-Update `release-direct.yml` to override `CURRENT_PROJECT_VERSION` with `github.run_number` at build time.
+`release-direct.yml` now overrides `CURRENT_PROJECT_VERSION` with `github.run_number` at build time. It also checks for existing GitHub Releases before building.
 
-Add the future `release-app-store.yml` with:
-- `CURRENT_PROJECT_VERSION` queried from App Store Connect API + 1
-- `PRODUCT_BUNDLE_IDENTIFIER=com.valtteriluoma.photo-export-appstore` override at build time
+Still TODO: Add `release-app-store.yml` with App Store Connect API build number query and `PRODUCT_BUNDLE_IDENTIFIER` override (post-first-submission).
 
 No changes to `bump-version.sh` — it only manages `MARKETING_VERSION`. No changes to the checked-in `PRODUCT_BUNDLE_IDENTIFIER` in `project.pbxproj` — the App Store bundle ID is a build-time override only.
 
@@ -243,44 +245,31 @@ No changes to `bump-version.sh` — it only manages `MARKETING_VERSION`. No chan
 
 Register `com.valtteriluoma.photo-export-appstore` in the Apple Developer portal under Certificates, Identifiers & Profiles. This is required before creating the App Store provisioning profile or the app record in App Store Connect.
 
-### 3. Clean up REGISTER_APP_GROUPS
+### 3. Clean up REGISTER_APP_GROUPS — DONE
 
-Set `REGISTER_APP_GROUPS = NO` in the Xcode project. No app groups are used.
+`REGISTER_APP_GROUPS` set to `NO` in both Debug and Release build configurations.
 
 ### 4. Apply network entitlement decision
 
 After completing the blocking validation for `network.client`, either remove the entitlement or keep it with documented justification in review notes.
 
-### 5. Website and README
+### 5. Website and README — DONE
 
-Update these files to present both download channels:
+All files updated to present both download channels. Mac App Store shown as "Coming soon" with no dead links. Structured data `offers` converted to an array with the free GitHub offer; a TODO comment marks where to add the App Store offer and `downloadUrl` once the listing is live.
 
-- [`README.md`](README.md)
-- [`website/src/components/Hero.astro`](website/src/components/Hero.astro)
-- [`website/src/pages/index.astro`](website/src/pages/index.astro)
-- [`website/src/content/docs/getting-started.md`](website/src/content/docs/getting-started.md)
-- [`website/src/content/docs/export-icloud-photos.md`](website/src/content/docs/export-icloud-photos.md)
-- [`website/src/layouts/MarketingLayout.astro`](website/src/layouts/MarketingLayout.astro) — structured data currently hardcodes `price: '0'` and `downloadUrl` pointing only to GitHub Releases. The structured data `offers` should represent the free GitHub download (`price: '0'`, `downloadUrl` pointing to GitHub Releases) because that is the canonical open-source distribution. Add a second `offers` entry for the paid App Store listing once the App Store URL exists. Do not change the existing offer to the paid price — both offers are real.
-- [`website/src/pages/support.astro`](website/src/pages/support.astro) — currently directs all downloads to GitHub Releases only. Add the App Store as a download option.
+Updated files: `README.md`, `Hero.astro`, `index.astro`, `getting-started.md`, `export-icloud-photos.md`, `MarketingLayout.astro`, `support.astro`.
 
-The Mac App Store button should link to the App Store listing once it exists. Before the listing is live, either omit the button or show "Coming soon to the Mac App Store" without a dead link.
+### 6. Support page — DONE
 
-### 6. Support page
+Contact email (valtteri.e.luoma@gmail.com) added to the support page.
 
-Add real contact information (email address at minimum) to the support page. App Store Connect requires a support URL that leads to actual contact information.
+### 7. Channel-specific docs — DONE
 
-### 7. Channel-specific docs
+Added "Updates and distribution channels" section to `getting-started.md` covering update mechanisms, side-by-side installation, and the channel-switching migration path via Import Existing Backup.
 
-Add a section to the getting-started docs or support page explaining:
+### 8. Release process docs — DONE
 
-- App Store users get updates through the App Store
-- GitHub users check GitHub Releases for new versions
-- Both builds can coexist on the same Mac (separate bundle IDs, separate data)
-- To migrate from one channel to the other: install the new channel, select the same export folder, run "Import Existing Backup" to avoid duplicate exports
-
-### 8. Release process docs
-
-Update [`docs/project/release-process.md`](docs/project/release-process.md) to cover the dual-channel flow.
+`docs/project/release-process.md` rewritten to cover dual-channel flow: build numbers, manual App Store submission, App Review rejection handling, and critical bug rollback.
 
 ## App Store Connect Setup
 
@@ -338,9 +327,9 @@ Based on the current app behavior:
 
 Select "Data Not Collected" for all categories.
 
-### App icon
+### App icon — DONE
 
-The current `appstore.png` (1024x1024) has an alpha channel. App Store Connect rejects icons with transparency. Remove the alpha channel before submission. Apple applies the rounded-rect mask automatically — the source icon must be a square with no transparency.
+The `appstore.png` (1024x1024) alpha channel has been removed. Apple applies the rounded-rect mask automatically.
 
 ### Product page
 
@@ -420,15 +409,15 @@ Ordered by dependency. Items within a group can be done in parallel.
 
 ### Engineering (AI-delegatable)
 
-- [ ] Remove alpha channel from `appstore.png`
-- [ ] Update `release-direct.yml` to set `CURRENT_PROJECT_VERSION` from `github.run_number` and check for existing GitHub Releases (draft or published) before building
-- [ ] Set `REGISTER_APP_GROUPS = NO`
+- [x] Remove alpha channel from `appstore.png`
+- [x] Update `release-direct.yml` to set `CURRENT_PROJECT_VERSION` from `github.run_number` and check for existing GitHub Releases (draft or published) before building
+- [x] Set `REGISTER_APP_GROUPS = NO`
 - [ ] Apply `network.client` decision (after blocking validation)
-- [ ] Update README with dual-channel download options
-- [ ] Update website (Hero, index, getting-started, export-icloud-photos, MarketingLayout, support) with both channels
-- [ ] Add real contact info to support page
-- [ ] Add channel-specific update/migration docs
-- [ ] Update release process docs for dual-channel flow
+- [x] Update README with dual-channel download options
+- [x] Update website (Hero, index, getting-started, export-icloud-photos, MarketingLayout, support) with both channels
+- [x] Add real contact info to support page
+- [x] Add channel-specific update/migration docs
+- [x] Update release process docs for dual-channel flow
 
 ### App Store Connect (Valtteri only)
 
@@ -461,14 +450,14 @@ The app is App Store-ready when:
 
 - [ ] Blocking validation passed (`network.client` decision resolved)
 - [ ] Entitlements finalized for App Store
-- [ ] App icon has no alpha channel
+- [x] App icon has no alpha channel
 - [ ] Privacy manifest is complete (done — see audit above)
 - [ ] Export compliance declaration completed in App Store Connect
 - [ ] Age rating questionnaire completed
 - [ ] `com.valtteriluoma.photo-export-appstore` bundle ID registered and provisioned
-- [ ] `CURRENT_PROJECT_VERSION` set at build time in `release-direct.yml` (and `release-app-store.yml` when it exists)
-- [ ] Support page has real contact information
-- [ ] Website and README show both channels
+- [x] `CURRENT_PROJECT_VERSION` set at build time in `release-direct.yml` (and `release-app-store.yml` when it exists)
+- [x] Support page has real contact information
+- [x] Website and README show both channels
 - [ ] At least one App Store-signed build passes the testing checklist
 - [ ] App Store Connect metadata is complete (description, screenshots, privacy, pricing, review notes)
 - [ ] First submission has been uploaded and is pending or approved

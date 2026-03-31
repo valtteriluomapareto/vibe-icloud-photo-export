@@ -195,7 +195,6 @@ struct ContentView: View {
 
 struct AuthorizationView: View {
   @ObservedObject var photoLibraryManager: PhotoLibraryManager
-  @State private var isRequestingAuthorization = false
 
   var body: some View {
     VStack(spacing: 20) {
@@ -215,33 +214,14 @@ struct AuthorizationView: View {
       .multilineTextAlignment(.center)
       .padding(.horizontal)
 
-      Button {
-        requestPermission()
-      } label: {
-        Text("Grant Access")
-          .fontWeight(.semibold)
-          .foregroundColor(.white)
-          .padding(.horizontal, 40)
-          .padding(.vertical, 12)
-          .background(Color.blue)
-          .cornerRadius(10)
-      }
-      .buttonStyle(.plain)
-      .disabled(isRequestingAuthorization)
-
-      if isRequestingAuthorization {
-        ProgressView()
-          .padding()
-      }
-
       if photoLibraryManager.authorizationStatus == .denied
         || photoLibraryManager.authorizationStatus == .restricted
       {
-        Text("Please enable Photos access in Settings to use this app.")
+        Text("Please enable Photos access in System Settings to use this app.")
           .foregroundColor(.red)
           .padding()
 
-        Button("Open System Preferences") {
+        Button("Open System Settings") {
           NSWorkspace.shared.open(
             URL(
               string:
@@ -249,17 +229,18 @@ struct AuthorizationView: View {
             )!)
         }
         .padding()
+      } else {
+        ProgressView()
+          .padding()
+        Text("Waiting for Photos access…")
+          .foregroundColor(.secondary)
       }
     }
     .padding()
-  }
-
-  private func requestPermission() {
-    isRequestingAuthorization = true
-
-    Task {
-      _ = await photoLibraryManager.requestAuthorization()
-      isRequestingAuthorization = false
+    .task {
+      if photoLibraryManager.authorizationStatus == .notDetermined {
+        _ = await photoLibraryManager.requestAuthorization()
+      }
     }
   }
 }

@@ -78,6 +78,19 @@ jobs:
           fi
           echo "Versions match."
 
+      - name: Check for existing GitHub Release
+        if: steps.ctx.outputs.is_tag == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Checking for existing release for tag: ${TAG}"
+          if gh release view "${TAG}" &>/dev/null; then
+            echo "::error::A GitHub Release already exists for tag ${TAG}. Delete the existing release before re-running."
+            exit 1
+          fi
+          echo "No existing release found. Proceeding."
+
       # ── Xcode selection ───────────────────────────────────────────────
       - name: Select Xcode
         run: |
@@ -156,12 +169,14 @@ jobs:
           echo "::group::Archive"
           ARCHIVE_PATH="${RUNNER_TEMP}/photo-export.xcarchive"
 
+          BUILD_NUMBER="${{ github.run_number }}"
           echo "Archiving Release build..."
           echo "  ARCHS=arm64 x86_64 (universal)"
           echo "  CODE_SIGN_STYLE=Manual"
           echo "  CODE_SIGN_IDENTITY=Developer ID Application"
           echo "  DEVELOPMENT_TEAM=${APPLE_TEAM_ID}"
           echo "  KEYCHAIN_PATH=${KEYCHAIN_PATH}"
+          echo "  CURRENT_PROJECT_VERSION=${BUILD_NUMBER}"
 
           set -o pipefail
           xcodebuild archive \
@@ -175,6 +190,7 @@ jobs:
             "CODE_SIGN_IDENTITY=Developer ID Application" \
             DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
             "OTHER_CODE_SIGN_FLAGS=--keychain ${KEYCHAIN_PATH}" \
+            CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
             2>&1 | tail -30
 
           echo ""

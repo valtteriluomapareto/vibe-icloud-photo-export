@@ -23,10 +23,21 @@ const structuredData = {
 	description,
 	operatingSystem: 'macOS 15+',
 	applicationCategory: 'PhotographyApplication',
-	offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+	offers: [
+		{
+			'@type': 'Offer',
+			price: '0',
+			priceCurrency: 'USD',
+			name: 'GitHub Releases (free)',
+			url: 'https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases',
+		},
+		// TODO: Add Mac App Store offer once the listing is live
+		// { '@type': 'Offer', price: 'X.XX', priceCurrency: 'USD', name: 'Mac App Store', url: '...' },
+	],
 	license: 'https://opensource.org/licenses/MIT',
 	url: canonicalUrl,
 	image: socialImageUrl,
+	// TODO: Add App Store URL as an additional downloadUrl once the listing is live
 	downloadUrl:
 		'https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases',
 };

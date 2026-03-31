@@ -41,10 +41,10 @@ const faqData = {
 		},
 		{
 			'@type': 'Question',
-			name: 'Is Photo Export really free?',
+			name: 'Is Photo Export free?',
 			acceptedAnswer: {
 				'@type': 'Answer',
-				text: 'Yes. Photo Export is free, open-source software released under the MIT license. No subscriptions, no in-app purchases, no ads.',
+				text: 'Photo Export is free and open source on GitHub Releases. It is also available as a paid app on the Mac App Store — the purchase supports ongoing development. Both versions are identical in functionality.',
 			},
 		},
 		{
@@ -217,22 +217,35 @@ const faqData = {
 	<section class="section" aria-labelledby="installation">
 		<div class="container">
 			<h2 id="installation">Installation</h2>
-			<div class="install-steps">
-				<ol>
-					<li>
-						Download the latest <code>.dmg</code> from <a
-							href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases"
-							>GitHub Releases</a
-						>
-					</li>
-					<li>
-						Open the DMG and drag Photo Export to your Applications folder
-					</li>
-					<li>Launch the app and grant Photos library access when prompted</li>
-				</ol>
-				<div class="requirements">
-					<strong>Requirements:</strong> macOS 15.0+. Signed and notarized by Apple.
+			<div class="install-channels">
+				<div class="install-channel">
+					<h3>Mac App Store</h3>
+					<p>
+						Coming soon. Automatic updates, trusted distribution. Your purchase
+						supports development of an open-source project.
+					</p>
 				</div>
+				<div class="install-channel">
+					<h3>GitHub Releases (free)</h3>
+					<ol>
+						<li>
+							Download the latest <code>.dmg</code> from <a
+								href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases"
+								>GitHub Releases</a
+							>
+						</li>
+						<li>
+							Open the DMG and drag Photo Export to your Applications folder
+						</li>
+						<li>
+							Launch the app and grant Photos library access when prompted
+						</li>
+					</ol>
+				</div>
+			</div>
+			<div class="requirements">
+				<strong>Requirements:</strong> macOS 15.0+. Both versions are signed and notarized
+				by Apple. Both are identical in functionality.
 			</div>
 		</div>
 	</section>
@@ -288,10 +301,14 @@ const faqData = {
 					</dd>
 				</div>
 				<div class="faq-item">
-					<dt>Is it really free?</dt>
+					<dt>Is it free?</dt>
 					<dd>
-						Yes. Photo Export is free, open-source software released under the
-						MIT license. No subscriptions, no in-app purchases, no ads.
+						Photo Export is free and open source on <a
+							href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases"
+							>GitHub Releases</a
+						>. It's also available as a paid app on the Mac App Store — the
+						purchase supports ongoing development. Both versions are identical
+						in functionality.
 					</dd>
 				</div>
 				<div class="faq-item">
@@ -319,13 +336,14 @@ const faqData = {
 		<div class="container">
 			<h2 id="get-started">Get started</h2>
 			<p>
-				Photo Export is free and open source. Download the app, grant Photos
-				access, and start backing up your library today.
+				Download Photo Export, grant Photos access, and start backing up your
+				library today. Free on GitHub, or support the project on the Mac App
+				Store.
 			</p>
 			<div class="cta-actions">
 				<a
 					href="https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases"
-					class="btn btn-primary">Download</a
+					class="btn btn-primary">Download from GitHub</a
 				>
 				<a href={`${base}/getting-started`} class="btn btn-secondary"
 					>Read the docs</a
@@ -430,17 +448,36 @@ const faqData = {
 		margin: 0 auto;
 	}
 
-	.install-steps h3 {
-		font-size: 1.25rem;
+	.install-channels {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 2rem;
+		margin-bottom: 1.5rem;
+	}
+
+	.install-channel {
+		background: var(--site-surface);
+		border: 1px solid var(--site-border);
+		border-radius: 12px;
+		padding: 1.5rem;
+	}
+
+	.install-channel h3 {
+		font-size: 1.15rem;
 		margin-bottom: 0.75rem;
 	}
 
-	.install-steps ol {
-		margin-left: 1.5rem;
-		margin-bottom: 1rem;
+	.install-channel p {
+		color: var(--site-muted);
+		font-size: 0.95rem;
 	}
 
-	.install-steps li {
+	.install-channel ol {
+		margin-left: 1.5rem;
+		margin-bottom: 0;
+	}
+
+	.install-channel li {
 		margin-bottom: 0.5rem;
 	}
 
@@ -548,7 +585,8 @@ const faqData = {
 	@media (max-width: 768px) {
 		.value-props,
 		.feature-grid,
-		.steps {
+		.steps,
+		.install-channels {
 			grid-template-columns: 1fr;
 		}
 	}

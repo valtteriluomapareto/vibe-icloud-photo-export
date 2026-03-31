@@ -10,9 +10,13 @@ If your iCloud Photo Library contains thousands of photos and you want a local b
 - A Mac running **macOS 15.0** or later
 - **iCloud Photos enabled** on your Mac — go to **System Settings → Apple Account → iCloud → Photos** and make sure it's on. Photo Export reads your local Photos library through Apple's PhotoKit framework (the same API the built-in Photos app uses), so your iCloud photos need to be syncing to this Mac.
 - An external hard drive, USB drive, or any local folder
-- The free [Photo Export app](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases)
+- The [Photo Export app](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases) — free on GitHub, or coming soon on the Mac App Store
 
 ## Step 1: Download and install Photo Export
+
+**Mac App Store** — Coming soon. Install directly from the App Store for automatic updates.
+
+**GitHub Releases (free):**
 
 1. Download the latest `.dmg` from the [GitHub Releases page](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases).
 2. Open the DMG and drag **Photo Export** to your Applications folder.
@@ -44,4 +48,4 @@ If the export is interrupted — you unplug the drive, close the app, or your Ma
 - **Organized folders**: Photos are automatically sorted into `Year/Month/` folders instead of dumped into one giant directory.
 - **Tracks what's exported**: The app remembers what's been exported. Run it again and it skips already-exported photos.
 - **Pause and resume**: Long exports can be paused and picked up later.
-- **Free and open source**: No subscription, no account, no ads. MIT licensed.
+- **Open source**: No subscription, no account, no ads. MIT licensed. Free on GitHub, or support the project on the Mac App Store.

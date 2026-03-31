@@ -5,7 +5,7 @@
 
 Photo Export is a native macOS app for exporting your Apple Photos library to local or external storage in a predictable `YYYY/MM/` folder layout.
 
-**[Download the latest release](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases)** · [Documentation](https://valtteriluomapareto.github.io/vibe-icloud-photo-export/)
+**[Download from GitHub](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases)** · Coming soon on the Mac App Store · [Documentation](https://valtteriluomapareto.github.io/vibe-icloud-photo-export/)
 
 The project is intentionally small: SwiftUI on top, system frameworks only, and a straightforward export pipeline that favors reliability over feature sprawl.
 

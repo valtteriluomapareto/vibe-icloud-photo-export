@@ -2,10 +2,13 @@
 
 How to cut a new release of Photo Export.
 
+Photo Export ships through two channels from the same tag: **GitHub Releases** (free, Developer ID signed) and the **Mac App Store** (paid, Apple Distribution signed). One semver, one tag, two distribution pipelines.
+
 ## Prerequisites
 
 - Push access to the repository
 - Apple Developer ID certificate and notarization secrets configured in the `direct-release` GitHub Environment
+- For App Store: Apple Distribution certificate and App Store Connect API key (in `app-store-release` GitHub Environment, once automated)
 
 ## Steps
 
@@ -31,20 +34,45 @@ git push && git push origin v1.2.0
 
 Pushing the `v*` tag triggers the **release-direct** workflow which:
 
-1. Builds a universal binary (Release, arm64 + x86_64)
-2. Signs with Developer ID Application certificate
-3. Creates a styled DMG with drag-to-Applications installer
-4. Notarizes the DMG with Apple and staples the ticket
-5. Creates a **draft** GitHub Release with auto-generated notes
-6. Attaches the DMG and SHA-256 checksum to the release
+1. Checks for an existing GitHub Release for this tag (fails early if one exists)
+2. Builds a universal binary (Release, arm64 + x86_64)
+3. Sets `CURRENT_PROJECT_VERSION` to the GitHub Actions run number
+4. Signs with Developer ID Application certificate
+5. Creates a styled DMG with drag-to-Applications installer
+6. Notarizes the DMG with Apple and staples the ticket
+7. Creates a **draft** GitHub Release with auto-generated notes
+8. Attaches the DMG and SHA-256 checksum to the release
 
-### 3. Review and publish
+### 3. Review and publish the GitHub Release
 
 1. Go to **Releases** on GitHub
 2. Review the draft release — edit the notes if needed
 3. Click **Publish release**
 
-### 4. Verify
+### 4. Submit to App Store
+
+**Before App Store CI is automated**, archive manually:
+
+```bash
+xcodebuild archive \
+  -project photo-export.xcodeproj \
+  -scheme "photo-export" \
+  -configuration Release \
+  -archivePath ~/Desktop/PhotoExport-AppStore.xcarchive \
+  CURRENT_PROJECT_VERSION=<next-build-number> \
+  PRODUCT_BUNDLE_IDENTIFIER=com.valtteriluoma.photo-export-appstore \
+  CODE_SIGN_STYLE=Manual \
+  "CODE_SIGN_IDENTITY=Apple Distribution" \
+  DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+```
+
+Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter.
+
+**After App Store CI is automated**, the tag also triggers `release-app-store.yml` which handles archiving, signing, and uploading automatically. Submit for App Review manually in App Store Connect.
+
+### 5. Verify
+
+**GitHub Release:**
 
 Download the DMG on a separate machine (or fresh user account) and confirm:
 
@@ -52,15 +80,53 @@ Download the DMG on a separate machine (or fresh user account) and confirm:
 - The app launches and core flows work
 - The version in About matches the release
 
+**App Store:**
+
+After App Review approval, release manually in App Store Connect. Verify via TestFlight or the published listing.
+
+## Build numbers
+
+Build numbers (`CURRENT_PROJECT_VERSION`) are independent per channel:
+
+- **GitHub Releases**: `github.run_number` (auto-incrementing)
+- **App Store**: Previous App Store Connect build number + 1
+
+The checked-in value in `project.pbxproj` stays at `1`. Both workflows override it at build time.
+
 ## Dry run
 
-To test the workflow without creating a release:
+To test the GitHub workflow without creating a release:
 
 1. Go to **Actions > release-direct** on GitHub
 2. Click **Run workflow** from `main` with `dry_run: true`
 3. Download the DMG artifact from the workflow run
 
+## Handling App Review rejection
+
+### Rejection is metadata/policy only (no code change)
+
+1. Keep the draft (or published) GitHub Release and the existing tag
+2. Fix the App Store metadata in App Store Connect
+3. Resubmit the same build, or upload a new build from the same commit with a higher build number
+4. Publish the draft GitHub Release whenever ready
+
+### Rejection requires a code change
+
+1. Delete the draft GitHub Release and the tag (if the GitHub Release was already published, the semver is burned — use a new semver instead)
+2. Fix the issue on `main`
+3. Re-run `bump-version.sh` with the same semver (or a new one if the old version was published)
+4. Tag the new commit and push
+5. A new draft GitHub Release is created; submit the new App Store build
+
 ## Rollback
 
-- **Bad draft**: Delete the draft release and the tag, fix the issue, then re-tag
-- **Bad published release**: Ship a patch version (preferred) or delete the release
+**Bad GitHub draft**: Delete the draft release and the tag, fix the issue, then re-tag.
+
+**Bad published GitHub release**: Ship a patch version (preferred) or delete the release.
+
+**Critical bug in a live App Store release**:
+
+1. Remove the build from sale in App Store Connect immediately
+2. Fix the bug, bump semver, tag, and submit a new build
+3. Request expedited App Review if the bug is severe
+4. The GitHub Release can go live immediately; the App Store fix is gated by review (typically 24-48h)

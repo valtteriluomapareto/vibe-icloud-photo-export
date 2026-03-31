@@ -40,7 +40,7 @@ Validated against the repo:
 - Deployment target is macOS 15.0 (Sequoia). This limits the addressable market to Sequoia and later. This is a conscious choice — the app uses macOS 15 APIs.
 - README and website show both GitHub Releases and "Coming soon" for the Mac App Store
 - Support page has real contact email (valtteri.e.luoma@gmail.com)
-- App icon (`appstore.png`) keeps alpha in repo (needed for dock icon shape); alpha must be stripped at App Store submission time only
+- App icon (`appstore.png`) needs replacement — current icon uses transparency and is too small when flattened
 - `REGISTER_APP_GROUPS` set to `NO`
 - Release process docs cover dual-channel flow
 
@@ -327,9 +327,15 @@ Based on the current app behavior:
 
 Select "Data Not Collected" for all categories.
 
-### App icon
+### App icon — TODO
 
-The `appstore.png` (1024x1024) has an alpha channel that is needed for the dock icon shape. App Store Connect rejects icons with transparency. **Do not strip alpha in the repo** — strip it at App Store submission time only (the release process docs include the steps). Apple applies the rounded-rect mask automatically to the submitted icon.
+The current `appstore.png` relies on transparency for its shape and is too small when flattened. A new icon is needed that:
+
+- Fills the entire 1024x1024 square with opaque content (no alpha channel)
+- Has design elements large enough to be visible at dock sizes (48px)
+- Uses the full bleed area — macOS applies the rounded-rect mask automatically
+
+See [Apple HIG — App Icons](https://developer.apple.com/design/human-interface-guidelines/app-icons) for design guidance.
 
 ### Product page
 
@@ -409,7 +415,7 @@ Ordered by dependency. Items within a group can be done in parallel.
 
 ### Engineering (AI-delegatable)
 
-- [x] ~~Remove alpha channel from `appstore.png`~~ — reverted; alpha is needed for dock icon shape. Strip at submission time only (see release process docs)
+- [ ] Replace `appstore.png` with a new icon (full-bleed, no alpha, elements sized for dock visibility)
 - [x] Update `release-direct.yml` to set `CURRENT_PROJECT_VERSION` from `github.run_number` and check for existing GitHub Releases (draft or published) before building
 - [x] Set `REGISTER_APP_GROUPS = NO`
 - [x] Apply `network.client` decision — removed; not needed for iCloud-only asset export

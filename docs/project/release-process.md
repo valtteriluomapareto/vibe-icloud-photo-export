@@ -53,23 +53,6 @@ Pushing the `v*` tag triggers the **release-direct** workflow which:
 
 **Before App Store CI is automated**, archive manually:
 
-First, strip the alpha channel from the app icon (App Store Connect rejects icons with transparency). The source file in the repo keeps its alpha for correct dock icon rendering — strip it in a temporary copy before archiving:
-
-```bash
-cp photo-export/Assets.xcassets/AppIcon.appiconset/appstore.png /tmp/appstore-backup.png
-python3 -c "
-from PIL import Image
-path = 'photo-export/Assets.xcassets/AppIcon.appiconset/appstore.png'
-img = Image.open(path)
-if img.mode == 'RGBA':
-    bg = Image.new('RGB', img.size, (255, 255, 255))
-    bg.paste(img, mask=img.split()[3])
-    bg.save(path, 'PNG')
-"
-```
-
-Then archive:
-
 ```bash
 xcodebuild archive \
   -project photo-export.xcodeproj \
@@ -81,12 +64,6 @@ xcodebuild archive \
   CODE_SIGN_STYLE=Manual \
   "CODE_SIGN_IDENTITY=Apple Distribution" \
   DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
-```
-
-Restore the original icon after archiving:
-
-```bash
-mv /tmp/appstore-backup.png photo-export/Assets.xcassets/AppIcon.appiconset/appstore.png
 ```
 
 Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter.

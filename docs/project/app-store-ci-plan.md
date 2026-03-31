@@ -16,9 +16,7 @@ The bundle ID is registered, the Apple Distribution certificate and provisioning
 
 ## Scope
 
-This plan covers one thing: a GitHub Actions workflow (`release-app-store.yml`) that builds an App Store-signed archive and produces a downloadable `.pkg` artifact. The user manually downloads the `.pkg` and uploads it to App Store Connect via Transporter.
-
-Auto-upload to App Store Connect is designed into the workflow as a future step but is not implemented in the initial version.
+This plan covers one thing: a GitHub Actions workflow (`release-app-store.yml`) that builds an App Store-signed `.pkg` and uploads it to App Store Connect. No manual Transporter step — CI handles everything up to (but not including) App Review submission.
 
 This plan does **not** cover:
 - App Store Connect setup (app record, metadata, screenshots) — see `app-store-plan.md`
@@ -43,14 +41,20 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: 'Build only — do not upload to App Store Connect'
+        required: true
+        default: false
+        type: boolean
 ```
 
 Both `release-direct.yml` and `release-app-store.yml` fire on the same `v*` tag. They run in parallel with independent concurrency groups. This is intentional — one tag produces both distribution artifacts.
 
-`workflow_dispatch` enables manual test runs from any branch without creating a tag.
+`workflow_dispatch` enables manual test runs from any branch without creating a tag. The `skip_upload` input allows building without uploading (useful for testing signing and export).
 
-No `dry_run` input — unlike the direct workflow, the App Store workflow has no side effects to gate (no GitHub Release, no upload). Every run produces the same artifact. A `dry_run` / `upload_to_asc` toggle becomes relevant only when auto-upload is added later.
+Tag pushes always upload. `workflow_dispatch` uploads by default but can be skipped.
 
 No `push.branches: [main]` trigger — unlike the direct workflow, building an App Store-signed artifact on every push to `main` is wasteful. Use `workflow_dispatch` for ad-hoc testing.
 
@@ -81,7 +85,9 @@ The workflow runs in a protected GitHub Environment named `app-store-release`, s
 
 On every run: a `.pkg` artifact attached to the workflow run, downloadable from the Actions UI.
 
-On tag pushes (non-dry-run): same `.pkg` artifact. No GitHub Release — that's `release-direct.yml`'s job. No App Store Connect upload — that's manual (initially).
+On tag pushes: uploads the `.pkg` to App Store Connect automatically. The build appears in TestFlight/App Store Connect within minutes. No GitHub Release — that's `release-direct.yml`'s job.
+
+On `workflow_dispatch` with `skip_upload: true`: builds and attaches the artifact only, no upload.
 
 ## Signing Differences from Direct Distribution
 
@@ -136,14 +142,11 @@ Store in the `app-store-release` GitHub Environment:
 | `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD` | Password for the `.p12` file |
 | `APPLE_TEAM_ID` | Apple Developer Team ID (same value as in `direct-release`) |
 | `APP_STORE_PROVISIONING_PROFILE_BASE64` | Mac App Store distribution provisioning profile, base64-encoded |
-
-For future auto-upload, add these to the same environment:
-
-| Secret | Description |
-|---|---|
 | `APP_STORE_CONNECT_API_KEY_BASE64` | App Store Connect API key (`.p8` file), base64-encoded |
 | `APP_STORE_CONNECT_API_KEY_ID` | Key ID from App Store Connect |
 | `APP_STORE_CONNECT_API_ISSUER_ID` | Issuer ID from App Store Connect |
+
+The API key is created in App Store Connect under Users and Access > Integrations > App Store Connect API. It needs the "App Manager" role (or higher) to upload builds.
 
 ## Workflow Steps
 
@@ -303,47 +306,32 @@ Then attach as a workflow artifact (separate step):
     path: ${{ env.PKG_PATH }}
 ```
 
-### 8. Cleanup
+### 8. Upload to App Store Connect
 
-Delete the temporary keychain and provisioning profile (in `if: always()`):
+Conditional on: tag push, or `workflow_dispatch` with `skip_upload` not set.
 
-```bash
-if [ -f "${KEYCHAIN_PATH}" ]; then
-  security delete-keychain "${KEYCHAIN_PATH}" || true
-fi
-# Provisioning profile in ~/Library/MobileDevice is cleaned up when the runner is recycled,
-# but clean it explicitly for hygiene.
-rm -f "${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile" 2>/dev/null || true
+```yaml
+- name: Upload to App Store Connect
+  if: steps.ctx.outputs.is_tag == 'true' || github.event.inputs.skip_upload != 'true'
+  env:
+    APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+    APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+    APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
 ```
 
-## Manual Upload Process
-
-After the workflow completes:
-
-1. Go to **Actions > release-app-store** on GitHub
-2. Download the `appstore-pkg` artifact from the workflow run
-3. Unzip the downloaded artifact (GitHub wraps artifacts in a zip)
-4. Open **Transporter** (free app from Apple, available on the Mac App Store)
-5. Sign in with the Apple ID that has App Store Connect access
-6. Drag the `.pkg` into Transporter and click **Deliver**
-7. Wait for Transporter to validate and upload (typically 1-5 minutes)
-8. The build appears in App Store Connect under **TestFlight** within 5-30 minutes after processing
-
-The first submission (v1.0.2, build 2) was done manually. This process applies to all subsequent releases.
-
-## Future: Auto-Upload
-
-When manual upload becomes tedious, add an upload step to the workflow using the App Store Connect API key.
-
-**Note:** `xcrun notarytool` is for notarization only — it cannot upload to App Store Connect. `xcrun altool --upload-package` was the traditional CI upload tool, but Apple deprecated it. Verify whether `altool` is still available in the Xcode version pinned by this workflow before relying on it. If removed, use the App Store Connect REST API directly or the `iTMSTransporter` CLI.
-
-Upload with `altool` (if still available):
-
 ```bash
+echo "::group::Upload to App Store Connect"
+
 # Place the API key where altool expects it
 API_KEY_DIR="${HOME}/.appstoreconnect/private_keys"
 mkdir -p "${API_KEY_DIR}"
-echo "${APP_STORE_CONNECT_API_KEY_BASE64}" | base64 --decode > "${API_KEY_DIR}/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+API_KEY_PATH="${API_KEY_DIR}/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+echo "${APP_STORE_CONNECT_API_KEY_BASE64}" | base64 --decode > "${API_KEY_PATH}"
+
+echo "Uploading ${PKG_NAME} to App Store Connect..."
+echo "  Bundle ID: com.valtteriluoma.photo-export-appstore"
+echo "  Version: ${{ steps.ctx.outputs.version }}"
+echo "  Build: ${BUILD_NUMBER}"
 
 xcrun altool --upload-package "${PKG_PATH}" \
   --type macos \
@@ -351,22 +339,30 @@ xcrun altool --upload-package "${PKG_PATH}" \
   --bundle-version "${BUILD_NUMBER}" \
   --bundle-short-version-string "${{ steps.ctx.outputs.version }}" \
   --apiKey "${APP_STORE_CONNECT_API_KEY_ID}" \
-  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}"
+  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}" \
+  --p8-file-path "${API_KEY_PATH}"
+
+echo "Upload complete. Build will appear in App Store Connect / TestFlight within 5-30 minutes."
+echo "::endgroup::"
 ```
 
-Gate the upload behind a workflow input so manual-download-first runs skip it:
+`altool` validates the package before uploading. If validation fails, the step fails and the error is visible in the workflow log.
 
-```yaml
-workflow_dispatch:
-  inputs:
-    upload_to_asc:
-      description: 'Upload to App Store Connect after building'
-      required: true
-      default: false
-      type: boolean
+**Note:** `xcrun altool` is deprecated for notarization (replaced by `notarytool`) but `--upload-package` still works as of Xcode 16.2. If Apple removes it in a future Xcode, replace with the `iTMSTransporter` CLI or the App Store Connect REST API.
+
+Do not auto-submit to App Review. The upload puts the build in "Processing" → "Ready to Submit" in App Store Connect. Review submission stays manual.
+
+### 9. Cleanup
+
+Delete the temporary keychain, provisioning profile, and API key (in `if: always()`):
+
+```bash
+if [ -f "${KEYCHAIN_PATH}" ]; then
+  security delete-keychain "${KEYCHAIN_PATH}" || true
+fi
+rm -f "${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile" 2>/dev/null || true
+rm -f "${HOME}/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8" 2>/dev/null || true
 ```
-
-Do not auto-submit to App Review. Upload only — review submission stays manual in App Store Connect.
 
 ## Relationship to `release-direct.yml`
 
@@ -383,7 +379,7 @@ They differ in:
 - Certificate type
 - Provisioning profile (App Store has one, direct doesn't)
 - Export method and output format
-- Post-build steps (direct: DMG + notarize + GitHub Release; App Store: `.pkg` artifact only)
+- Post-build steps (direct: DMG + notarize + GitHub Release; App Store: `.pkg` + upload to App Store Connect)
 
 ## Execution Checklist
 
@@ -399,15 +395,15 @@ They differ in:
 
 - [ ] Create `app-store-release` GitHub Environment
 - [ ] Add secrets: `APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64`, `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APP_STORE_PROVISIONING_PROFILE_BASE64`
+- [ ] Create App Store Connect API key (Users and Access > Integrations > App Store Connect API, "App Manager" role)
+- [ ] Add secrets: `APP_STORE_CONNECT_API_KEY_BASE64`, `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`
 
 ### Engineering (AI-delegatable)
 
 - [ ] Implement `release-app-store.yml` per this plan
-- [ ] Verify with `workflow_dispatch` dry run from `main`
+- [ ] Verify with `workflow_dispatch` (`skip_upload: true`) dry run from `main`
 
 ### First CI-produced App Store build
 
-- [ ] Push a tag (or use `workflow_dispatch` on the tagged commit)
-- [ ] Download `appstore-pkg` artifact from the workflow run
-- [ ] Upload via Transporter
-- [ ] Verify build appears in App Store Connect / TestFlight
+- [ ] Run `workflow_dispatch` (with upload) or push a tag
+- [ ] Verify build appears in App Store Connect / TestFlight automatically

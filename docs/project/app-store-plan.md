@@ -40,7 +40,7 @@ Validated against the repo:
 - Deployment target is macOS 15.0 (Sequoia). This limits the addressable market to Sequoia and later. This is a conscious choice — the app uses macOS 15 APIs.
 - README and website show both GitHub Releases and "Coming soon" for the Mac App Store
 - Support page has real contact email (valtteri.e.luoma@gmail.com)
-- App icon (`appstore.png`) alpha channel has been removed
+- App icon (`appstore.png`) keeps alpha in repo (needed for dock icon shape); alpha must be stripped at App Store submission time only
 - `REGISTER_APP_GROUPS` set to `NO`
 - Release process docs cover dual-channel flow
 
@@ -327,9 +327,9 @@ Based on the current app behavior:
 
 Select "Data Not Collected" for all categories.
 
-### App icon — DONE
+### App icon
 
-The `appstore.png` (1024x1024) alpha channel has been removed. Apple applies the rounded-rect mask automatically.
+The `appstore.png` (1024x1024) has an alpha channel that is needed for the dock icon shape. App Store Connect rejects icons with transparency. **Do not strip alpha in the repo** — strip it at App Store submission time only (the release process docs include the steps). Apple applies the rounded-rect mask automatically to the submitted icon.
 
 ### Product page
 
@@ -405,14 +405,14 @@ Ordered by dependency. Items within a group can be done in parallel.
 
 ### Blocking validation (Valtteri — do this first)
 
-- [ ] Validate `network.client` entitlement necessity with iCloud-only assets (see "Blocking Validation")
+- [x] Validate `network.client` entitlement necessity with iCloud-only assets — **Result: not needed.** iCloud-only asset export works without the entitlement. Entitlement removed.
 
 ### Engineering (AI-delegatable)
 
-- [x] Remove alpha channel from `appstore.png`
+- [x] ~~Remove alpha channel from `appstore.png`~~ — reverted; alpha is needed for dock icon shape. Strip at submission time only (see release process docs)
 - [x] Update `release-direct.yml` to set `CURRENT_PROJECT_VERSION` from `github.run_number` and check for existing GitHub Releases (draft or published) before building
 - [x] Set `REGISTER_APP_GROUPS = NO`
-- [ ] Apply `network.client` decision (after blocking validation)
+- [x] Apply `network.client` decision — removed; not needed for iCloud-only asset export
 - [x] Update README with dual-channel download options
 - [x] Update website (Hero, index, getting-started, export-icloud-photos, MarketingLayout, support) with both channels
 - [x] Add real contact info to support page
@@ -448,9 +448,9 @@ Ordered by dependency. Items within a group can be done in parallel.
 
 The app is App Store-ready when:
 
-- [ ] Blocking validation passed (`network.client` decision resolved)
-- [ ] Entitlements finalized for App Store
-- [x] App icon has no alpha channel
+- [x] Blocking validation passed (`network.client` removed — not needed)
+- [x] Entitlements finalized for App Store
+- [ ] App icon alpha stripped at submission time (source keeps alpha for dock icon)
 - [ ] Privacy manifest is complete (done — see audit above)
 - [ ] Export compliance declaration completed in App Store Connect
 - [ ] Age rating questionnaire completed

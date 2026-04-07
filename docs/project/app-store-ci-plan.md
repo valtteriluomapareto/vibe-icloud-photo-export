@@ -9,12 +9,12 @@ The first App Store build has been submitted manually:
 - **MARKETING_VERSION:** 1.0.2
 - **CURRENT_PROJECT_VERSION:** 2
 - **Bundle ID:** `com.valtteriluoma.photo-export-appstore`
-- **Status:** Waiting for App Review (submitted 2026-03-31)
+- **Status:** In Review (submitted 2026-03-31)
 - **Method:** Manual `xcodebuild archive` + Transporter upload
 
 The bundle ID is registered, the Apple Distribution certificate, the Mac Installer Distribution certificate, and a working provisioning profile exist, and the App Store Connect app record is set up. These are no longer prerequisites — they are done.
 
-**Verification status:** Not yet verified on GitHub Actions as of 2026-03-31. The CI workflow described below has not been run yet; it is based on the successful manual submission on 2026-03-31 plus public workflow references, and it still requires a `workflow_dispatch` dry run on GitHub-hosted macOS before it should be treated as proven.
+**Implementation status:** Workflow (`release-app-store.yml`) and CI scripts (`scripts/ci/`) implemented on 2026-03-31. Not yet verified on GitHub Actions — requires secrets setup in the `app-store-release` environment followed by a `workflow_dispatch` dry run before it should be treated as proven.
 
 ## Scope
 
@@ -163,6 +163,7 @@ Store in the `app-store-release` GitHub Environment:
 | `APP_STORE_CONNECT_API_KEY_BASE64` | App Store Connect API key (`.p8` file), base64-encoded |
 | `APP_STORE_CONNECT_API_KEY_ID` | Key ID from App Store Connect |
 | `APP_STORE_CONNECT_API_ISSUER_ID` | Issuer ID from App Store Connect |
+| `APP_STORE_APP_APPLE_ID` | Numeric Apple ID of the app (App Information > General Information in App Store Connect) |
 
 The API key is created in App Store Connect under Users and Access > Integrations > App Store Connect API. It needs the "App Manager" role (or higher) to upload builds.
 
@@ -367,13 +368,13 @@ echo "  Version: ${{ steps.ctx.outputs.version }}"
 echo "  Build: ${BUILD_NUMBER}"
 
 xcrun altool --upload-package "${PKG_PATH}" \
-  --type macos \
+  --platform macos \
+  --apple-id "${APP_STORE_APP_APPLE_ID}" \
   --bundle-id "com.valtteriluoma.photo-export-appstore" \
   --bundle-version "${BUILD_NUMBER}" \
   --bundle-short-version-string "${{ steps.ctx.outputs.version }}" \
   --apiKey "${APP_STORE_CONNECT_API_KEY_ID}" \
-  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}" \
-  --p8-file-path "${API_KEY_PATH}"
+  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}"
 
 echo "Upload complete. Build will appear in App Store Connect / TestFlight within 5-30 minutes."
 echo "::endgroup::"
@@ -434,10 +435,11 @@ They differ in:
 - [ ] Base64-encode the exact provisioning profile file that already worked for the successful manual submission on 2026-03-31
 - [ ] Create App Store Connect API key (Users and Access > Integrations > App Store Connect API, "App Manager" role)
 - [ ] Add secrets: `APP_STORE_CONNECT_API_KEY_BASE64`, `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`
+- [ ] Add secret: `APP_STORE_APP_APPLE_ID` (numeric Apple ID from App Store Connect > App Information > General Information)
 
 ### Engineering (AI-delegatable)
 
-- [ ] Implement `release-app-store.yml` per this plan
+- [x] Implement `release-app-store.yml` per this plan
 - [ ] Verify with `workflow_dispatch` (`skip_upload: true`) dry run from `main`
 
 ### First CI-produced App Store build

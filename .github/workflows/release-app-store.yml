@@ -1,0 +1,162 @@
+name: Release (App Store)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: 'Build only — do not upload to App Store Connect'
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: release-app-store
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SCHEME: photo-export
+  PROJECT: photo-export.xcodeproj
+  APP_NAME: "Photo Export"
+  XCODE_PATH: /Applications/Xcode_16.2.app
+  APPSTORE_BUNDLE_ID: com.valtteriluoma.photo-export-appstore
+
+jobs:
+  build-sign-upload:
+    runs-on: macos-15
+    environment: app-store-release
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Determine build context
+        id: ctx
+        run: |
+          echo "::group::Build context"
+          IS_TAG="false"
+          SHOULD_UPLOAD="false"
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            IS_TAG="true"
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            SHOULD_UPLOAD="true"
+            echo "Tag push detected: v${VERSION}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "workflow_dispatch detected (skip_upload=${{ github.event.inputs.skip_upload }})"
+            if [[ "${{ github.event.inputs.skip_upload }}" != "true" ]]; then
+              SHOULD_UPLOAD="true"
+            fi
+          else
+            echo "Unknown trigger — treating as dry run"
+          fi
+
+          # For non-tag runs, read version from project.pbxproj
+          if [[ "${IS_TAG}" != "true" ]]; then
+            VERSION=$(grep -m1 'MARKETING_VERSION' photo-export.xcodeproj/project.pbxproj | sed 's/.*= *\(.*\);/\1/')
+            echo "Using MARKETING_VERSION from project: ${VERSION}"
+          fi
+
+          BUILD_NUMBER="${{ github.run_number }}.${{ github.run_attempt }}"
+
+          echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "should_upload=${SHOULD_UPLOAD}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "Summary:"
+          echo "  is_tag=${IS_TAG}"
+          echo "  version=${VERSION}"
+          echo "  build_number=${BUILD_NUMBER}"
+          echo "  should_upload=${SHOULD_UPLOAD}"
+          echo "::endgroup::"
+
+      - name: Verify MARKETING_VERSION matches tag
+        if: steps.ctx.outputs.is_tag == 'true'
+        run: |
+          TAG_VERSION="${{ steps.ctx.outputs.version }}"
+          PROJECT_VERSION=$(grep -m1 'MARKETING_VERSION' photo-export.xcodeproj/project.pbxproj | sed 's/.*= *\(.*\);/\1/')
+          echo "Tag version:     ${TAG_VERSION}"
+          echo "Project version: ${PROJECT_VERSION}"
+          if [[ "$TAG_VERSION" != "$PROJECT_VERSION" ]]; then
+            echo "::error::Tag v${TAG_VERSION} does not match MARKETING_VERSION ${PROJECT_VERSION} in project.pbxproj. Run scripts/bump-version.sh ${TAG_VERSION} before tagging."
+            exit 1
+          fi
+          echo "Versions match."
+
+      # ── Xcode selection ───────────────────────────────────────────────
+      - name: Select Xcode
+        run: |
+          echo "::group::Xcode selection"
+          echo "Selecting Xcode at ${XCODE_PATH}..."
+          sudo xcode-select -s "${XCODE_PATH}"
+          echo "Active Xcode path: $(xcode-select -p)"
+          xcodebuild -version
+          echo "Swift version: $(swift --version 2>&1 | head -1)"
+          echo "::endgroup::"
+
+      # ── Keychain & certificates ──────────────────────────────────────
+      - name: Set up keychain and certificates
+        env:
+          APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64 }}
+          APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_P12_BASE64: ${{ secrets.MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_P12_BASE64 }}
+          MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+        run: bash scripts/ci/setup-keychain-appstore.sh
+
+      # ── Provisioning profile ─────────────────────────────────────────
+      - name: Install provisioning profile
+        env:
+          APP_STORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APP_STORE_PROVISIONING_PROFILE_BASE64 }}
+        run: bash scripts/ci/install-provisioning-profile.sh
+
+      # ── Archive ───────────────────────────────────────────────────────
+      - name: Archive
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_NUMBER: ${{ steps.ctx.outputs.build_number }}
+        run: bash scripts/ci/archive-appstore.sh
+
+      # ── Export ────────────────────────────────────────────────────────
+      - name: Export
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/ci/export-appstore.sh
+
+      # ── Package artifact ──────────────────────────────────────────────
+      - name: Prepare package
+        env:
+          VERSION: ${{ steps.ctx.outputs.version }}
+          BUILD_NUMBER: ${{ steps.ctx.outputs.build_number }}
+        run: bash scripts/ci/prepare-pkg.sh
+
+      - name: Upload App Store pkg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appstore-pkg
+          path: ${{ env.PKG_PATH }}
+
+      # ── Upload to App Store Connect ──────────────────────────────────
+      - name: Upload to App Store Connect
+        if: steps.ctx.outputs.should_upload == 'true'
+        env:
+          VERSION: ${{ steps.ctx.outputs.version }}
+          BUILD_NUMBER: ${{ steps.ctx.outputs.build_number }}
+          APP_STORE_APP_APPLE_ID: ${{ secrets.APP_STORE_APP_APPLE_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: bash scripts/ci/upload-appstore-connect.sh
+
+      # ── Cleanup (always) ─────────────────────────────────────────────
+      - name: Clean up
+        if: always()
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        run: bash scripts/ci/cleanup-appstore.sh

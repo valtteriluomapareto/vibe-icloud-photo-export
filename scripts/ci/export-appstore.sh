@@ -53,13 +53,26 @@ echo ""
 echo "Unlocking keychain..."
 security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
 
+UNSIGNED_PKG="${RUNNER_TEMP}/unsigned.pkg"
+SIGNED_PKG="${EXPORT_PATH}/${APP_NAME}.pkg"
+
 echo ""
-echo "Building signed .pkg with productbuild..."
+echo "Building unsigned .pkg with productbuild..."
 productbuild \
   --component "${APP_PATH}" /Applications \
+  "${UNSIGNED_PKG}" < /dev/null
+
+echo "Unsigned .pkg created: $(du -sh "${UNSIGNED_PKG}" | cut -f1)"
+
+echo ""
+echo "Signing .pkg with productsign..."
+productsign \
   --sign "${INSTALLER_SIGNING_CERTIFICATE}" \
   --keychain "${KEYCHAIN_PATH}" \
-  "${EXPORT_PATH}/${APP_NAME}.pkg"
+  "${UNSIGNED_PKG}" \
+  "${SIGNED_PKG}" < /dev/null
+
+rm -f "${UNSIGNED_PKG}"
 
 echo ""
 echo "Export contents:"

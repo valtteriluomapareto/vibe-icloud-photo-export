@@ -23,26 +23,27 @@ done
 
 echo "Decoding provisioning profile..."
 PROFILE_PATH="${RUNNER_TEMP}/appstore.provisioningprofile"
+PROFILE_PLIST_PATH="${RUNNER_TEMP}/appstore.provisioningprofile.plist"
 echo "${APP_STORE_PROVISIONING_PROFILE_BASE64}" | base64 --decode > "${PROFILE_PATH}"
 echo "Profile decoded to: ${PROFILE_PATH}"
 echo "Profile size: $(wc -c < "${PROFILE_PATH}") bytes"
 
 echo ""
 echo "Extracting profile metadata..."
-PROFILE_PLIST="$(security cms -D -i "${PROFILE_PATH}")"
+security cms -D -i "${PROFILE_PATH}" > "${PROFILE_PLIST_PATH}"
 
-PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "${PROFILE_PLIST}")
-PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" /dev/stdin <<< "${PROFILE_PLIST}")
-PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print TeamIdentifier:0" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || echo "unknown")
-PROFILE_EXPIRY=$(/usr/libexec/PlistBuddy -c "Print ExpirationDate" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || echo "unknown")
-PROFILE_PLATFORM=$(/usr/libexec/PlistBuddy -c "Print Platform:0" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || echo "unknown")
+PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" "${PROFILE_PLIST_PATH}")
+PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" "${PROFILE_PLIST_PATH}")
+PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print TeamIdentifier:0" "${PROFILE_PLIST_PATH}" 2>/dev/null || echo "unknown")
+PROFILE_EXPIRY=$(/usr/libexec/PlistBuddy -c "Print ExpirationDate" "${PROFILE_PLIST_PATH}" 2>/dev/null || echo "unknown")
+PROFILE_PLATFORM=$(/usr/libexec/PlistBuddy -c "Print Platform:0" "${PROFILE_PLIST_PATH}" 2>/dev/null || echo "unknown")
 
 # On macOS profiles the standard App ID entitlement is
 # `com.apple.application-identifier`; on other platforms it is
 # `application-identifier`.
-PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:com.apple.application-identifier" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || true)
+PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:com.apple.application-identifier" "${PROFILE_PLIST_PATH}" 2>/dev/null || true)
 if [ -z "${PROFILE_APP_ID}" ]; then
-  PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:application-identifier" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || true)
+  PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:application-identifier" "${PROFILE_PLIST_PATH}" 2>/dev/null || true)
 fi
 if [ -z "${PROFILE_APP_ID}" ]; then
   PROFILE_APP_ID="unknown"
@@ -68,13 +69,35 @@ if [ -n "${APPSTORE_BUNDLE_ID:-}" ]; then
   echo "  Bundle ID verified for ${APPSTORE_BUNDLE_ID}."
 fi
 
+echo ""
+echo "Profile developer certificates:"
+PROFILE_CERT_COUNT=0
+PROFILE_CERT_TMP_DIR="${RUNNER_TEMP}/profile-certs"
+rm -rf "${PROFILE_CERT_TMP_DIR}"
+mkdir -p "${PROFILE_CERT_TMP_DIR}"
+
+while true; do
+  CERT_PATH="${PROFILE_CERT_TMP_DIR}/developer-cert-${PROFILE_CERT_COUNT}.cer"
+  if ! plutil -extract "DeveloperCertificates.${PROFILE_CERT_COUNT}" raw -o - "${PROFILE_PLIST_PATH}" | base64 -D > "${CERT_PATH}" 2>/dev/null; then
+    rm -f "${CERT_PATH}"
+    break
+  fi
+
+  echo "  DeveloperCertificates[${PROFILE_CERT_COUNT}]:"
+  openssl x509 -inform DER -in "${CERT_PATH}" -noout -subject -serial -fingerprint -sha1
+  PROFILE_CERT_COUNT=$((PROFILE_CERT_COUNT + 1))
+done
+
+echo "  Count: ${PROFILE_CERT_COUNT}"
+
 PROFILES_DIR="${HOME}/Library/MobileDevice/Provisioning Profiles"
 mkdir -p "${PROFILES_DIR}"
 
 echo ""
 echo "Installing profile to: ${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
 cp "${PROFILE_PATH}" "${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
-rm -f "${PROFILE_PATH}"
+rm -f "${PROFILE_PATH}" "${PROFILE_PLIST_PATH}"
+rm -rf "${PROFILE_CERT_TMP_DIR}"
 
 echo ""
 echo "Installed profiles:"

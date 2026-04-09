@@ -39,6 +39,14 @@ echo "  Build number:         ${BUILD_NUMBER}"
 echo "  Keychain:             ${KEYCHAIN_PATH}"
 echo ""
 
+echo "Installed provisioning profiles before archive:"
+ls -la "${PROFILES_DIR}/"
+
+echo ""
+echo "Relevant build settings:"
+xcodebuild -project "${PROJECT}" -scheme "${SCHEME}" -showBuildSettings | grep -E 'CODE_SIGN|DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER|PROVISIONING_PROFILE' || true
+
+echo ""
 set -o pipefail
 xcodebuild archive \
   -project "${PROJECT}" \
@@ -52,7 +60,7 @@ xcodebuild archive \
   DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
   "OTHER_CODE_SIGN_FLAGS=--keychain ${KEYCHAIN_PATH}" \
   PRODUCT_BUNDLE_IDENTIFIER="${APPSTORE_BUNDLE_ID}" \
-  "PROVISIONING_PROFILE_SPECIFIER=${PROFILE_NAME}" \
+  "PROVISIONING_PROFILE_SPECIFIER=${PROFILE_UUID}" \
   CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
   2>&1 | tail -30
 

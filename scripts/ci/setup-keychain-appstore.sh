@@ -86,6 +86,14 @@ echo ""
 echo "Codesigning identities:"
 security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
 
+echo ""
+echo "Imported Apple Distribution certificates:"
+security find-certificate -a -c "Apple Distribution" -Z "${KEYCHAIN_PATH}" || true
+
+echo ""
+echo "Imported Mac Installer Distribution certificates:"
+security find-certificate -a -c "Mac Installer Distribution" -Z "${KEYCHAIN_PATH}" || true
+
 # Export for later steps
 echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
 echo "KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD}" >> "$GITHUB_ENV"

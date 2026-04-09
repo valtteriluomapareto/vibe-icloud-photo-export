@@ -93,6 +93,7 @@ security find-certificate -a -c "Apple Distribution" -Z "${KEYCHAIN_PATH}" || tr
 echo ""
 echo "Imported Mac Installer Distribution certificates:"
 security find-certificate -a -c "Mac Installer Distribution" -Z "${KEYCHAIN_PATH}" || true
+security find-certificate -a -c "3rd Party Mac Developer Installer" -Z "${KEYCHAIN_PATH}" || true
 
 # Export for later steps
 echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"

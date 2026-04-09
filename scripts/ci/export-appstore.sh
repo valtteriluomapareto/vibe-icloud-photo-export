@@ -34,6 +34,8 @@ cat > "${RUNNER_TEMP}/ExportOptions.plist" <<PLIST
   <string>manual</string>
   <key>signingCertificate</key>
   <string>Apple Distribution</string>
+  <key>installerSigningCertificate</key>
+  <string>Mac Installer Distribution</string>
   <key>teamID</key>
   <string>${APPLE_TEAM_ID}</string>
   <key>provisioningProfiles</key>
@@ -55,6 +57,7 @@ echo "  Archive:     ${ARCHIVE_PATH}"
 echo "  Export path: ${EXPORT_PATH}"
 echo "  Method:      app-store-connect"
 echo "  Team ID:     ${APPLE_TEAM_ID}"
+echo "  Installer:   Mac Installer Distribution"
 echo "  Profile:     ${PROFILE_NAME}"
 echo "  Bundle ID:   ${APPSTORE_BUNDLE_ID}"
 echo ""

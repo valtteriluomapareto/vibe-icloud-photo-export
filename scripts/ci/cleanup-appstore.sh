@@ -22,7 +22,7 @@ else
 fi
 
 if [ -n "${PROFILES_DIR:-}" ] && [ -n "${PROFILE_UUID:-}" ]; then
-  PROFILE_FILE="${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
+  PROFILE_FILE="${PROFILES_DIR}/${PROFILE_UUID}.provisionprofile"
   if [ -f "${PROFILE_FILE}" ]; then
     echo "Removing provisioning profile: ${PROFILE_FILE}"
     rm -f "${PROFILE_FILE}" || true

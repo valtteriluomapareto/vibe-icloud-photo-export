@@ -95,10 +95,10 @@ XCODE_PROFILES_DIR="${HOME}/Library/Developer/Xcode/UserData/Provisioning Profil
 mkdir -p "${PROFILES_DIR}" "${XCODE_PROFILES_DIR}"
 
 echo ""
-echo "Installing profile to: ${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
-cp "${PROFILE_PATH}" "${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
-echo "Installing profile to: ${XCODE_PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
-cp "${PROFILE_PATH}" "${XCODE_PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
+echo "Installing profile to: ${PROFILES_DIR}/${PROFILE_UUID}.provisionprofile"
+cp "${PROFILE_PATH}" "${PROFILES_DIR}/${PROFILE_UUID}.provisionprofile"
+echo "Installing profile to: ${XCODE_PROFILES_DIR}/${PROFILE_UUID}.provisionprofile"
+cp "${PROFILE_PATH}" "${XCODE_PROFILES_DIR}/${PROFILE_UUID}.provisionprofile"
 rm -f "${PROFILE_PATH}" "${PROFILE_PLIST_PATH}"
 rm -rf "${PROFILE_CERT_TMP_DIR}"
 

@@ -24,9 +24,13 @@ done
 EXPORT_PATH="${RUNNER_TEMP}/export-appstore"
 EXPORT_XCODEBUILD_LOG="${RUNNER_TEMP}/export-appstore-xcodebuild.log"
 EXPORT_DISTRIBUTION_LOGS_DIR="${RUNNER_TEMP}/xcdistributionlogs"
+EXPORT_XCODEBUILD_TMPDIR="${RUNNER_TEMP}/export-tmp"
+HEARTBEAT_PID=""
 
 rm -f "${EXPORT_XCODEBUILD_LOG}"
 rm -rf "${EXPORT_DISTRIBUTION_LOGS_DIR}"
+rm -rf "${EXPORT_XCODEBUILD_TMPDIR}"
+mkdir -p "${EXPORT_XCODEBUILD_TMPDIR}"
 
 collect_distribution_logs() {
   local bundle_path=""
@@ -37,6 +41,10 @@ collect_distribution_logs() {
 
   if [ -z "${bundle_path}" ] && [ -n "${TMPDIR:-}" ]; then
     bundle_path="$(find "${TMPDIR}" -maxdepth 1 -type d -name '*.xcdistributionlogs' -print 2>/dev/null | tail -1 || true)"
+  fi
+
+  if [ -z "${bundle_path}" ]; then
+    bundle_path="$(find "${EXPORT_XCODEBUILD_TMPDIR}" -maxdepth 1 -type d -name '*.xcdistributionlogs' -print 2>/dev/null | tail -1 || true)"
   fi
 
   if [ -n "${bundle_path}" ] && [ -d "${bundle_path}" ]; then
@@ -53,6 +61,20 @@ collect_distribution_logs() {
 
 echo "XCODEBUILD_EXPORT_LOG_PATH=${EXPORT_XCODEBUILD_LOG}" >> "$GITHUB_ENV"
 echo "XCDISTRIBUTION_LOGS_DIR=${EXPORT_DISTRIBUTION_LOGS_DIR}" >> "$GITHUB_ENV"
+echo "XCODEBUILD_TMPDIR=${EXPORT_XCODEBUILD_TMPDIR}" >> "$GITHUB_ENV"
+
+cleanup_export() {
+  if [ -n "${HEARTBEAT_PID:-}" ]; then
+    kill "${HEARTBEAT_PID}" 2>/dev/null || true
+    wait "${HEARTBEAT_PID}" 2>/dev/null || true
+    HEARTBEAT_PID=""
+  fi
+
+  collect_distribution_logs || true
+}
+
+trap 'cleanup_export' EXIT
+trap 'exit 130' INT TERM
 
 echo "Generating ExportOptions.plist..."
 cat > "${RUNNER_TEMP}/ExportOptions.plist" <<PLIST
@@ -93,6 +115,7 @@ echo "  Installer:   ${INSTALLER_SIGNING_CERTIFICATE}"
 echo "  Profile:     ${PROFILE_NAME}"
 echo "  Bundle ID:   ${APPSTORE_BUNDLE_ID}"
 echo "  Xcode log:   ${EXPORT_XCODEBUILD_LOG}"
+echo "  Xcode tmp:   ${EXPORT_XCODEBUILD_TMPDIR}"
 echo ""
 
 echo "Exporting archive to .pkg..."
@@ -105,18 +128,13 @@ echo "Exporting archive to .pkg..."
 HEARTBEAT_PID=$!
 
 set +e
-xcodebuild -exportArchive \
+TMPDIR="${EXPORT_XCODEBUILD_TMPDIR}" xcodebuild -exportArchive \
   -archivePath "${ARCHIVE_PATH}" \
   -exportOptionsPlist "${RUNNER_TEMP}/ExportOptions.plist" \
   -exportPath "${EXPORT_PATH}" \
   -verbose 2>&1 | tee "${EXPORT_XCODEBUILD_LOG}"
 EXPORT_STATUS=${PIPESTATUS[0]}
 set -e
-
-kill "${HEARTBEAT_PID}" 2>/dev/null || true
-wait "${HEARTBEAT_PID}" 2>/dev/null || true
-
-collect_distribution_logs
 
 if [ "${EXPORT_STATUS}" -ne 0 ]; then
   echo "::error::xcodebuild -exportArchive failed with exit code ${EXPORT_STATUS}"

@@ -138,6 +138,7 @@ jobs:
           path: |
             ${{ runner.temp }}/export-appstore-xcodebuild.log
             ${{ runner.temp }}/xcdistributionlogs
+            ${{ runner.temp }}/export-tmp
 
       # ── Package artifact ──────────────────────────────────────────────
       - name: Prepare package

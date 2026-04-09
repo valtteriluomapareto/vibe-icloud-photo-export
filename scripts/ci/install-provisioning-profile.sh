@@ -91,22 +91,29 @@ done
 echo "  Count: ${PROFILE_CERT_COUNT}"
 
 PROFILES_DIR="${HOME}/Library/MobileDevice/Provisioning Profiles"
-mkdir -p "${PROFILES_DIR}"
+XCODE_PROFILES_DIR="${HOME}/Library/Developer/Xcode/UserData/Provisioning Profiles"
+mkdir -p "${PROFILES_DIR}" "${XCODE_PROFILES_DIR}"
 
 echo ""
 echo "Installing profile to: ${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
 cp "${PROFILE_PATH}" "${PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
+echo "Installing profile to: ${XCODE_PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
+cp "${PROFILE_PATH}" "${XCODE_PROFILES_DIR}/${PROFILE_UUID}.provisioningprofile"
 rm -f "${PROFILE_PATH}" "${PROFILE_PLIST_PATH}"
 rm -rf "${PROFILE_CERT_TMP_DIR}"
 
 echo ""
-echo "Installed profiles:"
+echo "Installed profiles (MobileDevice):"
 ls -la "${PROFILES_DIR}/"
+
+echo ""
+echo "Installed profiles (Xcode UserData):"
+ls -la "${XCODE_PROFILES_DIR}/"
 
 # Export for later steps
 echo "PROFILE_UUID=${PROFILE_UUID}" >> "$GITHUB_ENV"
 echo "PROFILE_NAME=${PROFILE_NAME}" >> "$GITHUB_ENV"
-echo "PROFILES_DIR=${PROFILES_DIR}" >> "$GITHUB_ENV"
+echo "PROFILES_DIR=${XCODE_PROFILES_DIR}" >> "$GITHUB_ENV"
 
 echo ""
 echo "=== Provisioning profile installation complete ==="

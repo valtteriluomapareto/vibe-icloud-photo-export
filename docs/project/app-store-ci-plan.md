@@ -294,7 +294,7 @@ cat > "${RUNNER_TEMP}/ExportOptions.plist" <<PLIST
   <key>signingCertificate</key>
   <string>Apple Distribution</string>
   <key>installerSigningCertificate</key>
-  <string>Mac Installer Distribution</string>
+  <string>${INSTALLER_SIGNING_CERTIFICATE}</string>
   <key>teamID</key>
   <string>${APPLE_TEAM_ID}</string>
   <key>provisioningProfiles</key>
@@ -312,7 +312,7 @@ xcodebuild -exportArchive \
   -exportPath "${EXPORT_PATH}"
 ```
 
-For macOS apps, `method: app-store-connect` produces a `.pkg` file in the export directory. This `.pkg` is what Transporter accepts, and generating it successfully requires the **Mac Installer Distribution** certificate to be available in the temporary keychain and referenced via `installerSigningCertificate`.
+For macOS apps, `method: app-store-connect` produces a `.pkg` file in the export directory. This `.pkg` is what Transporter accepts, and generating it successfully requires the installer certificate to be available in the temporary keychain and referenced via `installerSigningCertificate`. In practice, the exported identity may appear under the legacy name `3rd Party Mac Developer Installer`, so the workflow resolves the exact imported certificate fingerprint and uses that value in `ExportOptions.plist`.
 
 ### 7. Verify and Upload Artifact
 

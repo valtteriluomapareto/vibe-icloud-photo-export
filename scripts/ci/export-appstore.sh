@@ -10,10 +10,11 @@ set -euo pipefail
 #   APPLE_TEAM_ID
 #   PROFILE_NAME
 #   APPSTORE_BUNDLE_ID
+#   INSTALLER_SIGNING_CERTIFICATE
 
 echo "=== App Store Export ==="
 
-for var in RUNNER_TEMP ARCHIVE_PATH APPLE_TEAM_ID PROFILE_NAME APPSTORE_BUNDLE_ID; do
+for var in RUNNER_TEMP ARCHIVE_PATH APPLE_TEAM_ID PROFILE_NAME APPSTORE_BUNDLE_ID INSTALLER_SIGNING_CERTIFICATE; do
   if [ -z "${!var:-}" ]; then
     echo "::error::Required environment variable ${var} is not set"
     exit 1
@@ -35,7 +36,7 @@ cat > "${RUNNER_TEMP}/ExportOptions.plist" <<PLIST
   <key>signingCertificate</key>
   <string>Apple Distribution</string>
   <key>installerSigningCertificate</key>
-  <string>Mac Installer Distribution</string>
+  <string>${INSTALLER_SIGNING_CERTIFICATE}</string>
   <key>teamID</key>
   <string>${APPLE_TEAM_ID}</string>
   <key>provisioningProfiles</key>
@@ -57,7 +58,7 @@ echo "  Archive:     ${ARCHIVE_PATH}"
 echo "  Export path: ${EXPORT_PATH}"
 echo "  Method:      app-store-connect"
 echo "  Team ID:     ${APPLE_TEAM_ID}"
-echo "  Installer:   Mac Installer Distribution"
+echo "  Installer:   ${INSTALLER_SIGNING_CERTIFICATE}"
 echo "  Profile:     ${PROFILE_NAME}"
 echo "  Bundle ID:   ${APPSTORE_BUNDLE_ID}"
 echo ""

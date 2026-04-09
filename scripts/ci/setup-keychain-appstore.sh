@@ -14,6 +14,7 @@ set -euo pipefail
 # Exports via GITHUB_ENV:
 #   KEYCHAIN_PATH
 #   KEYCHAIN_PASSWORD
+#   INSTALLER_SIGNING_CERTIFICATE
 
 echo "=== App Store Keychain Setup ==="
 
@@ -95,9 +96,19 @@ echo "Imported Mac Installer Distribution certificates:"
 security find-certificate -a -c "Mac Installer Distribution" -Z "${KEYCHAIN_PATH}" || true
 security find-certificate -a -c "3rd Party Mac Developer Installer" -Z "${KEYCHAIN_PATH}" || true
 
+INSTALLER_SIGNING_CERTIFICATE="$(security find-identity -v "${KEYCHAIN_PATH}" | awk '/3rd Party Mac Developer Installer:|Mac Installer Distribution:/{print $2; exit}')"
+if [ -z "${INSTALLER_SIGNING_CERTIFICATE}" ]; then
+  echo "::error::Unable to determine installer signing certificate identity"
+  exit 1
+fi
+
+echo ""
+echo "Selected installer signing certificate: ${INSTALLER_SIGNING_CERTIFICATE}"
+
 # Export for later steps
 echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
 echo "KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD}" >> "$GITHUB_ENV"
+echo "INSTALLER_SIGNING_CERTIFICATE=${INSTALLER_SIGNING_CERTIFICATE}" >> "$GITHUB_ENV"
 
 echo ""
 echo "=== Keychain setup complete ==="

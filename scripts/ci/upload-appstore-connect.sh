@@ -50,19 +50,20 @@ echo "  API Key ID: ${APP_STORE_CONNECT_API_KEY_ID}"
 echo "  Issuer ID:  ${APP_STORE_CONNECT_API_ISSUER_ID}"
 echo ""
 
-# altool synopsis (Xcode 16.2):
-#   xcrun altool --upload-package <file> --platform <macos|ios|...>
+# altool synopsis on the current GitHub-hosted Xcode 16.2 runner:
+#   xcrun altool --upload-package <file> --type <macos|ios|...>
 #     --apple-id <id> --bundle-id <id> --bundle-version <string>
 #     --bundle-short-version-string <string> authentication [options]
 echo "Uploading to App Store Connect..."
 xcrun altool --upload-package "${PKG_PATH}" \
-  --platform macos \
+  --type macos \
   --apple-id "${APP_STORE_APP_APPLE_ID}" \
   --bundle-id "${APPSTORE_BUNDLE_ID}" \
   --bundle-version "${BUILD_NUMBER}" \
   --bundle-short-version-string "${VERSION}" \
   --apiKey "${APP_STORE_CONNECT_API_KEY_ID}" \
-  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}"
+  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}" \
+  --show-progress
 
 echo ""
 echo "Upload complete."

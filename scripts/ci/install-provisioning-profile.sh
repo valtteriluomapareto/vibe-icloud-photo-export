@@ -34,13 +34,25 @@ PROFILE_PLIST="$(security cms -D -i "${PROFILE_PATH}")"
 PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "${PROFILE_PLIST}")
 PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" /dev/stdin <<< "${PROFILE_PLIST}")
 PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c "Print TeamIdentifier:0" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || echo "unknown")
-PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:application-identifier" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || echo "unknown")
 PROFILE_EXPIRY=$(/usr/libexec/PlistBuddy -c "Print ExpirationDate" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || echo "unknown")
+PROFILE_PLATFORM=$(/usr/libexec/PlistBuddy -c "Print Platform:0" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || echo "unknown")
+
+# On macOS profiles the standard App ID entitlement is
+# `com.apple.application-identifier`; on other platforms it is
+# `application-identifier`.
+PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:com.apple.application-identifier" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || true)
+if [ -z "${PROFILE_APP_ID}" ]; then
+  PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:application-identifier" /dev/stdin <<< "${PROFILE_PLIST}" 2>/dev/null || true)
+fi
+if [ -z "${PROFILE_APP_ID}" ]; then
+  PROFILE_APP_ID="unknown"
+fi
 
 echo ""
 echo "Profile details:"
 echo "  UUID:       ${PROFILE_UUID}"
 echo "  Name:       ${PROFILE_NAME}"
+echo "  Platform:   ${PROFILE_PLATFORM}"
 echo "  Team:       ${PROFILE_TEAM}"
 echo "  App ID:     ${PROFILE_APP_ID}"
 echo "  Expires:    ${PROFILE_EXPIRY}"

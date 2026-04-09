@@ -118,11 +118,25 @@ echo "  Xcode log:   ${EXPORT_XCODEBUILD_LOG}"
 echo "  Xcode tmp:   ${EXPORT_XCODEBUILD_TMPDIR}"
 echo ""
 
+echo "Verifying keychain is unlocked and accessible..."
+security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+security show-keychain-info "${KEYCHAIN_PATH}" 2>&1 || true
+
+echo ""
 echo "Exporting archive to .pkg..."
+EXPORT_TIMEOUT=600  # 10 minutes — export should not take this long
 (
+  ELAPSED=0
   while true; do
     sleep 60
-    echo "Export still running at $(date -u +"%Y-%m-%dT%H:%M:%SZ")..."
+    ELAPSED=$((ELAPSED + 60))
+    echo "Export still running at $(date -u +"%Y-%m-%dT%H:%M:%SZ") (${ELAPSED}s elapsed)..."
+    if [ "${ELAPSED}" -ge "${EXPORT_TIMEOUT}" ]; then
+      echo "::error::Export timed out after ${EXPORT_TIMEOUT}s — likely a keychain access hang"
+      # Kill the xcodebuild process group
+      kill 0 2>/dev/null || true
+      exit 1
+    fi
   done
 ) &
 HEARTBEAT_PID=$!

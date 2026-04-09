@@ -38,8 +38,9 @@ security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
 echo "Unlocking keychain..."
 security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
 
-echo "Adding keychain to search list..."
+echo "Adding keychain to search list and setting as default..."
 security list-keychains -d user -s "${KEYCHAIN_PATH}" $(security list-keychains -d user | tr -d '"')
+security default-keychain -s "${KEYCHAIN_PATH}"
 
 # ── Apple Distribution certificate ──────────────────────────────────
 echo ""

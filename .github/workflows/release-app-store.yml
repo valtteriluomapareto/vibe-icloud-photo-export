@@ -125,20 +125,7 @@ jobs:
 
       # ── Export ────────────────────────────────────────────────────────
       - name: Export
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bash scripts/ci/export-appstore.sh
-
-      - name: Upload export diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: appstore-export-diagnostics
-          if-no-files-found: ignore
-          path: |
-            ${{ runner.temp }}/export-appstore-xcodebuild.log
-            ${{ runner.temp }}/xcdistributionlogs
-            ${{ runner.temp }}/export-tmp
 
       # ── Package artifact ──────────────────────────────────────────────
       - name: Prepare package

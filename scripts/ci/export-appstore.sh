@@ -69,7 +69,7 @@ echo "Signing .pkg with productsign..."
 # --timestamp=none: productsign hangs in CI contacting the timestamp
 # server with no timeout. The app bundle itself (signed by codesign in
 # the archive step) already carries a secure timestamp.
-timeout 120 productsign \
+perl -e 'alarm(120); exec @ARGV' -- productsign \
   --sign "${INSTALLER_SIGNING_CERTIFICATE}" \
   --keychain "${KEYCHAIN_PATH}" \
   --timestamp=none \

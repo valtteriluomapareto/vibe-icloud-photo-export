@@ -44,18 +44,38 @@ Pay special attention to: <focus area>
 
 Build and run the appropriate `codex review` command.
 
-**Important:** `codex review` does NOT have an `--instructions` flag. Custom review instructions must be passed as the `[PROMPT]` positional argument. However, `[PROMPT]` cannot be combined with `--commit`. Use these patterns:
+**CRITICAL — `[PROMPT]` cannot be combined with `--uncommitted` or `--commit`.** Despite `codex review --help` showing `[OPTIONS] [PROMPT]`, passing a prompt together with `--uncommitted` or `--commit` causes an error. Use these patterns:
 
 | Target | Command |
 |--------|---------|
-| empty or `uncommitted` | `codex review --uncommitted "<prompt>"` |
-| looks like a commit SHA (hex, 7-40 chars) | `codex review --commit <sha>` (no custom prompt — codex uses its default review prompt) |
-| starts with `--base` | `codex review --base <branch> "<prompt>"` |
-
-For `--commit` reviews where you want custom instructions, there is no way to pass them. Just run `codex review --commit <sha>` and rely on the default review behavior.
+| empty or `uncommitted` | `codex review --uncommitted` (no custom prompt possible) |
+| looks like a commit SHA (hex, 7-40 chars) | `codex review --commit <sha>` (no custom prompt possible) |
+| starts with `--base` | `codex review --base <branch>` (no custom prompt possible) |
+| custom prompt only (no flags) | `codex review "<prompt>"` |
 
 For multiple commit SHAs, run `codex review --commit <sha>` once per SHA.
 
-Run the command from the project root. Stream the output directly to the user — do not summarise or filter it.
+Run the command from the project root.
 
 If `codex` is not found, tell the user to install it (`npm install -g @openai/codex`).
+
+## Waiting for codex to finish
+
+Codex review is a long-running command. It reads many files, may run builds/tests, and often takes 2-5 minutes.
+
+**How to run and wait:**
+
+1. Run `codex review ...` via Bash. It will automatically run in background and return a task output file path.
+2. **Wait with a generous initial sleep** before checking the output. Use `sleep 120` (2 minutes) as the minimum first wait, then read the output file to check if it's done.
+3. To check if codex is done, look for the review summary at the end of the output file (lines starting with `Review comment:` or a summary paragraph). If the output is still growing or ends mid-file-content, codex is still working.
+4. If not done after the first check, wait again with `sleep 60` increments and re-check, using a **timeout of at least 3-4 minutes** on each wait command.
+5. You can also check if the codex process is still running: `ps aux | grep 'codex review' | grep -v grep`.
+6. **Do NOT** try to read the full output file if it exceeds the token limit. Instead, read only the last 100-150 lines to find the review conclusion, then read earlier sections selectively if needed.
+
+**Example wait pattern:**
+```bash
+# First wait — give codex time to read files and run builds
+sleep 120 && tail -100 <output-file>
+# If still running, wait more
+sleep 90 && tail -100 <output-file>
+```

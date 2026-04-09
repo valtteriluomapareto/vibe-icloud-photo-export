@@ -9,10 +9,12 @@ The first App Store build has been submitted manually:
 - **MARKETING_VERSION:** 1.0.2
 - **CURRENT_PROJECT_VERSION:** 2
 - **Bundle ID:** `com.valtteriluoma.photo-export-appstore`
-- **Status:** Waiting for App Review (submitted 2026-03-31)
+- **Status:** In Review (submitted 2026-03-31)
 - **Method:** Manual `xcodebuild archive` + Transporter upload
 
-The bundle ID is registered, the Apple Distribution certificate and provisioning profile exist, and the App Store Connect app record is set up. These are no longer prerequisites — they are done.
+The bundle ID is registered, the Apple Distribution certificate, the Mac Installer Distribution certificate, and a working provisioning profile exist, and the App Store Connect app record is set up. These are no longer prerequisites — they are done.
+
+**Implementation status:** Workflow (`release-app-store.yml`) and CI scripts (`scripts/ci/`) implemented on 2026-03-31. Not yet verified on GitHub Actions — requires secrets setup in the `app-store-release` environment followed by a `workflow_dispatch` dry run before it should be treated as proven.
 
 ## Scope
 
@@ -29,8 +31,11 @@ Before this workflow can run:
 
 1. ~~`com.valtteriluoma.photo-export-appstore` bundle ID registered in Apple Developer portal~~ Done
 2. ~~Apple Distribution certificate created and exported as `.p12`~~ Done
-3. ~~Mac App Store distribution provisioning profile created for the above bundle ID~~ Done
-4. GitHub Environment `app-store-release` created with required secrets (see Secrets section)
+3. ~~Mac Installer Distribution certificate created~~ Done
+4. ~~Mac App Store distribution provisioning profile created for the above bundle ID~~ Done
+5. GitHub Environment `app-store-release` created with required secrets (see Secrets section)
+
+The successful manual submission on 2026-03-31 already proved that the signing chain works. Prefer exporting and reusing those same working assets for CI, especially the exact provisioning profile that produced the successful manual upload, rather than regenerating them unless something has changed.
 
 ## Workflow Design
 
@@ -46,7 +51,7 @@ on:
       skip_upload:
         description: 'Build only — do not upload to App Store Connect'
         required: true
-        default: false
+        default: true
         type: boolean
 ```
 
@@ -54,7 +59,7 @@ Both `release-direct.yml` and `release-app-store.yml` fire on the same `v*` tag.
 
 `workflow_dispatch` enables manual test runs from any branch without creating a tag. The `skip_upload` input allows building without uploading (useful for testing signing and export).
 
-Tag pushes always upload. `workflow_dispatch` uploads by default but can be skipped.
+Tag pushes always upload. `workflow_dispatch` defaults to build-only; uploading from a manual run is opt-in by setting `skip_upload: false`.
 
 No `push.branches: [main]` trigger — unlike the direct workflow, building an App Store-signed artifact on every push to `main` is wasteful. Use `workflow_dispatch` for ad-hoc testing.
 
@@ -77,6 +82,10 @@ permissions:
 
 Read-only — this workflow does not create releases or push anything. The direct workflow needs `contents: write` for GitHub Releases; this one doesn't.
 
+### Runner
+
+`runs-on: macos-15` — same as `release-direct.yml`.
+
 ### Environment and Secrets
 
 The workflow runs in a protected GitHub Environment named `app-store-release`, separate from the existing `direct-release` environment. Different certificates, different approval rules if needed.
@@ -87,13 +96,16 @@ On every run: a `.pkg` artifact attached to the workflow run, downloadable from 
 
 On tag pushes: uploads the `.pkg` to App Store Connect automatically. The build appears in TestFlight/App Store Connect within minutes. No GitHub Release — that's `release-direct.yml`'s job.
 
-On `workflow_dispatch` with `skip_upload: true`: builds and attaches the artifact only, no upload.
+On `workflow_dispatch` with the default `skip_upload: true`: builds and attaches the artifact only, no upload.
+
+On `workflow_dispatch` with `skip_upload: false`: builds, attaches the artifact, and uploads to App Store Connect.
 
 ## Signing Differences from Direct Distribution
 
 | | Direct (`release-direct.yml`) | App Store (`release-app-store.yml`) |
 |---|---|---|
 | Certificate | Developer ID Application | Apple Distribution |
+| Installer certificate | Not required | Mac Installer Distribution |
 | Provisioning profile | Not required | Required (Mac App Store) |
 | Export method | `developer-id` | `app-store-connect` |
 | Notarization | Yes (notarytool + staple) | No (App Store handles it) |
@@ -101,6 +113,8 @@ On `workflow_dispatch` with `skip_upload: true`: builds and attaches the artifac
 | Bundle ID | `com.valtteriluoma.photo-export` | `com.valtteriluoma.photo-export-appstore` (override) |
 
 The entitlements file (`photo_export.entitlements`) is shared between both channels. Entitlements do not include the bundle ID, so the same file works.
+
+For App Store builds, app signing and installer signing are separate: the app inside the archive is signed with **Apple Distribution**, and the exported `.pkg` is signed with **Mac Installer Distribution**.
 
 ## Build Configuration
 
@@ -126,6 +140,8 @@ The first manually submitted build used `CURRENT_PROJECT_VERSION=2`. The first C
 
 The `release-direct.yml` workflow also uses `github.run_number`, but each workflow has its own independent counter. There is no requirement for build numbers to match across channels.
 
+Making manual runs build-only by default reduces accidental uploads and App Store Connect noise, but dry runs still increment `github.run_number`, so they still help get past the initial `CURRENT_PROJECT_VERSION=2` edge case for `MARKETING_VERSION` 1.0.2.
+
 The checked-in value in `project.pbxproj` stays at `1`.
 
 ### Architecture
@@ -140,19 +156,24 @@ Store in the `app-store-release` GitHub Environment:
 |---|---|
 | `APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64` | Apple Distribution certificate exported as `.p12`, base64-encoded |
 | `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD` | Password for the `.p12` file |
+| `MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_P12_BASE64` | Mac Installer Distribution certificate exported as `.p12`, base64-encoded |
+| `MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_PASSWORD` | Password for the `.p12` file |
 | `APPLE_TEAM_ID` | Apple Developer Team ID (same value as in `direct-release`) |
 | `APP_STORE_PROVISIONING_PROFILE_BASE64` | Mac App Store distribution provisioning profile, base64-encoded |
 | `APP_STORE_CONNECT_API_KEY_BASE64` | App Store Connect API key (`.p8` file), base64-encoded |
 | `APP_STORE_CONNECT_API_KEY_ID` | Key ID from App Store Connect |
 | `APP_STORE_CONNECT_API_ISSUER_ID` | Issuer ID from App Store Connect |
+| `APP_STORE_APP_APPLE_ID` | Numeric Apple ID of the app (App Information > General Information in App Store Connect) |
 
 The API key is created in App Store Connect under Users and Access > Integrations > App Store Connect API. It needs the "App Manager" role (or higher) to upload builds.
+
+Keep the app and installer certificates as separate secrets even if they happen to be exportable from the same local keychain. The split is clearer and makes signing failures easier to diagnose.
 
 ## Workflow Steps
 
 ### 1. Checkout and Build Context
 
-Identical to `release-direct.yml`: checkout, determine if tag push or dry run, verify `MARKETING_VERSION` matches tag.
+Identical to `release-direct.yml`: checkout, determine if tag push or dry run, verify `MARKETING_VERSION` matches tag. One difference: for non-tag runs, read `MARKETING_VERSION` from `project.pbxproj` instead of hardcoding `0.0.0-dev`, so that the version in the artifact name and the `altool --bundle-short-version-string` flag match the actual binary.
 
 ### 2. Xcode Selection
 
@@ -160,21 +181,32 @@ Same as direct: `sudo xcode-select -s /Applications/Xcode_16.2.app`.
 
 ### 3. Keychain Setup
 
-Create a temporary keychain (same pattern as direct), but import the **Apple Distribution** certificate instead of Developer ID:
+Create a temporary keychain using the same pattern as direct (`security create-keychain`, `set-keychain-settings`, `unlock-keychain`, `list-keychains` — copy from `release-direct.yml` lines 117-129). Then import both the **Apple Distribution** and **Mac Installer Distribution** certificates instead of Developer ID:
 
 ```bash
-CERT_PATH="${RUNNER_TEMP}/certificate.p12"
-echo "${APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64}" | base64 --decode > "${CERT_PATH}"
-security import "${CERT_PATH}" \
+APP_CERT_PATH="${RUNNER_TEMP}/apple-distribution.p12"
+INSTALLER_CERT_PATH="${RUNNER_TEMP}/mac-installer-distribution.p12"
+
+echo "${APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64}" | base64 --decode > "${APP_CERT_PATH}"
+echo "${MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_P12_BASE64}" | base64 --decode > "${INSTALLER_CERT_PATH}"
+
+security import "${APP_CERT_PATH}" \
   -k "${KEYCHAIN_PATH}" \
   -P "${APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD}" \
   -T /usr/bin/codesign \
   -T /usr/bin/security
-rm -f "${CERT_PATH}"
+
+security import "${INSTALLER_CERT_PATH}" \
+  -k "${KEYCHAIN_PATH}" \
+  -P "${MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_PASSWORD}" \
+  -T /usr/bin/productbuild \
+  -T /usr/bin/security
+
+rm -f "${APP_CERT_PATH}" "${INSTALLER_CERT_PATH}"
 
 # Required: allow codesign to access the private key non-interactively.
-# Without this, xcodebuild archive fails with "User interaction is not allowed"
-# on headless CI runners. The direct workflow has the same step.
+# Without this, xcodebuild archive/export can fail with
+# "User interaction is not allowed" on headless CI runners.
 security set-key-partition-list \
   -S apple-tool:,apple:,codesign: \
   -s -k "${KEYCHAIN_PASSWORD}" \
@@ -219,6 +251,7 @@ echo "PROFILES_DIR=${PROFILES_DIR}" >> "$GITHUB_ENV"
 BUILD_NUMBER="${{ github.run_number }}.${{ github.run_attempt }}"
 ARCHIVE_PATH="${RUNNER_TEMP}/photo-export-appstore.xcarchive"
 
+set -o pipefail
 xcodebuild archive \
   -project "${PROJECT}" \
   -scheme "${SCHEME}" \
@@ -231,6 +264,7 @@ xcodebuild archive \
   DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
   "OTHER_CODE_SIGN_FLAGS=--keychain ${KEYCHAIN_PATH}" \
   PRODUCT_BUNDLE_IDENTIFIER=com.valtteriluoma.photo-export-appstore \
+  "PROVISIONING_PROFILE_SPECIFIER=${PROFILE_NAME}" \
   CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
   2>&1 | tail -30
 ```
@@ -276,7 +310,7 @@ xcodebuild -exportArchive \
   -exportPath "${EXPORT_PATH}"
 ```
 
-For macOS apps, `method: app-store-connect` produces a `.pkg` file in the export directory. This `.pkg` is what Transporter accepts.
+For macOS apps, `method: app-store-connect` produces a `.pkg` file in the export directory. This `.pkg` is what Transporter accepts, and generating it successfully requires the **Mac Installer Distribution** certificate to be available in the temporary keychain.
 
 ### 7. Verify and Upload Artifact
 
@@ -308,7 +342,7 @@ Then attach as a workflow artifact (separate step):
 
 ### 8. Upload to App Store Connect
 
-Conditional on: tag push, or `workflow_dispatch` with `skip_upload` not set.
+Conditional on: tag push, or `workflow_dispatch` with `skip_upload: false`.
 
 ```yaml
 - name: Upload to App Store Connect
@@ -334,13 +368,13 @@ echo "  Version: ${{ steps.ctx.outputs.version }}"
 echo "  Build: ${BUILD_NUMBER}"
 
 xcrun altool --upload-package "${PKG_PATH}" \
-  --type macos \
+  --platform macos \
+  --apple-id "${APP_STORE_APP_APPLE_ID}" \
   --bundle-id "com.valtteriluoma.photo-export-appstore" \
   --bundle-version "${BUILD_NUMBER}" \
   --bundle-short-version-string "${{ steps.ctx.outputs.version }}" \
   --apiKey "${APP_STORE_CONNECT_API_KEY_ID}" \
-  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}" \
-  --p8-file-path "${API_KEY_PATH}"
+  --apiIssuer "${APP_STORE_CONNECT_API_ISSUER_ID}"
 
 echo "Upload complete. Build will appear in App Store Connect / TestFlight within 5-30 minutes."
 echo "::endgroup::"
@@ -348,7 +382,7 @@ echo "::endgroup::"
 
 `altool` validates the package before uploading. If validation fails, the step fails and the error is visible in the workflow log.
 
-**Note:** `xcrun altool` is deprecated for notarization (replaced by `notarytool`) but `--upload-package` still works as of Xcode 16.2. If Apple removes it in a future Xcode, replace with the `iTMSTransporter` CLI or the App Store Connect REST API.
+**Note:** `xcrun altool` is deprecated for notarization (replaced by `notarytool`) but `--upload-package` still works as of Xcode 16.2. If Apple removes it in a future Xcode, fall back to the `iTMSTransporter` CLI or the App Store Connect REST API.
 
 Do not auto-submit to App Review. The upload puts the build in "Processing" → "Ready to Submit" in App Store Connect. Review submission stays manual.
 
@@ -377,6 +411,7 @@ Both workflows:
 They differ in:
 - GitHub Environment and secrets
 - Certificate type
+- Installer certificate requirement (App Store has one, direct doesn't)
 - Provisioning profile (App Store has one, direct doesn't)
 - Export method and output format
 - Post-build steps (direct: DMG + notarize + GitHub Release; App Store: `.pkg` + upload to App Store Connect)
@@ -387,6 +422,7 @@ They differ in:
 
 - [x] Create Apple Distribution certificate in Apple Developer portal
 - [x] Export it as `.p12` with a password
+- [x] Create Mac Installer Distribution certificate in Apple Developer portal
 - [x] Create a Mac App Store distribution provisioning profile for `com.valtteriluoma.photo-export-appstore`
 - [x] Download the provisioning profile
 - [x] First App Store build submitted manually (v1.0.2, build 2, waiting for review)
@@ -394,16 +430,19 @@ They differ in:
 ### Before first CI run (Valtteri)
 
 - [ ] Create `app-store-release` GitHub Environment
-- [ ] Add secrets: `APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64`, `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APP_STORE_PROVISIONING_PROFILE_BASE64`
+- [ ] Export Mac Installer Distribution certificate as `.p12` if not already exported
+- [ ] Add secrets: `APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64`, `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD`, `MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_P12_BASE64`, `MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APP_STORE_PROVISIONING_PROFILE_BASE64`
+- [ ] Base64-encode the exact provisioning profile file that already worked for the successful manual submission on 2026-03-31
 - [ ] Create App Store Connect API key (Users and Access > Integrations > App Store Connect API, "App Manager" role)
 - [ ] Add secrets: `APP_STORE_CONNECT_API_KEY_BASE64`, `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`
+- [ ] Add secret: `APP_STORE_APP_APPLE_ID` (numeric Apple ID from App Store Connect > App Information > General Information)
 
 ### Engineering (AI-delegatable)
 
-- [ ] Implement `release-app-store.yml` per this plan
+- [x] Implement `release-app-store.yml` per this plan
 - [ ] Verify with `workflow_dispatch` (`skip_upload: true`) dry run from `main`
 
 ### First CI-produced App Store build
 
-- [ ] Run `workflow_dispatch` (with upload) or push a tag
+- [ ] Run `workflow_dispatch` with `skip_upload: false` or push a tag
 - [ ] Verify build appears in App Store Connect / TestFlight automatically

@@ -51,6 +51,7 @@ echo "Importing Apple Distribution certificate..."
 security import "${APP_CERT_PATH}" \
   -k "${KEYCHAIN_PATH}" \
   -P "${APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD}" \
+  -T /usr/bin/xcodebuild \
   -T /usr/bin/codesign \
   -T /usr/bin/security
 rm -f "${APP_CERT_PATH}"
@@ -66,7 +67,9 @@ echo "Importing Mac Installer Distribution certificate..."
 security import "${INSTALLER_CERT_PATH}" \
   -k "${KEYCHAIN_PATH}" \
   -P "${MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_PASSWORD}" \
+  -T /usr/bin/xcodebuild \
   -T /usr/bin/productbuild \
+  -T /usr/bin/productsign \
   -T /usr/bin/security
 rm -f "${INSTALLER_CERT_PATH}"
 echo "Mac Installer Distribution certificate imported."

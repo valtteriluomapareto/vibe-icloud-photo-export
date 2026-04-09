@@ -9,13 +9,13 @@ set -euo pipefail
 #   RUNNER_TEMP
 #   APPLE_TEAM_ID
 #   KEYCHAIN_PATH
-#   PROFILE_NAME
+#   PROFILE_UUID
 #   BUILD_NUMBER
 #   APPSTORE_BUNDLE_ID
 
 echo "=== App Store Archive ==="
 
-for var in PROJECT SCHEME RUNNER_TEMP APPLE_TEAM_ID KEYCHAIN_PATH PROFILE_NAME BUILD_NUMBER APPSTORE_BUNDLE_ID; do
+for var in PROJECT SCHEME RUNNER_TEMP APPLE_TEAM_ID KEYCHAIN_PATH PROFILE_UUID BUILD_NUMBER APPSTORE_BUNDLE_ID; do
   if [ -z "${!var:-}" ]; then
     echo "::error::Required environment variable ${var} is not set"
     exit 1
@@ -33,7 +33,7 @@ echo "  Code sign style:      Manual"
 echo "  Code sign identity:   Apple Distribution"
 echo "  Development team:     ${APPLE_TEAM_ID}"
 echo "  Bundle identifier:    ${APPSTORE_BUNDLE_ID}"
-echo "  Provisioning profile: ${PROFILE_NAME}"
+echo "  Provisioning profile: ${PROFILE_UUID}${PROFILE_NAME:+ (${PROFILE_NAME})}"
 echo "  Build number:         ${BUILD_NUMBER}"
 echo "  Keychain:             ${KEYCHAIN_PATH}"
 echo ""
@@ -51,7 +51,7 @@ xcodebuild archive \
   DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
   "OTHER_CODE_SIGN_FLAGS=--keychain ${KEYCHAIN_PATH}" \
   PRODUCT_BUNDLE_IDENTIFIER="${APPSTORE_BUNDLE_ID}" \
-  "PROVISIONING_PROFILE_SPECIFIER=${PROFILE_NAME}" \
+  "PROVISIONING_PROFILE_SPECIFIER=${PROFILE_UUID}" \
   CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
   2>&1 | tail -30
 

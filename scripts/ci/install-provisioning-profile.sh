@@ -45,6 +45,17 @@ echo "  Team:       ${PROFILE_TEAM}"
 echo "  App ID:     ${PROFILE_APP_ID}"
 echo "  Expires:    ${PROFILE_EXPIRY}"
 
+if [ -n "${APPSTORE_BUNDLE_ID:-}" ]; then
+  EXPECTED_SUFFIX=".${APPSTORE_BUNDLE_ID}"
+  if [[ "${PROFILE_APP_ID}" != *"${EXPECTED_SUFFIX}" ]]; then
+    echo "::error::Provisioning profile App ID does not match expected bundle ID."
+    echo "::error::Expected suffix: ${EXPECTED_SUFFIX}"
+    echo "::error::Actual App ID:  ${PROFILE_APP_ID}"
+    exit 1
+  fi
+  echo "  Bundle ID verified for ${APPSTORE_BUNDLE_ID}."
+fi
+
 PROFILES_DIR="${HOME}/Library/MobileDevice/Provisioning Profiles"
 mkdir -p "${PROFILES_DIR}"
 

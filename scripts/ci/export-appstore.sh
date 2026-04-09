@@ -66,9 +66,13 @@ echo "Unsigned .pkg created: $(du -sh "${UNSIGNED_PKG}" | cut -f1)"
 
 echo ""
 echo "Signing .pkg with productsign..."
-productsign \
+# --timestamp=none: productsign hangs in CI contacting the timestamp
+# server with no timeout. The app bundle itself (signed by codesign in
+# the archive step) already carries a secure timestamp.
+timeout 120 productsign \
   --sign "${INSTALLER_SIGNING_CERTIFICATE}" \
   --keychain "${KEYCHAIN_PATH}" \
+  --timestamp=none \
   "${UNSIGNED_PKG}" \
   "${SIGNED_PKG}" < /dev/null
 

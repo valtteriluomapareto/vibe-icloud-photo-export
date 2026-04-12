@@ -41,9 +41,12 @@ struct AssetDetailView: View {
           .padding(.horizontal)
           .padding(.bottom)
       } else {
-        VStack {
+        VStack(spacing: 8) {
           Spacer()
-          Text("Select an image")
+          Image(systemName: "photo")
+            .font(.system(size: 36))
+            .foregroundColor(.secondary)
+          Text("No image selected")
             .foregroundColor(.secondary)
           Spacer()
         }

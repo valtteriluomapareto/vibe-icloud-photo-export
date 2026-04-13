@@ -415,6 +415,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Photo Export";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				"INFOPLIST_KEY_NSHumanReadableCopyright" = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo Export needs access to your Photos library to browse your photos and videos and export them to a folder you choose.";
@@ -445,6 +446,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Photo Export";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				"INFOPLIST_KEY_NSHumanReadableCopyright" = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo Export needs access to your Photos library to browse your photos and videos and export them to a folder you choose.";

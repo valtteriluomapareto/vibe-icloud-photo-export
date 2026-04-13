@@ -19,7 +19,7 @@ Photo Export uses only Apple's official PhotoKit API — no private APIs, no rev
 Photo Export is available through two channels:
 
 - **Mac App Store** — Coming soon. Automatic updates, trusted distribution. Your purchase supports development of an open-source project.
-- **GitHub Releases (free)** — Download the latest `.dmg` from the [GitHub Releases page](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases). Open the DMG and drag Photo Export to your Applications folder.
+- **GitHub Releases (free)** — Download the latest `.dmg` from the [GitHub Releases page](https://github.com/valtteriluomapareto/photo-export/releases). Open the DMG and drag Photo Export to your Applications folder.
 
 Both versions are identical in functionality, signed and notarized by Apple.
 
@@ -62,7 +62,7 @@ Export progress is shown in the toolbar. You can pause, resume, or cancel at any
 Photo Export is distributed through two channels. Both versions are identical in functionality.
 
 - **Mac App Store** users receive updates automatically through the App Store.
-- **GitHub Releases** users should check the [Releases page](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/releases) for new versions.
+- **GitHub Releases** users should check the [Releases page](https://github.com/valtteriluomapareto/photo-export/releases) for new versions.
 
 Both builds can be installed on the same Mac simultaneously — they use separate bundle identifiers and separate data (export history, bookmarks, preferences).
 
@@ -81,11 +81,11 @@ Without step 3, the new build treats the destination as fresh and may create dup
 If you prefer to build from source or want to contribute:
 
 ```bash
-git clone https://github.com/valtteriluomapareto/vibe-icloud-photo-export.git
-cd vibe-icloud-photo-export
+git clone https://github.com/valtteriluomapareto/photo-export.git
+cd photo-export
 open photo-export.xcodeproj
 ```
 
 Press Run (Cmd+R) with the `photo-export` scheme selected. Requires Xcode 16.2+.
 
-See the [Contributing guide](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/blob/main/CONTRIBUTING.md) for more details on development setup, running tests, and linting.
+See the [Contributing guide](https://github.com/valtteriluomapareto/photo-export/blob/main/CONTRIBUTING.md) for more details on development setup, running tests, and linting.

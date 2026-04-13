@@ -33,4 +33,4 @@ Photo Export is intentionally focused. Below are ideas we're considering that wo
 - **Multiple destinations** — export to more than one location with independent tracking
 - **Localization** — support languages beyond English
 
-Have an idea? [Open an issue on GitHub.](https://github.com/valtteriluomapareto/vibe-icloud-photo-export/issues)
+Have an idea? [Open an issue on GitHub.](https://github.com/valtteriluomapareto/photo-export/issues)

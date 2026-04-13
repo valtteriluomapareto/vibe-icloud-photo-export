@@ -1,12 +1,12 @@
 import SwiftUI
 
 struct AboutView: View {
-  private let websiteURL = URL(string: "https://valtteriluomapareto.github.io/vibe-icloud-photo-export")!
+  private let websiteURL = URL(string: "https://valtteriluomapareto.github.io/photo-export")!
   private let privacyURL = URL(
-    string: "https://valtteriluomapareto.github.io/vibe-icloud-photo-export/privacy")!
+    string: "https://valtteriluomapareto.github.io/photo-export/privacy")!
   private let supportURL = URL(
-    string: "https://valtteriluomapareto.github.io/vibe-icloud-photo-export/support")!
-  private let repoURL = URL(string: "https://github.com/valtteriluomapareto/vibe-icloud-photo-export")!
+    string: "https://valtteriluomapareto.github.io/photo-export/support")!
+  private let repoURL = URL(string: "https://github.com/valtteriluomapareto/photo-export")!
 
   private var appVersion: String {
     Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "–"

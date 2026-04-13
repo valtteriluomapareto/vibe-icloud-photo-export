@@ -28,7 +28,7 @@ Useful commands:
 - `src/content/docs/` contains the published documentation pages.
 - `src/pages/index.astro` contains the landing page.
 - `src/components/` contains the custom website components.
-- `astro.config.mjs` defines the site metadata and Starlight sidebar.
+- `astro.config.mjs` defines the site metadata and Starlight sidebar. The Pages `base` path and GitHub repo links are derived from the `GITHUB_REPOSITORY` environment variable (set automatically by GitHub Actions) so renaming the repository does not require a code change. Local builds use a hardcoded fallback in the same file — update it if the repository is renamed.
 
 ## Documentation Boundaries
 

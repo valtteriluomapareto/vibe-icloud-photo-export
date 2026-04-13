@@ -2,10 +2,23 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
+// Derived from the GitHub Actions context so that renaming the repository
+// automatically updates the Pages base path and GitHub links on next deploy.
+// Falls back to the current slug for local builds.
+const FALLBACK_REPOSITORY = 'valtteriluomapareto/vibe-icloud-photo-export';
+const repository = process.env.GITHUB_REPOSITORY || FALLBACK_REPOSITORY;
+const [repoOwner, repoName] = repository.split('/');
+if (!repoOwner || !repoName || repository.split('/').length !== 2) {
+	throw new Error(
+		`Invalid GITHUB_REPOSITORY value: "${repository}". Expected "owner/repo".`,
+	);
+}
+const repoUrl = `https://github.com/${repository}`;
+
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://valtteriluomapareto.github.io',
-	base: '/vibe-icloud-photo-export',
+	base: `/${repoName}`,
 	integrations: [
 		starlight({
 			title: 'Photo Export',
@@ -19,12 +32,11 @@ export default defineConfig({
 				{
 					icon: 'github',
 					label: 'GitHub',
-					href: 'https://github.com/valtteriluomapareto/vibe-icloud-photo-export',
+					href: repoUrl,
 				},
 			],
 			editLink: {
-				baseUrl:
-					'https://github.com/valtteriluomapareto/vibe-icloud-photo-export/edit/main/website/src/content/docs/',
+				baseUrl: `${repoUrl}/edit/main/website/src/content/docs/`,
 			},
 			sidebar: [
 				{ label: 'Getting Started', slug: 'getting-started' },

@@ -105,19 +105,17 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    // Asset exists when enqueued but disappears before export
+    // Simulate an asset that exists at enqueue time but disappears before
+    // the export job runs — e.g. the user deleted it from Photos in between.
+    // fetchAssets (used during enqueue) still returns the asset, but
+    // fetchAssetDescriptor (called when the export job runs) returns nil.
     let asset = TestAssetFactory.makeAsset(id: "vanishing-asset")
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["vanishing-asset"] = [resource]
+    photoLib.missingAssetIds = ["vanishing-asset"]
 
     manager.startExportMonth(year: 2025, month: 1)
-
-    // Remove the asset after enqueue but before export runs
-    // We do this by removing from the fake after a tiny delay
-    try? await Task.sleep(nanoseconds: 1_000_000)  // 1ms
-    photoLib.assetsByYearMonth["2025-1"] = []
-
     await waitForQueueDrained(manager)
 
     // Should have recorded a failure

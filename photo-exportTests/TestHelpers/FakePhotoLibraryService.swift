@@ -11,6 +11,10 @@ final class FakePhotoLibraryService: PhotoLibraryService {
 
   // Canned data
   var assetsByYearMonth: [String: [AssetDescriptor]] = [:]
+  /// Asset IDs that fetchAssetDescriptor should treat as missing, even if they
+  /// are present in assetsByYearMonth. Simulates an asset being deleted from the
+  /// Photos library after it was enqueued for export.
+  var missingAssetIds: Set<String> = []
   var resourcesByAssetId: [String: [ResourceDescriptor]] = [:]
   var detailsByAssetId: [String: AssetDetails] = [:]
   var thumbnailsByAssetId: [String: NSImage] = [:]
@@ -58,6 +62,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
+    if missingAssetIds.contains(assetId) { return nil }
     for assets in assetsByYearMonth.values {
       if let found = assets.first(where: { $0.id == assetId }) { return found }
     }

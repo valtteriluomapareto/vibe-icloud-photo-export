@@ -10,13 +10,19 @@ This repository keeps public-facing docs and maintainer-facing notes in separate
 
 ## Maintainer Notes
 
+Active notes (current process and open work):
+
 - [`docs/project/implementation-tasks.md`](project/implementation-tasks.md): open work items
 - [`docs/project/release-process.md`](project/release-process.md): how to cut a release (version bump, tag, publish)
-- [`docs/project/app-store-plan.md`](project/app-store-plan.md): Mac App Store distribution plan
-- [`docs/project/github-actions-publishing-plan.md`](project/github-actions-publishing-plan.md): CI/release workflow planning (implemented — kept as a decision record)
 - [`docs/project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md): backup import design notes (Phase 1 implemented)
-- [`docs/project/refactoring-plan.md`](project/refactoring-plan.md): refactoring decisions (Phases 1–4 complete)
 - [`docs/project/testing-improvement-plan.md`](project/testing-improvement-plan.md): test coverage gaps and improvement plan
+
+Archived planning material (completed or superseded — kept as decision records):
+
+- [`docs/project/archive/app-store-plan.md`](project/archive/app-store-plan.md): pre-launch Mac App Store plan (launched April 2026)
+- [`docs/project/archive/app-store-ci-plan.md`](project/archive/app-store-ci-plan.md): App Store CI workflow plan
+- [`docs/project/archive/github-actions-publishing-plan.md`](project/archive/github-actions-publishing-plan.md): direct-distribution release workflow plan
+- [`docs/project/archive/refactoring-plan.md`](project/archive/refactoring-plan.md): refactoring decisions (Phases 1–4 complete)
 
 ## Reference Material
 

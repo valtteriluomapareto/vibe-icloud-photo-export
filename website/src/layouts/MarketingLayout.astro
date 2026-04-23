@@ -26,19 +26,26 @@ const structuredData = {
 	offers: [
 		{
 			'@type': 'Offer',
+			price: '4.99',
+			priceCurrency: 'EUR',
+			name: 'Mac App Store',
+			url: 'https://apps.apple.com/app/photo-export-local-backup/id6761410742',
+		},
+		{
+			'@type': 'Offer',
 			price: '0',
 			priceCurrency: 'USD',
 			name: 'GitHub Releases (free)',
 			url: 'https://github.com/valtteriluomapareto/photo-export/releases',
 		},
-		// TODO: Add Mac App Store offer once the listing is live
-		// { '@type': 'Offer', price: 'X.XX', priceCurrency: 'USD', name: 'Mac App Store', url: '...' },
 	],
 	license: 'https://opensource.org/licenses/MIT',
 	url: canonicalUrl,
 	image: socialImageUrl,
-	// TODO: Add App Store URL as an additional downloadUrl once the listing is live
-	downloadUrl: 'https://github.com/valtteriluomapareto/photo-export/releases',
+	downloadUrl: [
+		'https://apps.apple.com/app/photo-export-local-backup/id6761410742',
+		'https://github.com/valtteriluomapareto/photo-export/releases',
+	],
 };
 ---
 

@@ -8,7 +8,7 @@ App Store Connect status on 2026-03-31: the first submission has been uploaded m
 
 This document is now a high-level status summary for the Mac App Store launch.
 
-Detailed CI workflow planning lives in `docs/project/app-store-ci-plan.md`.
+Detailed CI workflow planning lives in `app-store-ci-plan.md`.
 
 ## Current Status
 
@@ -71,7 +71,7 @@ Detailed CI workflow planning lives in `docs/project/app-store-ci-plan.md`.
 
 ### Follow-up work after the first launch
 
-- Implement `release-app-store.yml` as described in `docs/project/app-store-ci-plan.md`.
+- Implement `release-app-store.yml` as described in `app-store-ci-plan.md`.
 - Verify that App Store CI works on GitHub-hosted macOS runners before treating it as production-ready.
 
 ## Definition of Done

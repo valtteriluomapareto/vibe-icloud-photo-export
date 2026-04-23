@@ -18,7 +18,7 @@ Photo Export uses only Apple's official PhotoKit API — no private APIs, no rev
 
 Photo Export is available through two channels:
 
-- **Mac App Store** — Coming soon. Automatic updates, trusted distribution. Your purchase supports development of an open-source project.
+- **[Mac App Store](https://apps.apple.com/app/photo-export-local-backup/id6761410742)** — Automatic updates, trusted distribution. Your purchase supports development of an open-source project.
 - **GitHub Releases (free)** — Download the latest `.dmg` from the [GitHub Releases page](https://github.com/valtteriluomapareto/photo-export/releases). Open the DMG and drag Photo Export to your Applications folder.
 
 Both versions are identical in functionality, signed and notarized by Apple.

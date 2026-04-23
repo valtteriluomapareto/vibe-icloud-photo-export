@@ -4,7 +4,7 @@
 
 **Fully implemented.** The release workflow shipped with v1.0.0 and is in active use. This document is kept as a decision record — it explains why the workflow was built the way it was.
 
-Written against the repository state on 2026-03-25. The current release workflow is [`release-direct.yml`](../../.github/workflows/release-direct.yml) and the release process is documented in [`release-process.md`](release-process.md).
+Written against the repository state on 2026-03-25. The current release workflow is [`release-direct.yml`](../../../.github/workflows/release-direct.yml) and the release process is documented in [`release-process.md`](../release-process.md).
 
 For App Store distribution planning, see [`app-store-plan.md`](app-store-plan.md).
 

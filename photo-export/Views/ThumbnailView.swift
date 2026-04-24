@@ -56,6 +56,7 @@ struct ThumbnailView: View {
             Circle()
               .fill(Color.accentColor.opacity(0.95))
               .frame(width: 8, height: 8)
+              .accessibilityLabel("Not yet exported")
             Spacer()
           }
           Spacer()

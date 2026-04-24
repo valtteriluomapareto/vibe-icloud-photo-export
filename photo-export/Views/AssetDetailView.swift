@@ -111,15 +111,12 @@ struct AssetDetailView: View {
         let durationString = String(format: "%.0fs", asset.duration)
         Text("Duration: \(durationString)")
       }
-      let id = asset.id
-      if let export = exportRecordStore.exportInfo(assetId: id) {
-        Text("Edited version: \(asset.hasAdjustments ? "Available" : "No edits")")
+      Text(asset.hasAdjustments ? "Edits: Available in Photos" : "Edits: None in Photos")
+      if let export = exportRecordStore.exportInfo(assetId: asset.id) {
         variantStatusView(export.variants[.original], label: "Original")
         if asset.hasAdjustments {
           variantStatusView(export.variants[.edited], label: "Edited")
         }
-      } else {
-        Text("Edited version: \(asset.hasAdjustments ? "Available" : "No edits")")
       }
     }
     .font(.footnote)
@@ -138,7 +135,17 @@ struct AssetDetailView: View {
       case .inProgress:
         Text("\(label): In progress")
       case .failed:
-        Text("\(label) failed: \(variant.lastError ?? "Unknown error")")
+        if variant.lastError == ExportVariantRecovery.interruptedMessage {
+          // The previous run was interrupted before this variant finished. It will retry
+          // automatically on the next export run — present this as recoverable state rather
+          // than a hard failure so upgraders don't see a wall of red for every mid-run
+          // asset.
+          Text("\(label): Will retry on next export")
+            .foregroundColor(.secondary)
+        } else {
+          Text("\(label) failed: \(variant.lastError ?? "Unknown error")")
+            .foregroundColor(.red)
+        }
       case .pending:
         Text("\(label): Pending")
       }

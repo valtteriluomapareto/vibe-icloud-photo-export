@@ -26,22 +26,32 @@ struct ExportToolbarView: ToolbarContent {
 
   private var versionPicker: some View {
     Picker(
-      "Versions",
+      "Versions to export",
       selection: Binding(
         get: { exportManager.versionSelection },
         set: { exportManager.versionSelection = $0 }
       )
     ) {
       Text("Originals").tag(ExportVersionSelection.originalOnly)
-      Text("Edited").tag(ExportVersionSelection.editedOnly)
-      Text("Originals + edited").tag(ExportVersionSelection.originalAndEdited)
+      Text("Edited versions").tag(ExportVersionSelection.editedOnly)
+      Text("Originals + edited versions").tag(ExportVersionSelection.originalAndEdited)
     }
     .pickerStyle(.menu)
-    .frame(width: 170)
+    .frame(width: 200)
+    .disabled(exportManager.hasActiveExportWork)
     .help(versionPickerHelp)
+    .accessibilityLabel("Versions to export")
+    .accessibilityHint(
+      "Chooses whether originals, edited versions, or both are written. "
+        + "Cannot be changed while an export is running."
+    )
   }
 
   private var versionPickerHelp: String {
+    if exportManager.hasActiveExportWork {
+      return
+        "Locked while an export is running. Pause or cancel the queue to change the version to export."
+    }
     switch exportManager.versionSelection {
     case .originalOnly:
       return "Export original files using the Photos library's original filenames."

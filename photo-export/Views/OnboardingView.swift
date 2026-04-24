@@ -78,6 +78,14 @@ struct OnboardingView: View {
             }
             .pickerStyle(.radioGroup)
             .labelsHidden()
+
+            Text(
+              "Originals only by default. Use the \u{201C}Versions to export\u{201D} "
+                + "picker in the toolbar to also include edited versions."
+            )
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
           }
         }
       }

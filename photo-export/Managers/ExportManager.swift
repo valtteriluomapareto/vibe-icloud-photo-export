@@ -87,12 +87,18 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
+    // Snapshot the active selection synchronously so a picker flip before the async enqueue
+    // lands (after `fetchAssets` returns) cannot change the mode that was visible at click
+    // time. The picker in the toolbar is also gated on `hasActiveExportWork` for clarity, but
+    // this snapshot is the correctness guarantee.
+    let selection = versionSelection
     if !isRunning && !isProcessing { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
       do {
-        try await enqueueMonth(year: year, month: month, generation: gen)
+        try await enqueueMonth(
+          year: year, month: month, selection: selection, generation: gen)
         guard self.generation == gen else { return }
         processQueueIfNeeded()
       } catch {
@@ -104,12 +110,13 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportYear(year: Int) {
+    let selection = versionSelection
     if !isRunning && !isProcessing { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
       do {
-        try await enqueueYear(year: year, generation: gen)
+        try await enqueueYear(year: year, selection: selection, generation: gen)
         guard self.generation == gen else { return }
         processQueueIfNeeded()
       } catch {
@@ -122,6 +129,7 @@ final class ExportManager: ObservableObject {
 
   func startExportAll() {
     guard !isEnqueueingAll else { return }
+    let selection = versionSelection
     isEnqueueingAll = true
     resetProgressCounters()
     let gen = generation
@@ -133,7 +141,7 @@ final class ExportManager: ObservableObject {
       do {
         let allYears = try photoLibraryService.availableYears()
         for year in allYears {
-          try await enqueueYear(year: year, generation: gen)
+          try await enqueueYear(year: year, selection: selection, generation: gen)
           guard self.generation == gen else {
             self.isEnqueueingAll = false
             return
@@ -198,12 +206,13 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Queue Handling
-  private func enqueueMonth(year: Int, month: Int, generation gen: Int) async throws {
+  private func enqueueMonth(
+    year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
+  ) async throws {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
-    let selection = versionSelection
     let newJobs: [ExportJob] = assets.compactMap { asset in
       guard shouldEnqueue(asset: asset, selection: selection) else { return nil }
       return ExportJob(
@@ -216,13 +225,14 @@ final class ExportManager: ObservableObject {
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
   }
 
-  private func enqueueYear(year: Int, generation gen: Int) async throws {
+  private func enqueueYear(
+    year: Int, selection: ExportVersionSelection, generation gen: Int
+  ) async throws {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
     let calendar = Calendar.current
-    let selection = versionSelection
     var newJobs: [ExportJob] = []
     newJobs.reserveCapacity(assets.count)
     for asset in assets {

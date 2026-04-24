@@ -7,6 +7,7 @@ struct OnboardingView: View {
   let onSkip: () -> Void
 
   @State private var exportAll = true
+  @State private var versionSelection: ExportVersionSelection = .originalOnly
 
   var body: some View {
     VStack(spacing: 24) {
@@ -68,7 +69,7 @@ struct OnboardingView: View {
             .frame(width: 28, height: 28)
             .background(Circle().fill(Color.accentColor))
 
-          VStack(alignment: .leading, spacing: 6) {
+          VStack(alignment: .leading, spacing: 10) {
             Text("Choose what to export")
               .font(.headline)
 
@@ -79,13 +80,26 @@ struct OnboardingView: View {
             .pickerStyle(.radioGroup)
             .labelsHidden()
 
-            Text(
-              "Originals only by default. Use the \u{201C}Versions to export\u{201D} "
-                + "picker in the toolbar to also include edited versions."
-            )
-            .font(.caption)
-            .foregroundColor(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Versions to export")
+                .font(.subheadline)
+              Picker("Versions to export", selection: $versionSelection) {
+                Text("Originals").tag(ExportVersionSelection.originalOnly)
+                Text("Edited versions").tag(ExportVersionSelection.editedOnly)
+                Text("Originals + edited versions")
+                  .tag(ExportVersionSelection.originalAndEdited)
+              }
+              .pickerStyle(.menu)
+              .labelsHidden()
+              .frame(maxWidth: 260, alignment: .leading)
+              Text(
+                "Edited versions export the current Photos edits side-by-side with originals "
+                  + "using an _edited suffix. You can change this later in the toolbar."
+              )
+              .font(.caption)
+              .foregroundColor(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            }
           }
         }
       }
@@ -99,6 +113,9 @@ struct OnboardingView: View {
         .buttonStyle(.borderless)
 
         Button(exportAll ? "Start Export" : "Continue") {
+          // Apply the chosen versions first so the export kicked off below uses the
+          // selection the user made here, not the persisted default.
+          exportManager.versionSelection = versionSelection
           if exportAll && exportDestinationManager.canExportNow {
             exportManager.startExportAll()
           }

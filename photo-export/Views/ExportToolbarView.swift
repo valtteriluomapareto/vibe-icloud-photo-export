@@ -49,8 +49,11 @@ struct ExportToolbarView: ToolbarContent {
 
   private var versionPickerHelp: String {
     if exportManager.hasActiveExportWork {
+      // Pausing leaves queueCount > 0 which keeps the picker locked; the only ways to
+      // unlock are cancelling the queue or letting it drain. The hint needs to be accurate
+      // so the user doesn't chase an option that won't help.
       return
-        "Locked while an export is running. Pause or cancel the queue to change the version to export."
+        "Locked while an export is running. Cancel the queue or wait for it to finish to change the version to export."
     }
     switch exportManager.versionSelection {
     case .originalOnly:

@@ -5,7 +5,8 @@ This document explains how the app persists export status for Photos assets.
 ## Overview
 
 - The app tracks exports by the Photos `PHAsset.localIdentifier`.
-- Each exported asset has an `ExportRecord` containing year, month, relative path, filename, status, and timestamps.
+- Each exported asset has an `ExportRecord` containing year, month, relative path, and a
+  per-variant state dictionary. Variants are `original` and `edited`.
 - The store persists data using an append-only JSON Lines log and a compact snapshot.
 
 ## Files & Locations
@@ -22,7 +23,10 @@ This document explains how the app persists export status for Photos assets.
   - `id` (String) — `PHAsset.localIdentifier`
   - `year` (Int), `month` (Int)
   - `relPath` (String) — relative export folder, e.g. `2025/02/`
-  - `filename` (String?) — exported filename
+  - `variants` (Object) — keyed by variant name (`original`, `edited`), each value an
+    `ExportVariantRecord`
+- `ExportVariantRecord` (JSON):
+  - `filename` (String?) — final exported filename for that variant
   - `status` (String) — `pending` | `inProgress` | `done` | `failed`
   - `exportDate` (ISO8601 date)
   - `lastError` (String?)
@@ -30,6 +34,25 @@ This document explains how the app persists export status for Photos assets.
   - `op` — `upsert` | `delete`
   - `id` — asset id
   - `record` — present on `upsert`, omitted on `delete`
+
+### Legacy schema migration
+
+Records produced before per-variant state decoded as a flat object with `filename`, `status`,
+`exportDate`, and `lastError` at the top level. The decoder recognises this shape and
+synthesises a single `.original` variant:
+
+- Legacy `.done` becomes `.original` done.
+- Legacy `.failed` becomes `.original` failed.
+- Legacy `.pending` becomes `.original` pending.
+- Legacy `.inProgress` becomes `.original` failed with the message
+  `Interrupted before completion`. No in-progress state survives app restart.
+
+Any variant (new schema or migrated legacy) left as `.inProgress` at load time is also
+converted to `.failed` with the same interrupted message — this keeps progress tracking
+recoverable after crashes and force-quits.
+
+Encoding always emits the current schema. Legacy fields are dropped on the next write or
+compaction.
 
 ## Lifecycle
 
@@ -51,12 +74,17 @@ This document explains how the app persists export status for Photos assets.
 
 ## Querying Status
 
-- `isExported(assetId)` returns if an asset has `status == done`.
-- `exportInfo(assetId)` returns the full record.
-- `monthSummary(year, month, totalAssets)` computes:
-  - `exportedCount`: number of `done` records for that month/year
-  - `totalCount`: caller-provided total assets for the month
-  - `status`: `notExported` | `partial` | `complete`
+- `isExported(assetId:)` returns whether the `.original` variant is `done` — a convenience shim
+  for legacy call sites.
+- `isExported(asset:selection:)` evaluates completion under the active version selection and the
+  asset's current `hasAdjustments`.
+- `exportInfo(assetId:)` returns the full record; callers inspect
+  `record.variants[.original]` and `record.variants[.edited]` directly.
+- `monthSummary(assets:selection:)` computes an asset-based summary for a selected month by
+  checking each asset's required variants.
+- `sidebarSummary(year:month:totalCount:adjustedCount:selection:)` computes an approximate
+  summary for sidebar rows that do not have loaded `AssetDescriptor`s, using counts of records
+  whose `.original` or `.edited` variant is `done`.
 
 ## Error Handling
 
@@ -65,8 +93,10 @@ This document explains how the app persists export status for Photos assets.
 
 ## Migrations
 
-- Future schema changes can be handled by reading both the snapshot and the log using compatible decoders.
-- A migration step can write a new snapshot format and clear/truncate the log.
+- Schema changes are handled by reading both the snapshot and the log using compatible
+  decoders. The current decoder handles both the flat legacy record shape and the new
+  per-variant shape.
+- The next full compaction writes the current schema and drops legacy fields.
 
 ## Notes
 

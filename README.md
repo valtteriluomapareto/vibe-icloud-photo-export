@@ -14,6 +14,10 @@ The project is intentionally small: SwiftUI on top, system frameworks only, and 
 - Browse your library by year and month
 - Preview thumbnails and selected assets
 - Export a month, a year, or the full queue without overwriting existing files
+- Choose which versions to export: originals, edited versions, or both. Edited exports only
+  apply to assets that have edits in Photos, and use an `_edited` suffix
+  (e.g. `IMG_0001_edited.JPG`) — the edited file may use a different extension from the
+  original when Photos renders the edit in another format
 - Track exported assets per destination so interrupted exports can resume safely
 - Pause, resume, cancel, and clear queued work
 - Import an existing backup folder to rebuild local export state on a fresh install

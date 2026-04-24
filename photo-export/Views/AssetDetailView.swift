@@ -113,23 +113,36 @@ struct AssetDetailView: View {
       }
       let id = asset.id
       if let export = exportRecordStore.exportInfo(assetId: id) {
-        switch export.status {
-        case .done:
-          if let when = export.exportDate {
-            Text("Exported: \(dateTimeFormatter.string(from: when))")
-          } else {
-            Text("Exported")
-          }
-        case .inProgress:
-          Text("Export: In progress")
-        case .failed:
-          Text("Export failed: \(export.lastError ?? "Unknown error")")
-        case .pending:
-          Text("Export: Pending")
+        Text("Edited version: \(asset.hasAdjustments ? "Available" : "No edits")")
+        variantStatusView(export.variants[.original], label: "Original")
+        if asset.hasAdjustments {
+          variantStatusView(export.variants[.edited], label: "Edited")
         }
+      } else {
+        Text("Edited version: \(asset.hasAdjustments ? "Available" : "No edits")")
       }
     }
     .font(.footnote)
+  }
+
+  @ViewBuilder
+  private func variantStatusView(_ variant: ExportVariantRecord?, label: String) -> some View {
+    if let variant {
+      switch variant.status {
+      case .done:
+        if let when = variant.exportDate {
+          Text("\(label): Exported \(dateTimeFormatter.string(from: when))")
+        } else {
+          Text("\(label): Exported")
+        }
+      case .inProgress:
+        Text("\(label): In progress")
+      case .failed:
+        Text("\(label) failed: \(variant.lastError ?? "Unknown error")")
+      case .pending:
+        Text("\(label): Pending")
+      }
+    }
   }
 
   private func mediaTypeString(from type: PHAssetMediaType) -> String {

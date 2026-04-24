@@ -10,7 +10,8 @@ enum TestAssetFactory {
     mediaType: PHAssetMediaType = .image,
     pixelWidth: Int = 4032,
     pixelHeight: Int = 3024,
-    duration: TimeInterval = 0
+    duration: TimeInterval = 0,
+    hasAdjustments: Bool = false
   ) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
@@ -18,7 +19,8 @@ enum TestAssetFactory {
       mediaType: mediaType,
       pixelWidth: pixelWidth,
       pixelHeight: pixelHeight,
-      duration: duration
+      duration: duration,
+      hasAdjustments: hasAdjustments
     )
   }
 

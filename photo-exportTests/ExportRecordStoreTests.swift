@@ -25,7 +25,7 @@ struct ExportRecordStoreTests {
         store.flushForTesting()
         #expect(store.isExported(assetId: id))
         let info = store.exportInfo(assetId: id)
-        #expect(info?.filename == "IMG_0001.JPG")
+        #expect(info?.variants[.original]?.filename == "IMG_0001.JPG")
         #expect(info?.year == 2025)
         #expect(info?.month == 2)
     }
@@ -61,8 +61,8 @@ struct ExportRecordStoreTests {
         store.markFailed(assetId: id, error: "network", at: Date())
         store.flushForTesting()
         let info = store.exportInfo(assetId: id)
-        #expect(info?.status == .failed)
-        #expect(info?.lastError == "network")
+        #expect(info?.variants[.original]?.status == .failed)
+        #expect(info?.variants[.original]?.lastError == "network")
     }
 
     @Test func testPersistenceAcrossLaunchesAndDeletion() throws {
@@ -81,7 +81,7 @@ struct ExportRecordStoreTests {
         // New instance, same root and destination id
         let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
         store2.configure(for: "destA")
-        #expect(store2.exportInfo(assetId: "x2")?.status == .done)
+        #expect(store2.exportInfo(assetId: "x2")?.variants[.original]?.status == .done)
         #expect(store2.exportInfo(assetId: "x1") == nil)
     }
 
@@ -93,14 +93,14 @@ struct ExportRecordStoreTests {
         store.markInProgress(
             assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "tmp.mov")
         store.flushForTesting()
-        #expect(store.exportInfo(assetId: "t1")?.status == .inProgress)
+        #expect(store.exportInfo(assetId: "t1")?.variants[.original]?.status == .inProgress)
         store.markExported(
             assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "final.mov",
             exportedAt: Date())
         store.flushForTesting()
         let rec = store.exportInfo(assetId: "t1")
-        #expect(rec?.status == .done)
-        #expect(rec?.filename == "final.mov")
+        #expect(rec?.variants[.original]?.status == .done)
+        #expect(rec?.variants[.original]?.filename == "final.mov")
     }
 
     @Test func testCorruptedLogLineIsSkipped() throws {
@@ -122,7 +122,7 @@ struct ExportRecordStoreTests {
         // Reload - invalid line should be skipped, valid records preserved
         let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
         store2.configure(for: destId)
-        #expect(store2.exportInfo(assetId: "ok")?.status == .done)
+        #expect(store2.exportInfo(assetId: "ok")?.variants[.original]?.status == .done)
     }
 
     @Test func testPerDestinationIsolation() throws {

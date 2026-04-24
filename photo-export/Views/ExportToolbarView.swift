@@ -10,11 +10,46 @@ struct ExportToolbarView: ToolbarContent {
     }
 
     ToolbarItem(placement: .automatic) {
+      versionPicker
+    }
+
+    ToolbarItem(placement: .automatic) {
       primaryActions
     }
 
     ToolbarItem(placement: .automatic) {
       progressIndicator
+    }
+  }
+
+  // MARK: - Version Picker
+
+  private var versionPicker: some View {
+    Picker(
+      "Versions",
+      selection: Binding(
+        get: { exportManager.versionSelection },
+        set: { exportManager.versionSelection = $0 }
+      )
+    ) {
+      Text("Originals").tag(ExportVersionSelection.originalOnly)
+      Text("Edited").tag(ExportVersionSelection.editedOnly)
+      Text("Originals + edited").tag(ExportVersionSelection.originalAndEdited)
+    }
+    .pickerStyle(.menu)
+    .frame(width: 170)
+    .help(versionPickerHelp)
+  }
+
+  private var versionPickerHelp: String {
+    switch exportManager.versionSelection {
+    case .originalOnly:
+      return "Export original files using the Photos library's original filenames."
+    case .editedOnly:
+      return "Export only the current edited version of assets that have Photos edits."
+    case .originalAndEdited:
+      return
+        "Export originals plus a separate _edited file for each asset that has Photos edits."
     }
   }
 
@@ -62,11 +97,7 @@ struct ExportToolbarView: ToolbarContent {
       }
       .buttonStyle(.borderedProminent)
       .disabled(!exportDestinationManager.canExportNow || exportManager.isImporting)
-      .help(
-        exportDestinationManager.canExportNow
-          ? "Export all unexported photos and videos"
-          : "Select a writable export folder first"
-      )
+      .help(exportAllHelpText)
 
       Button {
         if exportManager.isPaused {
@@ -89,6 +120,20 @@ struct ExportToolbarView: ToolbarContent {
       .help("Cancel and clear queue")
       .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
       .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
+    }
+  }
+
+  private var exportAllHelpText: String {
+    guard exportDestinationManager.canExportNow else {
+      return "Select a writable export folder first"
+    }
+    switch exportManager.versionSelection {
+    case .originalOnly:
+      return "Export originals for all unexported assets."
+    case .editedOnly:
+      return "Export the edited version of all assets that have Photos edits."
+    case .originalAndEdited:
+      return "Export originals plus edited versions where Photos has edits."
     }
   }
 

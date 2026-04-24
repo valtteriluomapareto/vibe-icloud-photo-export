@@ -30,6 +30,10 @@ struct ExportPipelineTests {
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
 
+    // Clear the persisted version selection so ExportManager starts at its default
+    // regardless of what a sibling test suite may have written.
+    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -88,8 +92,8 @@ struct ExportPipelineTests {
     // Verify record marked as done
     #expect(store.isExported(assetId: "asset-1"))
     let record = store.exportInfo(assetId: "asset-1")
-    #expect(record?.status == .done)
-    #expect(record?.filename == "IMG_0001.JPG")
+    #expect(record?.variants[.original]?.status == .done)
+    #expect(record?.variants[.original]?.filename == "IMG_0001.JPG")
     #expect(record?.year == 2025)
     #expect(record?.month == 6)
 
@@ -120,8 +124,8 @@ struct ExportPipelineTests {
 
     // Should have recorded a failure
     let record = store.exportInfo(assetId: "vanishing-asset")
-    #expect(record?.status == .failed)
-    #expect(record?.lastError == "Asset not found")
+    #expect(record?.variants[.original]?.status == .failed)
+    #expect(record?.variants[.original]?.lastError == "Asset not found")
 
     // Resource writer should not have been called
     #expect(writer.writeCalls.isEmpty)
@@ -141,8 +145,8 @@ struct ExportPipelineTests {
     await waitForQueueDrained(manager)
 
     let record = store.exportInfo(assetId: "no-resource-asset")
-    #expect(record?.status == .failed)
-    #expect(record?.lastError == "No exportable resource")
+    #expect(record?.variants[.original]?.status == .failed)
+    #expect(record?.variants[.original]?.lastError == "No exportable resource")
     #expect(writer.writeCalls.isEmpty)
   }
 
@@ -166,8 +170,8 @@ struct ExportPipelineTests {
     await waitForQueueDrained(manager)
 
     let record = store.exportInfo(assetId: "write-fail-asset")
-    #expect(record?.status == .failed)
-    #expect(record?.lastError?.contains("Disk full") == true)
+    #expect(record?.variants[.original]?.status == .failed)
+    #expect(record?.variants[.original]?.lastError?.contains("Disk full") == true)
 
     // Verify no .tmp files left behind (defer cleanup should have run)
     let monthDir = try dest.urlForMonth(year: 2025, month: 4, createIfNeeded: false)
@@ -195,8 +199,8 @@ struct ExportPipelineTests {
     await waitForQueueDrained(manager)
 
     let record = store.exportInfo(assetId: "move-fail-asset")
-    #expect(record?.status == .failed)
-    #expect(record?.lastError?.contains("Permission denied") == true)
+    #expect(record?.variants[.original]?.status == .failed)
+    #expect(record?.variants[.original]?.lastError?.contains("Permission denied") == true)
 
     // Verify the .tmp file was cleaned up by the defer block
     let monthDir = try dest.urlForMonth(year: 2025, month: 5, createIfNeeded: false)
@@ -415,8 +419,8 @@ struct ExportPipelineTests {
 
     let rec1 = store.exportInfo(assetId: "multi-1")
     let rec2 = store.exportInfo(assetId: "multi-2")
-    #expect(rec1?.filename == "IMG_001.JPG")
-    #expect(rec2?.filename == "IMG_002.JPG")
+    #expect(rec1?.variants[.original]?.filename == "IMG_001.JPG")
+    #expect(rec2?.variants[.original]?.filename == "IMG_002.JPG")
     #expect(rec1?.relPath == "2025/03/")
     #expect(rec2?.relPath == "2025/03/")
   }

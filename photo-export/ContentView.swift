@@ -23,6 +23,7 @@ struct ContentView: View {
   @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
   @State private var assetCountsByYearMonth: [String: Int] = [:]
   @State private var assetCountsByYear: [Int: Int] = [:]
+  @State private var adjustedCountsByYearMonth: [String: Int] = [:]
 
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -68,12 +69,21 @@ struct ContentView: View {
                         year: year,
                         month: month,
                         total: assetCountsByYearMonth["\(year)-\(month)"]
-                          ?? 0
+                          ?? 0,
+                        adjusted: adjustedCountsByYearMonth["\(year)-\(month)"]
                       )
                       .tag(YearMonth(year: year, month: month))
+                      .task(id: "\(year)-\(month)-adjusted") {
+                        await loadAdjustedCount(year: year, month: month)
+                      }
                     }
                   } label: {
-                    YearRow(year: year, totalAssets: assetCountsByYear[year] ?? 0)
+                    YearRow(
+                      year: year,
+                      totalAssets: assetCountsByYear[year] ?? 0,
+                      totalCountsByMonth: monthTotals(for: year),
+                      adjustedCountsByMonth: adjustedMonths(for: year)
+                    )
                   }
                 }
               }
@@ -103,7 +113,8 @@ struct ContentView: View {
             AssetDetailView(asset: selectedAsset)
               .environmentObject(photoLibraryManager)
               .frame(maxWidth: .infinity, maxHeight: .infinity)
-          })
+          }
+        )
         .toolbar {
           ExportToolbarView()
         }
@@ -158,10 +169,14 @@ struct ContentView: View {
       // Clear asset selection when month changes
       selectedAsset = nil
     }
-    .focusedSceneValue(\.importBackupAction, canImport ? ImportBackupAction {
-      isShowingImportSheet = true
-      exportManager.startImport()
-    } : nil)
+    .focusedSceneValue(
+      \.importBackupAction,
+      canImport
+        ? ImportBackupAction {
+          isShowingImportSheet = true
+          exportManager.startImport()
+        } : nil
+    )
     .frame(minWidth: 900, minHeight: 600)
     .background(Color(.windowBackgroundColor))
   }
@@ -190,6 +205,30 @@ struct ContentView: View {
       }
     }
     return months
+  }
+
+  private func loadAdjustedCount(year: Int, month: Int) async {
+    let key = "\(year)-\(month)"
+    guard adjustedCountsByYearMonth[key] == nil else { return }
+    if let count = try? await photoLibraryManager.countAdjustedAssets(year: year, month: month) {
+      adjustedCountsByYearMonth[key] = count
+    }
+  }
+
+  private func monthTotals(for year: Int) -> [Int: Int] {
+    var map: [Int: Int] = [:]
+    for month in 1...12 {
+      map[month] = assetCountsByYearMonth["\(year)-\(month)"] ?? 0
+    }
+    return map
+  }
+
+  private func adjustedMonths(for year: Int) -> [Int: Int?] {
+    var map: [Int: Int?] = [:]
+    for month in 1...12 {
+      map[month] = adjustedCountsByYearMonth["\(year)-\(month)"]
+    }
+    return map
   }
 }
 
@@ -246,15 +285,21 @@ struct AuthorizationView: View {
 }
 
 struct YearRow: View {
+  @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
   let year: Int
   let totalAssets: Int
+  let totalCountsByMonth: [Int: Int]
+  let adjustedCountsByMonth: [Int: Int?]
 
   var body: some View {
-    let exported = exportRecordStore.yearExportedCount(year: year)
-    let total = totalAssets
-    HStack(spacing: 8) {
+    let selection = exportManager.versionSelection
+    let exported = exportRecordStore.sidebarYearExportedCount(
+      year: year, totalCountsByMonth: totalCountsByMonth,
+      adjustedCountsByMonth: adjustedCountsByMonth, selection: selection)
+    let total = yearTotal(for: selection)
+    return HStack(spacing: 8) {
       Text(verbatim: String(year))
       Spacer()
       if total > 0 && exported > 0 {
@@ -271,6 +316,15 @@ struct YearRow: View {
       }
     }
   }
+
+  private func yearTotal(for selection: ExportVersionSelection) -> Int {
+    switch selection {
+    case .originalOnly, .originalAndEdited:
+      return totalAssets
+    case .editedOnly:
+      return adjustedCountsByMonth.values.reduce(0) { $0 + (($1 ?? 0)) }
+    }
+  }
 }
 
 struct MonthRow: View {
@@ -280,9 +334,13 @@ struct MonthRow: View {
   let year: Int
   let month: Int
   let total: Int
+  let adjusted: Int?
 
   var body: some View {
-    let summary = exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
+    let selection = exportManager.versionSelection
+    let summary = exportRecordStore.sidebarSummary(
+      year: year, month: month, totalCount: total, adjustedCount: adjusted,
+      selection: selection)
     let queued = exportManager.queuedCount(year: year, month: month)
     return HStack(spacing: 8) {
       Text(MonthFormatting.name(for: month))
@@ -294,7 +352,7 @@ struct MonthRow: View {
         Text("\(queued) left")
           .font(.caption2)
           .foregroundColor(.orange)
-      } else if total > 0 {
+      } else if total > 0, let summary {
         switch summary.status {
         case .complete:
           Image(systemName: "checkmark.seal.fill")
@@ -309,6 +367,10 @@ struct MonthRow: View {
             .foregroundColor(.secondary)
             .font(.caption)
         }
+      } else if total > 0 {
+        // Adjusted count is still loading under a selection that needs it; show a neutral
+        // dash so the row doesn't flicker between 0/0 and the real value.
+        Text("…").foregroundColor(.secondary).font(.caption)
       }
     }
     .contentShape(Rectangle())

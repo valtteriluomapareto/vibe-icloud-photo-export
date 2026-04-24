@@ -194,10 +194,16 @@ struct BackupScannerTests {
     let records = [
       ExportRecord(
         id: "asset-1", year: 2024, month: 3, relPath: "2024/03/",
-        filename: "IMG_0001.jpg", status: .done, exportDate: Date(), lastError: nil),
+        variants: [
+          .original: ExportVariantRecord(
+            filename: "IMG_0001.jpg", status: .done, exportDate: Date(), lastError: nil)
+        ]),
       ExportRecord(
         id: "asset-2", year: 2024, month: 3, relPath: "2024/03/",
-        filename: "IMG_0002.jpg", status: .done, exportDate: Date(), lastError: nil),
+        variants: [
+          .original: ExportVariantRecord(
+            filename: "IMG_0002.jpg", status: .done, exportDate: Date(), lastError: nil)
+        ]),
     ]
     store.bulkImportRecords(records)
     store.flushForTesting()
@@ -224,13 +230,17 @@ struct BackupScannerTests {
     let records = [
       ExportRecord(
         id: "asset-1", year: 2024, month: 3, relPath: "2024/03/",
-        filename: "different.jpg", status: .done, exportDate: Date(), lastError: nil)
+        variants: [
+          .original: ExportVariantRecord(
+            filename: "different.jpg", status: .done, exportDate: Date(), lastError: nil)
+        ])
     ]
     store.bulkImportRecords(records)
     store.flushForTesting()
 
     // Original should be preserved
-    #expect(store.exportInfo(assetId: "asset-1")?.filename == "original.jpg")
+    #expect(
+      store.exportInfo(assetId: "asset-1")?.variants[.original]?.filename == "original.jpg")
   }
 
   @MainActor
@@ -247,14 +257,19 @@ struct BackupScannerTests {
     let records = [
       ExportRecord(
         id: "asset-1", year: 2024, month: 3, relPath: "2024/03/",
-        filename: "imported.jpg", status: .done, exportDate: Date(), lastError: nil)
+        variants: [
+          .original: ExportVariantRecord(
+            filename: "imported.jpg", status: .done, exportDate: Date(), lastError: nil)
+        ])
     ]
     store.bulkImportRecords(records)
     store.flushForTesting()
 
     // Should be overwritten since the previous status was .failed
-    #expect(store.exportInfo(assetId: "asset-1")?.status == .done)
-    #expect(store.exportInfo(assetId: "asset-1")?.filename == "imported.jpg")
+    #expect(
+      store.exportInfo(assetId: "asset-1")?.variants[.original]?.status == .done)
+    #expect(
+      store.exportInfo(assetId: "asset-1")?.variants[.original]?.filename == "imported.jpg")
   }
 
   // MARK: - Helpers

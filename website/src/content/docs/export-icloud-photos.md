@@ -34,10 +34,18 @@ Click **Choose Folder** and select your external hard drive or any local folder.
 
 Use the year/month sidebar to browse your library. You can preview thumbnails and inspect individual photos before exporting. When you're ready:
 
+- Use the **Versions** picker in the toolbar to choose **Originals**, **Edited versions**, or
+  **Originals + edited versions**. Original exports keep their original filenames
+  (`IMG_0001.HEIC`). Edited exports add an `_edited` suffix (`IMG_0001_edited.JPG`) and may
+  use a different extension when Photos renders the edit in another format — a HEIC original
+  with a JPEG rendered edit writes both files side by side.
 - To export a single month, navigate to it and click **Export Month**.
 - To export your entire library, click **Export All** in the toolbar.
 
-The app copies original files into an organized `Year/Month/` folder structure on your chosen drive. If any photos are stored only in iCloud, the app automatically downloads the originals during export.
+The app copies the selected version(s) into an organized `Year/Month/` folder structure on
+your chosen drive. If any photos are stored only in iCloud, the app automatically downloads
+the originals during export. Edited output only applies to assets that have edits in
+Photos; unedited assets are not duplicated.
 
 ## Resuming an interrupted export
 

@@ -337,19 +337,14 @@ struct YearRow: View {
 
   @ViewBuilder
   private func completionBadge(selection: ExportVersionSelection) -> some View {
-    HStack(spacing: 3) {
-      Image(systemName: "checkmark.seal.fill")
-        .foregroundColor(.green)
-        .font(.caption)
-      if selection == .editedOnly {
-        // Disambiguate the green seal from the originalOnly / originalAndEdited cases;
-        // under editedOnly it only means "all *adjusted* assets are exported" — unedited
-        // assets are intentionally not part of this selection's denominator.
-        Text("edited")
-          .foregroundColor(.secondary)
-          .font(.caption2)
-      }
-    }
+    // The same green check is used across all three selections; the surrounding partial /
+    // not-exported states still carry an explicit "edited" qualifier under `editedOnly`,
+    // and the active toolbar picker tells the user which mode this row's completion
+    // applies to. `seal.fill` is reserved Apple vocabulary for verification (App Store
+    // verified developer etc.) and should not be used for generic task completion.
+    Image(systemName: "checkmark.circle.fill")
+      .foregroundColor(.green)
+      .font(.caption)
   }
 
   private func yearTooltip(
@@ -402,16 +397,12 @@ struct MonthRow: View {
         let isEditedOnly = selection == .editedOnly
         switch summary.status {
         case .complete:
-          HStack(spacing: 3) {
-            Image(systemName: "checkmark.seal.fill")
-              .foregroundColor(.green)
-              .font(.caption)
-            if isEditedOnly {
-              Text("edited")
-                .foregroundColor(.secondary)
-                .font(.caption2)
-            }
-          }
+          // Same green check across modes — the partial / not-exported counts on the same
+          // row already carry the "edited" qualifier when the selection is editedOnly, and
+          // the toolbar picker tells the user which mode this row's completion applies to.
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundColor(.green)
+            .font(.caption)
         case .partial:
           Text(
             isEditedOnly

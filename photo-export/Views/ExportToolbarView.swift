@@ -25,6 +25,9 @@ struct ExportToolbarView: ToolbarContent {
   // MARK: - Version Picker
 
   private var versionPicker: some View {
+    // Three short, mutually exclusive states is the textbook segmented case per HIG. With
+    // every option visible, no tooltip is needed to explain hidden choices and the
+    // localisation footprint is just three short labels.
     Picker(
       "Versions to export",
       selection: Binding(
@@ -33,36 +36,28 @@ struct ExportToolbarView: ToolbarContent {
       )
     ) {
       Text("Originals").tag(ExportVersionSelection.originalOnly)
-      Text("Edited versions").tag(ExportVersionSelection.editedOnly)
-      Text("Originals + edited versions").tag(ExportVersionSelection.originalAndEdited)
+      Text("Edited").tag(ExportVersionSelection.editedOnly)
+      Text("Both").tag(ExportVersionSelection.originalAndEdited)
     }
-    .pickerStyle(.menu)
-    .frame(width: 200)
+    .pickerStyle(.segmented)
+    .fixedSize()
     .disabled(exportManager.hasActiveExportWork)
     .help(versionPickerHelp)
     .accessibilityLabel("Versions to export")
-    .accessibilityHint(
-      "Chooses whether originals, edited versions, or both are written. "
-        + "Cannot be changed while an export is running."
-    )
+    .accessibilityHint("Choose between originals, edited versions, or both.")
   }
 
   private var versionPickerHelp: String {
     if exportManager.hasActiveExportWork {
-      // Pausing leaves queueCount > 0 which keeps the picker locked; the only ways to
-      // unlock are cancelling the queue or letting it drain. The hint needs to be accurate
-      // so the user doesn't chase an option that won't help.
-      return
-        "Locked while an export is running. Cancel the queue or wait for it to finish to change the version to export."
+      return "Available after the current export finishes."
     }
     switch exportManager.versionSelection {
     case .originalOnly:
-      return "Export original files using the Photos library's original filenames."
+      return "Export original files at their Photos filenames."
     case .editedOnly:
-      return "Export only the current edited version of assets that have Photos edits."
+      return "Export the current edited version of assets that have edits in Photos."
     case .originalAndEdited:
-      return
-        "Export originals plus a separate _edited file for each asset that has Photos edits."
+      return "Export originals plus a separate _edited file when Photos has edits."
     }
   }
 

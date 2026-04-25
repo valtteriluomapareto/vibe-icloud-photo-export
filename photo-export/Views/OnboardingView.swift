@@ -85,16 +85,18 @@ struct OnboardingView: View {
                 .font(.subheadline)
               Picker("Versions to export", selection: $versionSelection) {
                 Text("Originals").tag(ExportVersionSelection.originalOnly)
-                Text("Edited versions").tag(ExportVersionSelection.editedOnly)
-                Text("Originals + edited versions")
-                  .tag(ExportVersionSelection.originalAndEdited)
+                Text("Edited").tag(ExportVersionSelection.editedOnly)
+                Text("Both").tag(ExportVersionSelection.originalAndEdited)
               }
-              .pickerStyle(.menu)
+              .pickerStyle(.segmented)
               .labelsHidden()
-              .frame(maxWidth: 260, alignment: .leading)
+              .fixedSize()
+              // Onboarding is the one moment this is guaranteed to be read; keep a single
+              // sentence that explains why "Edited" / "Both" produce extra files. The full
+              // explanation lives in the website docs and the toolbar tooltips.
               Text(
-                "Edited versions export the current Photos edits side-by-side with originals "
-                  + "using an _edited suffix. You can change this later in the toolbar."
+                "Edited versions are saved with an _edited suffix. "
+                  + "You can change this later in the toolbar."
               )
               .font(.caption)
               .foregroundColor(.secondary)

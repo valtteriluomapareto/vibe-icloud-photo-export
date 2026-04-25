@@ -114,15 +114,19 @@ struct MonthContentView: View {
     return HStack(spacing: 8) {
       switch summary.status {
       case .complete:
+        // `seal.fill` is Apple vocabulary for verification, not generic task completion;
+        // `circle.fill` is the right glyph and matches the rest of the app.
         Label(
           "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "checkmark.seal.fill"
+          systemImage: "checkmark.circle.fill"
         )
         .foregroundColor(.green)
       case .partial:
+        // `arrow.triangle.2.circlepath` reads as "syncing / refreshing"; for a static
+        // partial state use the half-filled circle so the glyph means "in between".
         Label(
           "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "arrow.triangle.2.circlepath"
+          systemImage: "circle.lefthalf.filled"
         )
         .foregroundColor(.orange)
       case .notExported:

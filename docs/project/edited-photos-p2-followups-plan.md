@@ -5,10 +5,30 @@ Parent: `docs/project/support-edited-photos-export-plan.md`
 Issue: https://github.com/valtteriluomapareto/photo-export/issues/13
 PR: https://github.com/valtteriluomapareto/photo-export/pull/14
 
-> **Status:** Reviewed by Codex. Recommendations have been revised on items
-> #2, #3, and #5; see the **Final recommendation** sub-section under each.
-> A separate design bug Codex caught is captured under
-> _Cross-cutting concerns_.
+> **Status:** Implemented. All five P2 items shipped on the
+> `issue-13-support-exporting-edited-photos` branch in commits following
+> the design pass; see **Implementation status** below for file:line
+> pointers and the post-implementation Codex review notes.
+
+## Implementation status
+
+All five items landed. The post-implementation Codex review surfaced one
+additional issue under #2 — `editedOnly` over a scope with no adjusted
+assets was conflated with "already exported." Fixed before the commit by
+introducing an `EnqueueOutcome` discriminated union so the toolbar can
+say "no edited versions to export" distinct from "already exported."
+
+| # | Status | Pointers |
+|---|---|---|
+| #1 | **Implemented** | `ExportToolbarView.swift` `progressIndicator` + `progressCountTooltip` |
+| #2 | **Implemented** | `ExportManager.swift` `EnqueueOutcome` / `noApplicableCopy` + toolbar slot in `ExportToolbarView.swift`; clearing rules wired through `versionSelection` `didSet`, `cancelAndClear`, and every `startExport*` |
+| #3 | **Implemented** | `ContentView.swift` `YearRow.completionBadge` / `MonthRow` mode-qualified rendering + `yearTotal` returns `Int?` to suppress the year badge while adjusted counts are still loading |
+| #4 | **Implemented** | `ExportRecord.swift` `ExportVariantRecovery` enum with `editedResourceUnavailableMessage`, `isRecoverable`, `friendlyCopy`; `AssetDetailView.swift` renders the friendly copy in `.secondary` for known recoverable cases |
+| #5 | **Implemented** | `ThumbnailView.swift` composed `accessibilityLabel`, `.contain` element, `.isButton` / `.isSelected` traits, macOS-neutral hint, `accessibilityHidden(true)` on decorative children |
+
+Tests: 17 new test cases across `ExportVariantRecoveryTests`,
+`EmptyRunMessageTests`, and the existing pipeline suites, all passing
+(152 tests total).
 
 ## Context
 

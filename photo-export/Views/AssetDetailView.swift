@@ -135,12 +135,12 @@ struct AssetDetailView: View {
       case .inProgress:
         Text("\(label): In progress")
       case .failed:
-        if variant.lastError == ExportVariantRecovery.interruptedMessage {
-          // The previous run was interrupted before this variant finished. It will retry
-          // automatically on the next export run — present this as recoverable state rather
-          // than a hard failure so upgraders don't see a wall of red for every mid-run
-          // asset.
-          Text("\(label): Will retry on next export")
+        if let friendly = ExportVariantRecovery.friendlyCopy(
+          for: variant.lastError, label: label)
+        {
+          // Named recoverable case — render in secondary color with copy that doesn't
+          // imply user action or guarantee recovery, just describes the retry behaviour.
+          Text(friendly)
             .foregroundColor(.secondary)
         } else {
           Text("\(label) failed: \(variant.lastError ?? "Unknown error")")

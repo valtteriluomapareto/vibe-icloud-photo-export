@@ -17,11 +17,47 @@ struct ExportVariantRecord: Codable, Equatable {
   var lastError: String?
 }
 
-/// Message used when a record was left as `.inProgress` before a crash/restart.
-/// Also used for legacy records whose status was `.inProgress` under the old
-/// flat schema.
+/// Named, well-known recoverable failure cases. Persisted as the `lastError`
+/// string on a `.failed` variant, then matched in the UI to render with
+/// non-promising but softer copy and `.secondary` color rather than red.
+///
+/// Add new cases here only when the failure has a clearly recoverable shape;
+/// generic `.failed` variants with arbitrary error messages should keep the
+/// hard-failure rendering. The promise the UI makes is "future exports will
+/// try again," which is true for these named cases because the pipeline
+/// retries any non-`.done` variant on the next enqueue.
 enum ExportVariantRecovery {
+  /// Variant was left as `.inProgress` before the app crashed or was force-
+  /// quit. Recovered to `.failed` with this message at load time. Also used
+  /// to migrate legacy flat records whose status was `.inProgress`.
   static let interruptedMessage = "Interrupted before completion"
+
+  /// Photos did not provide an edited-side resource for an asset whose
+  /// `hasAdjustments == true`. Sometimes transient (an iCloud full-size
+  /// render that hasn't materialised) and sometimes persistent (PhotoKit
+  /// just doesn't expose one). Either way the next export run will retry.
+  static let editedResourceUnavailableMessage = "Edited resource unavailable"
+
+  /// Returns true when `lastError` matches a known recoverable case the UI
+  /// can render with softer copy.
+  static func isRecoverable(_ message: String?) -> Bool {
+    guard let message else { return false }
+    return message == interruptedMessage
+      || message == editedResourceUnavailableMessage
+  }
+
+  /// User-facing copy for a recoverable failure. Returns nil when the
+  /// message is not a known case — callers fall back to the raw error.
+  static func friendlyCopy(for message: String?, label: String) -> String? {
+    switch message {
+    case interruptedMessage:
+      return "\(label): Will retry on next export"
+    case editedResourceUnavailableMessage:
+      return "\(label) version was not provided by Photos. Future exports will try again."
+    default:
+      return nil
+    }
+  }
 }
 
 /// Canonical export state for a single Photos asset.

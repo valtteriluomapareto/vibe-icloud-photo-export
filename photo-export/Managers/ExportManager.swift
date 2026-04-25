@@ -9,6 +9,10 @@ final class ExportManager: ObservableObject {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
 
+  /// How long the "already exported" toolbar message stays visible before it auto-clears.
+  /// Long enough to read, short enough that subsequent work doesn't show stale state.
+  static let emptyRunMessageDuration: TimeInterval = 6
+
   struct ExportJob: Equatable {
     let assetLocalIdentifier: String
     let year: Int
@@ -26,12 +30,22 @@ final class ExportManager: ObservableObject {
   @Published private(set) var totalJobsCompleted: Int = 0
   @Published private(set) var currentAssetFilename: String?
 
+  /// Transient toolbar feedback for the case where the user clicked Export Month / Year /
+  /// All against an already-complete library (zero new jobs enqueued). Cleared on any new
+  /// `startExport*` call, version-selection change, `cancelAndClear`, or after
+  /// `Self.emptyRunMessageDuration`.
+  @Published private(set) var emptyRunMessage: String?
+  private var emptyRunMessageTask: Task<Void, Never>?
+
   /// Which variants the pipeline writes for each asset. Persisted to `UserDefaults` so the
   /// choice survives restart and stays globally consistent regardless of destination.
   @Published var versionSelection: ExportVersionSelection {
     didSet {
       UserDefaults.standard.set(
         versionSelection.rawValue, forKey: Self.versionSelectionDefaultsKey)
+      // The "already exported" copy is scoped to the previous selection — under a new
+      // selection the user may have new work, so the message would be misleading.
+      clearEmptyRunMessage()
     }
   }
 
@@ -92,14 +106,23 @@ final class ExportManager: ObservableObject {
     // time. The picker in the toolbar is also gated on `hasActiveExportWork` for clarity, but
     // this snapshot is the correctness guarantee.
     let selection = versionSelection
+    clearEmptyRunMessage()
     if !isRunning && !isProcessing { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
       do {
-        try await enqueueMonth(
+        let outcome = try await enqueueMonth(
           year: year, month: month, selection: selection, generation: gen)
         guard self.generation == gen else { return }
+        switch outcome {
+        case .enqueued:
+          break
+        case .alreadyComplete:
+          setEmptyRunMessage("This month is already exported.")
+        case .nothingApplicable:
+          setEmptyRunMessage(noApplicableCopy(scope: .month, selection: selection))
+        }
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -111,13 +134,23 @@ final class ExportManager: ObservableObject {
 
   func startExportYear(year: Int) {
     let selection = versionSelection
+    clearEmptyRunMessage()
     if !isRunning && !isProcessing { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
       do {
-        try await enqueueYear(year: year, selection: selection, generation: gen)
+        let outcome = try await enqueueYear(
+          year: year, selection: selection, generation: gen)
         guard self.generation == gen else { return }
+        switch outcome {
+        case .enqueued:
+          break
+        case .alreadyComplete:
+          setEmptyRunMessage("This year is already exported.")
+        case .nothingApplicable:
+          setEmptyRunMessage(noApplicableCopy(scope: .year, selection: selection))
+        }
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -130,6 +163,7 @@ final class ExportManager: ObservableObject {
   func startExportAll() {
     guard !isEnqueueingAll else { return }
     let selection = versionSelection
+    clearEmptyRunMessage()
     isEnqueueingAll = true
     resetProgressCounters()
     let gen = generation
@@ -140,14 +174,35 @@ final class ExportManager: ObservableObject {
       }
       do {
         let allYears = try photoLibraryService.availableYears()
+        var totalEnqueued = 0
+        var anyAlreadyComplete = false
         for year in allYears {
-          try await enqueueYear(year: year, selection: selection, generation: gen)
+          let outcome = try await enqueueYear(
+            year: year, selection: selection, generation: gen)
           guard self.generation == gen else {
             self.isEnqueueingAll = false
             return
           }
+          switch outcome {
+          case .enqueued(let count):
+            totalEnqueued += count
+          case .alreadyComplete:
+            anyAlreadyComplete = true
+          case .nothingApplicable:
+            break
+          }
         }
         self.isEnqueueingAll = false
+        if totalEnqueued == 0 {
+          // If any year had applicable-but-done work, the library *was* doing work and is
+          // now complete. Only when no year had any applicable assets at all do we show the
+          // "no edited versions" copy.
+          if anyAlreadyComplete {
+            setEmptyRunMessage("Everything in this destination is already exported.")
+          } else {
+            setEmptyRunMessage(noApplicableCopy(scope: .all, selection: selection))
+          }
+        }
         processQueueIfNeeded()
       } catch {
         self.isEnqueueingAll = false
@@ -155,6 +210,39 @@ final class ExportManager: ObservableObject {
           "Failed to enqueue export-all: \(String(describing: error), privacy: .public)"
         )
       }
+    }
+  }
+
+  /// Outcome of an enqueue scan over a month, year, or library. Distinct from a bare
+  /// "0 jobs enqueued" so the toolbar can tell the user *why* nothing was queued: either
+  /// every applicable asset is already done, or no asset matches the active selection (the
+  /// only case today is `editedOnly` over a scope with zero adjusted assets).
+  private enum EnqueueOutcome: Equatable {
+    case enqueued(Int)
+    case alreadyComplete
+    case nothingApplicable
+  }
+
+  private enum EnqueueScope { case month, year, all }
+
+  private func noApplicableCopy(
+    scope: EnqueueScope, selection: ExportVersionSelection
+  ) -> String {
+    // Only `editedOnly` produces an empty required-variants set today. If we add another
+    // selection that filters assets out, extend this switch with the new copy.
+    switch (scope, selection) {
+    case (.month, .editedOnly):
+      return "This month has no edited versions to export."
+    case (.year, .editedOnly):
+      return "This year has no edited versions to export."
+    case (.all, .editedOnly):
+      return "This destination has no edited versions to export."
+    case (.month, _):
+      return "This month is already exported."
+    case (.year, _):
+      return "This year is already exported."
+    case (.all, _):
+      return "Everything in this destination is already exported."
     }
   }
 
@@ -180,7 +268,34 @@ final class ExportManager: ObservableObject {
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
     currentAssetFilename = nil
+    clearEmptyRunMessage()
     updateQueueCount()
+  }
+
+  // MARK: - Empty-run message
+
+  /// Shows a transient message in the toolbar's progress slot for `emptyRunMessageDuration`.
+  /// Replaces any previously-shown message and resets the auto-clear timer.
+  private func setEmptyRunMessage(_ message: String) {
+    emptyRunMessage = message
+    emptyRunMessageTask?.cancel()
+    let duration = Self.emptyRunMessageDuration
+    emptyRunMessageTask = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+      guard !Task.isCancelled else { return }
+      await MainActor.run { [weak self] in
+        self?.emptyRunMessage = nil
+        self?.emptyRunMessageTask = nil
+      }
+    }
+  }
+
+  /// Clears the empty-run message immediately. Called by every code path that invalidates
+  /// it: any new `startExport*`, version-selection change, `cancelAndClear`.
+  private func clearEmptyRunMessage() {
+    emptyRunMessage = nil
+    emptyRunMessageTask?.cancel()
+    emptyRunMessageTask = nil
   }
 
   func pause() {
@@ -206,15 +321,26 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Queue Handling
+
+  /// Scans the month and returns the enqueue outcome. Callers use the outcome to pick
+  /// the right user-facing message — `.alreadyComplete` and `.nothingApplicable` both
+  /// add zero jobs but mean different things to the user.
+  @discardableResult
   private func enqueueMonth(
     year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
-  ) async throws {
+  ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else { return }
+    guard photoLibraryService.isAuthorized else { return .nothingApplicable }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
-    let newJobs: [ExportJob] = assets.compactMap { asset in
-      guard shouldEnqueue(asset: asset, selection: selection) else { return nil }
+    let applicable = assets.filter {
+      !requiredVariants(for: $0, selection: selection).isEmpty
+    }
+    if applicable.isEmpty { return .nothingApplicable }
+    let newJobs: [ExportJob] = applicable.compactMap { asset in
+      guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
+        return nil
+      }
       return ExportJob(
         assetLocalIdentifier: asset.id, year: year, month: month, selection: selection)
     }
@@ -223,22 +349,30 @@ final class ExportManager: ObservableObject {
     queuedCountsByYearMonth["\(year)-\(month)", default: 0] += newJobs.count
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
+    return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
 
+  @discardableResult
   private func enqueueYear(
     year: Int, selection: ExportVersionSelection, generation gen: Int
-  ) async throws {
+  ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else { return }
+    guard photoLibraryService.isAuthorized else { return .nothingApplicable }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
+    let applicable = assets.filter {
+      !requiredVariants(for: $0, selection: selection).isEmpty
+    }
+    if applicable.isEmpty { return .nothingApplicable }
     let calendar = Calendar.current
     var newJobs: [ExportJob] = []
-    newJobs.reserveCapacity(assets.count)
-    for asset in assets {
+    newJobs.reserveCapacity(applicable.count)
+    for asset in applicable {
       guard let created = asset.creationDate else { continue }
       let m = calendar.component(.month, from: created)
-      guard shouldEnqueue(asset: asset, selection: selection) else { continue }
+      guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
+        continue
+      }
       newJobs.append(
         ExportJob(
           assetLocalIdentifier: asset.id, year: year, month: m, selection: selection))
@@ -250,6 +384,7 @@ final class ExportManager: ObservableObject {
     }
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
+    return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
 
   /// Returns true when the asset has at least one required variant that isn't already `.done`.
@@ -461,7 +596,7 @@ final class ExportManager: ObservableObject {
       let errMsg: String
       switch variant {
       case .original: errMsg = "No exportable resource"
-      case .edited: errMsg = "Edited resource unavailable"
+      case .edited: errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
       }
       exportRecordStore.markVariantFailed(
         assetId: descriptor.id, variant: variant, error: errMsg, at: Date())

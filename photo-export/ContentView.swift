@@ -302,27 +302,73 @@ struct YearRow: View {
     return HStack(spacing: 8) {
       Text(verbatim: String(year))
       Spacer()
-      if total > 0 && exported > 0 {
+      if let total, total > 0 && exported > 0 {
         if exported >= total {
-          Image(systemName: "checkmark.seal.fill")
-            .foregroundColor(.green)
-            .font(.caption)
+          completionBadge(selection: selection)
         } else {
           let pct = Int(Double(exported) / Double(total) * 100)
-          Text("\(pct)%")
+          Text(selection == .editedOnly ? "\(pct)% edited" : "\(pct)%")
             .foregroundColor(.orange)
             .font(.caption)
         }
       }
     }
+    .help(yearTooltip(selection: selection, exported: exported, total: total))
   }
 
-  private func yearTotal(for selection: ExportVersionSelection) -> Int {
+  /// Returns nil under `editedOnly` until every month with assets has reported its
+  /// adjusted count, so the badge can't briefly flash 100% while counts are still loading.
+  private func yearTotal(for selection: ExportVersionSelection) -> Int? {
     switch selection {
     case .originalOnly, .originalAndEdited:
       return totalAssets
     case .editedOnly:
-      return adjustedCountsByMonth.values.reduce(0) { $0 + (($1 ?? 0)) }
+      var sum = 0
+      for month in 1...12 {
+        let monthTotal = totalCountsByMonth[month] ?? 0
+        if monthTotal == 0 { continue }
+        // Month has assets but its adjusted count hasn't loaded yet → suppress the badge.
+        guard let adjusted = adjustedCountsByMonth[month] ?? nil else { return nil }
+        sum += adjusted
+      }
+      return sum
+    }
+  }
+
+  @ViewBuilder
+  private func completionBadge(selection: ExportVersionSelection) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: "checkmark.seal.fill")
+        .foregroundColor(.green)
+        .font(.caption)
+      if selection == .editedOnly {
+        // Disambiguate the green seal from the originalOnly / originalAndEdited cases;
+        // under editedOnly it only means "all *adjusted* assets are exported" — unedited
+        // assets are intentionally not part of this selection's denominator.
+        Text("edited")
+          .foregroundColor(.secondary)
+          .font(.caption2)
+      }
+    }
+  }
+
+  private func yearTooltip(
+    selection: ExportVersionSelection, exported: Int, total: Int?
+  ) -> String {
+    switch selection {
+    case .originalOnly:
+      return "\(exported) of \(total ?? 0) originals exported in \(year)."
+    case .editedOnly:
+      guard let total else {
+        return "Counting edited assets in \(year)…"
+      }
+      return
+        "\(exported) of \(total) edited versions exported in \(year). "
+        + "Unedited assets are not part of this selection."
+    case .originalAndEdited:
+      return
+        "\(exported) of \(total ?? 0) assets fully exported in \(year) "
+        + "(originals plus edited versions where Photos has edits)."
     }
   }
 }
@@ -353,19 +399,35 @@ struct MonthRow: View {
           .font(.caption2)
           .foregroundColor(.orange)
       } else if total > 0, let summary {
+        let isEditedOnly = selection == .editedOnly
         switch summary.status {
         case .complete:
-          Image(systemName: "checkmark.seal.fill")
-            .foregroundColor(.green)
-            .font(.caption)
+          HStack(spacing: 3) {
+            Image(systemName: "checkmark.seal.fill")
+              .foregroundColor(.green)
+              .font(.caption)
+            if isEditedOnly {
+              Text("edited")
+                .foregroundColor(.secondary)
+                .font(.caption2)
+            }
+          }
         case .partial:
-          Text("\(summary.exportedCount)/\(summary.totalCount)")
-            .foregroundColor(.orange)
-            .font(.caption)
+          Text(
+            isEditedOnly
+              ? "\(summary.exportedCount)/\(summary.totalCount) edited"
+              : "\(summary.exportedCount)/\(summary.totalCount)"
+          )
+          .foregroundColor(.orange)
+          .font(.caption)
         case .notExported:
-          Text("\(summary.totalCount)")
-            .foregroundColor(.secondary)
-            .font(.caption)
+          Text(
+            isEditedOnly
+              ? "\(summary.totalCount) edited"
+              : "\(summary.totalCount)"
+          )
+          .foregroundColor(.secondary)
+          .font(.caption)
         }
       } else if total > 0 {
         // Adjusted count is still loading under a selection that needs it; show a neutral
@@ -374,8 +436,30 @@ struct MonthRow: View {
       }
     }
     .contentShape(Rectangle())
+    .help(monthTooltip(selection: selection, summary: summary))
   }
 
+  private func monthTooltip(
+    selection: ExportVersionSelection, summary: MonthStatusSummary?
+  ) -> String {
+    let monthName = MonthFormatting.name(for: month)
+    switch selection {
+    case .originalOnly:
+      guard let summary else { return "" }
+      return
+        "\(monthName) \(year): \(summary.exportedCount) of \(summary.totalCount) originals exported."
+    case .editedOnly:
+      guard let summary else { return "Counting edited assets in \(monthName) \(year)…" }
+      return
+        "\(monthName) \(year): \(summary.exportedCount) of \(summary.totalCount) "
+        + "edited versions exported. Unedited assets are not part of this selection."
+    case .originalAndEdited:
+      guard let summary else { return "" }
+      return
+        "\(monthName) \(year): \(summary.exportedCount) of \(summary.totalCount) "
+        + "assets fully exported (originals plus edited versions where Photos has edits)."
+    }
+  }
 }
 
 #Preview {

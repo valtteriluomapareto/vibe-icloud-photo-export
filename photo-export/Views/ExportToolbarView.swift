@@ -158,23 +158,72 @@ struct ExportToolbarView: ToolbarContent {
     let fraction = total > 0 ? Double(done) / Double(total) : 0
     let hasProgress = total > 0
 
-    return HStack(spacing: 8) {
-      ProgressView(value: fraction)
-        .progressViewStyle(.linear)
-        .frame(width: 120)
+    return Group {
+      if hasProgress {
+        HStack(spacing: 8) {
+          ProgressView(value: fraction)
+            .progressViewStyle(.linear)
+            .frame(width: 120)
 
-      Text("\(done)/\(total)")
-        .font(.caption)
-        .monospacedDigit()
-        .frame(width: 60, alignment: .leading)
+          Text("\(done)/\(total) assets")
+            .font(.caption)
+            .monospacedDigit()
+            .frame(width: 90, alignment: .leading)
+            .help(progressCountTooltip)
 
-      Text(exportManager.currentAssetFilename ?? "")
-        .font(.caption2)
-        .foregroundColor(.secondary)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .frame(width: 140, alignment: .leading)
+          Text(exportManager.currentAssetFilename ?? "")
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(width: 140, alignment: .leading)
+        }
+      } else if let emptyMessage = exportManager.emptyRunMessage {
+        // The user just clicked Export Month/Year/All against an already-complete library.
+        // The progress bar slot is empty — show a transient confirmation in its place so the
+        // click doesn't look dead.
+        HStack(spacing: 6) {
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundColor(.green)
+            .font(.caption)
+          Text(emptyMessage)
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+        }
+        .frame(maxWidth: 350, alignment: .leading)
+        .transition(.opacity)
+      } else {
+        // Reserve the progress slot's footprint so the toolbar layout doesn't jump when work
+        // starts or stops.
+        HStack(spacing: 8) {
+          ProgressView(value: 0)
+            .progressViewStyle(.linear)
+            .frame(width: 120)
+          Text("0/0 assets")
+            .font(.caption)
+            .monospacedDigit()
+            .frame(width: 90, alignment: .leading)
+          Spacer().frame(width: 140)
+        }
+        .opacity(0)
+      }
     }
-    .opacity(hasProgress ? 1 : 0)
+    .animation(.default, value: exportManager.emptyRunMessage)
+  }
+
+  private var progressCountTooltip: String {
+    switch exportManager.versionSelection {
+    case .originalAndEdited:
+      return
+        "Counts assets, not files. Each adjusted asset writes both an original and an "
+        + "_edited file but counts once. The filename below is whichever file is currently "
+        + "being written."
+    case .originalOnly, .editedOnly:
+      return
+        "Counts assets. The filename below is the file currently being written for the "
+        + "asset in progress."
+    }
   }
 }

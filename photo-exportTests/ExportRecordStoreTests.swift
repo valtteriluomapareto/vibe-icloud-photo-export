@@ -25,7 +25,7 @@ struct ExportRecordStoreTests {
         store.flushForTesting()
         #expect(store.isExported(assetId: id))
         let info = store.exportInfo(assetId: id)
-        #expect(info?.filename == "IMG_0001.JPG")
+        #expect(info?.variants[.original]?.filename == "IMG_0001.JPG")
         #expect(info?.year == 2025)
         #expect(info?.month == 2)
     }
@@ -61,8 +61,8 @@ struct ExportRecordStoreTests {
         store.markFailed(assetId: id, error: "network", at: Date())
         store.flushForTesting()
         let info = store.exportInfo(assetId: id)
-        #expect(info?.status == .failed)
-        #expect(info?.lastError == "network")
+        #expect(info?.variants[.original]?.status == .failed)
+        #expect(info?.variants[.original]?.lastError == "network")
     }
 
     @Test func testPersistenceAcrossLaunchesAndDeletion() throws {
@@ -81,7 +81,7 @@ struct ExportRecordStoreTests {
         // New instance, same root and destination id
         let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
         store2.configure(for: "destA")
-        #expect(store2.exportInfo(assetId: "x2")?.status == .done)
+        #expect(store2.exportInfo(assetId: "x2")?.variants[.original]?.status == .done)
         #expect(store2.exportInfo(assetId: "x1") == nil)
     }
 
@@ -93,14 +93,14 @@ struct ExportRecordStoreTests {
         store.markInProgress(
             assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "tmp.mov")
         store.flushForTesting()
-        #expect(store.exportInfo(assetId: "t1")?.status == .inProgress)
+        #expect(store.exportInfo(assetId: "t1")?.variants[.original]?.status == .inProgress)
         store.markExported(
             assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "final.mov",
             exportedAt: Date())
         store.flushForTesting()
         let rec = store.exportInfo(assetId: "t1")
-        #expect(rec?.status == .done)
-        #expect(rec?.filename == "final.mov")
+        #expect(rec?.variants[.original]?.status == .done)
+        #expect(rec?.variants[.original]?.filename == "final.mov")
     }
 
     @Test func testCorruptedLogLineIsSkipped() throws {
@@ -122,7 +122,7 @@ struct ExportRecordStoreTests {
         // Reload - invalid line should be skipped, valid records preserved
         let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
         store2.configure(for: destId)
-        #expect(store2.exportInfo(assetId: "ok")?.status == .done)
+        #expect(store2.exportInfo(assetId: "ok")?.variants[.original]?.status == .done)
     }
 
     @Test func testPerDestinationIsolation() throws {
@@ -182,6 +182,210 @@ struct ExportRecordStoreTests {
         try await Task.sleep(nanoseconds: 600_000_000)
         let delta = store.mutationCounter - baseline
         #expect(delta == 1)
+    }
+
+    // MARK: - Strict, asset-aware isExported
+
+    @Test func strictIsExportedDefaultModeUneditedAsset() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destStrict")
+        let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
+        // .original.done at any filename satisfies an unedited asset's requirement.
+        store.markVariantExported(
+            assetId: asset.id, variant: .original, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "vacation_orig.JPG", exportedAt: Date())
+        store.flushForTesting()
+        #expect(store.isExported(asset: asset, selection: .edited))
+        #expect(store.isExported(asset: asset, selection: .editedWithOriginals))
+    }
+
+    @Test func strictIsExportedDefaultModeAdjustedAsset() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destStrict2")
+        let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
+        // Only .original.done — adjusted asset requires .edited under default mode.
+        store.markVariantExported(
+            assetId: asset.id, variant: .original, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+        store.flushForTesting()
+        #expect(!store.isExported(asset: asset, selection: .edited))
+
+        store.markVariantExported(
+            assetId: asset.id, variant: .edited, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "IMG_0001 (1).JPG", exportedAt: Date())
+        store.flushForTesting()
+        #expect(store.isExported(asset: asset, selection: .edited))
+    }
+
+    @Test func strictIsExportedIncludeOriginalsAdjustedAssetRequiresBoth() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destStrict3")
+        let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
+        store.markVariantExported(
+            assetId: asset.id, variant: .edited, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+        store.flushForTesting()
+        #expect(!store.isExported(asset: asset, selection: .editedWithOriginals))
+
+        store.markVariantExported(
+            assetId: asset.id, variant: .original, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "IMG_0001_orig.JPG", exportedAt: Date())
+        store.flushForTesting()
+        #expect(store.isExported(asset: asset, selection: .editedWithOriginals))
+    }
+
+    // MARK: - Sidebar approximation: cap behaviour
+
+    @Test func sidebarSummaryCapsOriginalOnlyContributionAtUneditedCount() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destCap")
+        let now = Date()
+        // 10 records, all `.original.done` at natural stem (post-import case where the
+        // scanner couldn't tell same-extension edits apart from originals).
+        for i in 0..<10 {
+            store.markVariantExported(
+                assetId: "asset-\(i)", variant: .original, year: 2025, month: 5,
+                relPath: "2025/05/", filename: "IMG_\(i).JPG", exportedAt: now)
+        }
+        store.flushForTesting()
+
+        // 30 of 100 are adjusted; the cap pins original-only contribution at 70.
+        // editedDone is 0; exported = 0 + min(10, 70) = 10.
+        let summary = store.sidebarSummary(
+            year: 2025, month: 5, totalCount: 100, adjustedCount: 30,
+            selection: .edited)
+        #expect(summary?.exportedCount == 10)
+    }
+
+    @Test func sidebarSummaryReturnsNilWhileAdjustedCountLoading() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destLoading")
+        let summary = store.sidebarSummary(
+            year: 2025, month: 5, totalCount: 100, adjustedCount: nil,
+            selection: .edited)
+        #expect(summary == nil)
+    }
+
+    /// R2-6: documented mixed-partial overcount limitation. 10 assets, 5 currently
+    /// adjusted; 3 unedited originals exported plus 5 same-extension imports
+    /// mis-recorded as natural-stem `.original.done`. Asset-aware truth = 3, but the
+    /// records-only formula returns 5 because `min(8, 5) = 5`. Asserting the documented
+    /// over-count protects the invariant: future "fix" attempts that drop the cap or
+    /// reach for asset descriptors must update this test deliberately.
+    @Test func sidebarSummaryDocumentedMixedPartialOvercount() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destMixed")
+        let now = Date()
+        // 8 records, all `.original.done` at natural stem. 3 belong to unedited assets;
+        // 5 are same-extension edits mis-classified by an earlier import.
+        for i in 0..<8 {
+            store.markVariantExported(
+                assetId: "asset-\(i)", variant: .original, year: 2025, month: 6,
+                relPath: "2025/06/", filename: "IMG_\(i).JPG", exportedAt: now)
+        }
+        store.flushForTesting()
+
+        // 10 assets total, 5 adjusted → uneditedCount = 5. origOnlyAtStem = 8.
+        // exported = 0 (editedDone) + min(8, 5) = 5. Asset-aware truth would be 3.
+        let summary = store.sidebarSummary(
+            year: 2025, month: 6, totalCount: 10, adjustedCount: 5,
+            selection: .edited)
+        #expect(summary?.exportedCount == 5)
+    }
+
+    /// R2-7: documented `vacation_orig.JPG` undercount. The shape-only `isOrigCompanion`
+    /// excludes a record for an unedited asset whose actual filename ends with `_orig`
+    /// from `origOnlyAtStem`, so the sidebar under-counts by 1. Asserting the documented
+    /// under-count rather than the asset-aware truth — the asset-aware path remains
+    /// correct via `MonthContentView.exportSummaryView`.
+    @Test func sidebarSummaryUnderCountsForUserOrigFilename() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destUserOrig")
+        store.markVariantExported(
+            assetId: "user-orig", variant: .original, year: 2025, month: 7,
+            relPath: "2025/07/", filename: "vacation_orig.JPG", exportedAt: Date())
+        store.flushForTesting()
+
+        // 1 asset, 0 adjusted → uneditedCount = 1. origOnlyAtStem excludes the record
+        // because `vacation_orig.JPG` matches `isOrigCompanion` shape-only.
+        let summary = store.sidebarSummary(
+            year: 2025, month: 7, totalCount: 1, adjustedCount: 0,
+            selection: .edited)
+        #expect(summary?.exportedCount == 0)  // Documented under-count.
+        #expect(summary?.status == .notExported)
+    }
+
+    /// R2-8: year-scope sidebar aggregation. Sums per-month sidebarSummary results,
+    /// skips months with zero assets, propagates nil from any month whose
+    /// adjustedCount hasn't loaded.
+    @Test func sidebarYearExportedCountAggregatesAcrossMonths() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destYear")
+        let now = Date()
+        // March: 2 unedited assets, both exported.
+        store.markVariantExported(
+            assetId: "m3-a", variant: .original, year: 2025, month: 3,
+            relPath: "2025/03/", filename: "M3A.JPG", exportedAt: now)
+        store.markVariantExported(
+            assetId: "m3-b", variant: .original, year: 2025, month: 3,
+            relPath: "2025/03/", filename: "M3B.JPG", exportedAt: now)
+        // July: 1 adjusted asset, edit done.
+        store.markVariantExported(
+            assetId: "m7-a", variant: .edited, year: 2025, month: 7,
+            relPath: "2025/07/", filename: "M7A.JPG", exportedAt: now)
+        store.flushForTesting()
+
+        let totals = [3: 2, 7: 1]
+        let adjusted: [Int: Int?] = [3: 0, 7: 1]
+        let count = store.sidebarYearExportedCount(
+            year: 2025,
+            totalCountsByMonth: totals,
+            adjustedCountsByMonth: adjusted,
+            selection: .edited)
+        #expect(count == 3)
+
+        // A month whose adjustedCount is still loading contributes 0 to the total —
+        // the YearRow suppresses the badge while any populated month is nil so the
+        // user never sees this partial sum.
+        let adjustedLoading: [Int: Int?] = [3: nil, 7: 1]
+        let countWithLoading = store.sidebarYearExportedCount(
+            year: 2025,
+            totalCountsByMonth: totals,
+            adjustedCountsByMonth: adjustedLoading,
+            selection: .edited)
+        #expect(countWithLoading == 1)
+    }
+
+    /// R2-10: explicit standalone case for an unedited asset under
+    /// `editedWithOriginals`. The asset has only `.original.done`; that's all that's
+    /// required for an unedited asset under either selection.
+    @Test func strictIsExportedIncludeOriginalsUneditedAssetSatisfiedByOriginalDone() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destUnedited")
+        let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
+        store.markVariantExported(
+            assetId: asset.id, variant: .original, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+        store.flushForTesting()
+        #expect(store.isExported(asset: asset, selection: .editedWithOriginals))
     }
 
     @Test func testDoneCountTracksTransitionsAndMoves() throws {

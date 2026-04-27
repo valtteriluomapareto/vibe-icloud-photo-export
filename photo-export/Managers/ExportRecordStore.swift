@@ -8,6 +8,12 @@ import os
 /// - Mutations are appended to `export-records.jsonl` (one JSON object per line) under a destination-specific directory.
 /// - On configure/load, we fold the JSONL log into `recordsById` and optionally overlay a snapshot `export-records.json` if present.
 /// - After N mutations or at app termination, we compact into a canonical snapshot file and truncate the log.
+///
+/// Schema:
+/// - Current records carry per-variant state in `ExportRecord.variants` keyed by `ExportVariant`.
+/// - Legacy flat records (single filename/status fields) decode into a synthesized `.original` variant.
+/// - On load, any variant left as `.inProgress` is converted to `.failed` with `ExportVariantRecovery.interruptedMessage`
+///   because no in-progress state survives app restart.
 @MainActor
 final class ExportRecordStore: ObservableObject {
   struct Constants {
@@ -23,7 +29,6 @@ final class ExportRecordStore: ObservableObject {
     label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
 
   private(set) var recordsById: [String: ExportRecord] = [:]
-  private(set) var doneCountByYearMonth: [String: Int] = [:]
   private var mutationCountSinceCompact: Int = 0
 
   // Published bump used to notify SwiftUI of logical changes
@@ -66,7 +71,6 @@ final class ExportRecordStore: ObservableObject {
   func configure(for destinationId: String?) {
     // Reset in-memory state
     recordsById = [:]
-    doneCountByYearMonth = [:]
     mutationCountSinceCompact = 0
 
     guard let destinationId else {
@@ -87,7 +91,6 @@ final class ExportRecordStore: ObservableObject {
   private func loadFromCurrentDirectory() {
     guard let snapshotURL = snapshotFileURL, let logURL = logFileURL else { return }
     recordsById = [:]
-    doneCountByYearMonth = [:]
     // Prefer snapshot if available, then apply log mutations after
     if fileManager.fileExists(atPath: snapshotURL.path) {
       do {
@@ -96,7 +99,6 @@ final class ExportRecordStore: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode([String: ExportRecord].self, from: data)
         recordsById = decoded
-        rebuildDoneCountsFromRecords()
       } catch {
         logger.error(
           "Failed to read snapshot: \(String(describing: error), privacy: .public)")
@@ -124,11 +126,62 @@ final class ExportRecordStore: ObservableObject {
           "Failed to read log file: \(String(describing: error), privacy: .public)")
       }
     }
+
+    recoverInProgressVariants()
   }
 
-  // MARK: - Public API (mutations)
-  func markExported(
+  /// Converts any variant left as `.inProgress` after load into `.failed` with the interrupted
+  /// message. No in-progress state survives app restart; `.pending` is preserved as-is.
+  private func recoverInProgressVariants() {
+    for (id, record) in recordsById {
+      var mutated = record
+      var changed = false
+      for (variant, variantRecord) in record.variants where variantRecord.status == .inProgress {
+        var next = variantRecord
+        next.status = .failed
+        next.lastError = ExportVariantRecovery.interruptedMessage
+        mutated.variants[variant] = next
+        changed = true
+      }
+      if changed {
+        recordsById[id] = mutated
+      }
+    }
+  }
+
+  // MARK: - Public API (variant mutations)
+
+  /// Marks a variant `.inProgress`. Creates the record if missing and upserts the variant.
+  func markVariantInProgress(
     assetId: String,
+    variant: ExportVariant,
+    year: Int,
+    month: Int,
+    relPath: String,
+    filename: String?
+  ) {
+    var record =
+      recordsById[assetId]
+      ?? ExportRecord(
+        id: assetId, year: year, month: month, relPath: relPath)
+    record.year = year
+    record.month = month
+    record.relPath = relPath
+    var variantRecord =
+      record.variants[variant]
+      ?? ExportVariantRecord(
+        filename: filename, status: .pending, exportDate: nil, lastError: nil)
+    variantRecord.filename = filename
+    variantRecord.status = .inProgress
+    variantRecord.lastError = nil
+    record.variants[variant] = variantRecord
+    append(.upsert(record))
+  }
+
+  /// Marks a variant `.done` with a final filename. Creates the record if missing.
+  func markVariantExported(
+    assetId: String,
+    variant: ExportVariant,
     year: Int,
     month: Int,
     relPath: String,
@@ -138,42 +191,76 @@ final class ExportRecordStore: ObservableObject {
     var record =
       recordsById[assetId]
       ?? ExportRecord(
-        id: assetId, year: year, month: month, relPath: relPath, filename: nil,
-        status: .pending, exportDate: nil, lastError: nil)
+        id: assetId, year: year, month: month, relPath: relPath)
     record.year = year
     record.month = month
     record.relPath = relPath
-    record.filename = filename
-    record.status = .done
-    record.exportDate = exportedAt
-    record.lastError = nil
+    let variantRecord = ExportVariantRecord(
+      filename: filename, status: .done, exportDate: exportedAt, lastError: nil)
+    record.variants[variant] = variantRecord
     append(.upsert(record))
+  }
+
+  /// Marks a variant `.failed`. Creates the record if missing; preserves year/month/relPath
+  /// for existing records.
+  func markVariantFailed(
+    assetId: String,
+    variant: ExportVariant,
+    error: String,
+    at date: Date
+  ) {
+    var record =
+      recordsById[assetId]
+      ?? ExportRecord(
+        id: assetId, year: 0, month: 0, relPath: "")
+    var variantRecord =
+      record.variants[variant]
+      ?? ExportVariantRecord(
+        filename: nil, status: .pending, exportDate: nil, lastError: nil)
+    variantRecord.status = .failed
+    variantRecord.exportDate = date
+    variantRecord.lastError = error
+    record.variants[variant] = variantRecord
+    append(.upsert(record))
+  }
+
+  /// Removes a single variant from an asset record. If no variants remain, removes the record.
+  func removeVariant(assetId: String, variant: ExportVariant) {
+    guard var record = recordsById[assetId] else { return }
+    guard record.variants[variant] != nil else { return }
+    record.variants.removeValue(forKey: variant)
+    if record.variants.isEmpty {
+      append(.delete(id: assetId))
+    } else {
+      append(.upsert(record))
+    }
+  }
+
+  // MARK: - Public API (legacy wrappers, route to .original)
+
+  func markExported(
+    assetId: String,
+    year: Int,
+    month: Int,
+    relPath: String,
+    filename: String,
+    exportedAt: Date
+  ) {
+    markVariantExported(
+      assetId: assetId, variant: .original, year: year, month: month, relPath: relPath,
+      filename: filename, exportedAt: exportedAt)
   }
 
   func markFailed(assetId: String, error: String, at date: Date) {
-    var record =
-      recordsById[assetId]
-      ?? ExportRecord(
-        id: assetId, year: 0, month: 0, relPath: "", filename: nil, status: .pending,
-        exportDate: nil, lastError: nil)
-    record.status = .failed
-    record.exportDate = date
-    record.lastError = error
-    append(.upsert(record))
+    markVariantFailed(assetId: assetId, variant: .original, error: error, at: date)
   }
 
-  func markInProgress(assetId: String, year: Int, month: Int, relPath: String, filename: String?) {
-    var record =
-      recordsById[assetId]
-      ?? ExportRecord(
-        id: assetId, year: year, month: month, relPath: relPath, filename: filename,
-        status: .pending, exportDate: nil, lastError: nil)
-    record.year = year
-    record.month = month
-    record.relPath = relPath
-    record.filename = filename
-    record.status = .inProgress
-    append(.upsert(record))
+  func markInProgress(
+    assetId: String, year: Int, month: Int, relPath: String, filename: String?
+  ) {
+    markVariantInProgress(
+      assetId: assetId, variant: .original, year: year, month: month, relPath: relPath,
+      filename: filename)
   }
 
   func remove(assetId: String) {
@@ -181,51 +268,218 @@ final class ExportRecordStore: ObservableObject {
   }
 
   // MARK: - Public API (queries)
+
+  /// Whether the `.original` variant for this asset is `.done`. Kept as a cheap asset-ID shim for
+  /// legacy call sites and tests; new code should use `isExported(asset:selection:)`.
   func isExported(assetId: String) -> Bool {
-    recordsById[assetId]?.status == .done
+    recordsById[assetId]?.variants[.original]?.status == .done
+  }
+
+  /// Strict, asset-aware completion check for a single asset.
+  ///
+  /// Consults the asset's current `hasAdjustments` (via `requiredVariants`) and verifies
+  /// every required variant is `.done`. No filename inspection — a `.original.done` row at
+  /// any filename satisfies an unedited asset's requirement, and an adjusted asset is only
+  /// satisfied when `.edited.done` (and `.original.done` under `editedWithOriginals`).
+  func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
+    let required = requiredVariants(for: asset, selection: selection)
+    guard let record = recordsById[asset.id] else { return false }
+    return required.allSatisfy { record.variants[$0]?.status == .done }
   }
 
   func exportInfo(assetId: String) -> ExportRecord? {
     recordsById[assetId]
   }
 
-  /// Total number of exported assets across all months of a given year.
+  /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
+  /// yearly progress counting for unadjusted libraries.
   func yearExportedCount(year: Int) -> Int {
-    (1...12).reduce(0) { sum, month in
-      sum + (doneCountByYearMonth[ymKey(year: year, month: month)] ?? 0)
+    recordsById.values.reduce(0) { sum, record in
+      guard record.year == year, record.variants[.original]?.status == .done else { return sum }
+      return sum + 1
     }
   }
 
+  /// Legacy month summary that counts `.original` done records. Preserved for call sites that
+  /// have not yet adopted `monthSummary(assets:selection:)`.
   func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
-    let exportedCount = doneCountByYearMonth[ymKey(year: year, month: month)] ?? 0
+    let exportedCount = recordsById.values.reduce(0) { sum, record in
+      guard record.year == year, record.month == month,
+        record.variants[.original]?.status == .done
+      else { return sum }
+      return sum + 1
+    }
+    return makeSummary(year: year, month: month, exported: exportedCount, total: totalAssets)
+  }
+
+  /// Selection-aware month summary. Caller supplies the month's loaded asset descriptors so the
+  /// evaluator can consult each asset's `hasAdjustments`.
+  func monthSummary(assets: [AssetDescriptor], selection: ExportVersionSelection)
+    -> MonthStatusSummary
+  {
+    let year =
+      assets.first.map { Calendar.current.component(.year, from: $0.creationDate ?? Date()) }
+      ?? 0
+    let month =
+      assets.first.map { Calendar.current.component(.month, from: $0.creationDate ?? Date()) }
+      ?? 0
+
+    var exported = 0
+    for asset in assets where isExported(asset: asset, selection: selection) {
+      exported += 1
+    }
+    return makeSummary(year: year, month: month, exported: exported, total: assets.count)
+  }
+
+  /// Count of records in `year`/`month` whose variant matches the requested `variant` with the
+  /// requested `status`. Used by selection-aware sidebar summaries that do not have access to the
+  /// loaded asset descriptors.
+  func recordCount(
+    year: Int, month: Int, variant: ExportVariant, status: ExportStatus
+  ) -> Int {
+    recordsById.values.reduce(0) { sum, record in
+      guard record.year == year, record.month == month,
+        record.variants[variant]?.status == status
+      else { return sum }
+      return sum + 1
+    }
+  }
+
+  /// Count of records in `year`/`month` whose `.original` and `.edited` variants are both
+  /// `.done`. These records are definitely fully complete under `editedWithOriginals`
+  /// regardless of whether the asset is currently adjusted.
+  func recordCountBothVariantsDone(year: Int, month: Int) -> Int {
+    recordsById.values.reduce(0) { sum, record in
+      guard record.year == year, record.month == month else { return sum }
+      let originalDone = record.variants[.original]?.status == .done
+      let editedDone = record.variants[.edited]?.status == .done
+      return sum + (originalDone && editedDone ? 1 : 0)
+    }
+  }
+
+  /// Count of records in `year`/`month` whose `.edited` variant is `.done`. Used by the
+  /// records-only sidebar formula for the default mode.
+  func recordCountEditedDone(year: Int, month: Int) -> Int {
+    recordCount(year: year, month: month, variant: .edited, status: .done)
+  }
+
+  /// Count of records in `year`/`month` with `.original.done` at a natural-stem filename
+  /// (i.e. not a `_orig` companion) AND `.edited` not `.done`. Used by the records-only
+  /// sidebar formula to estimate "unedited asset, exported once" rows without loading
+  /// descriptors.
+  func recordCountOriginalDoneAtNaturalStem(year: Int, month: Int) -> Int {
+    recordsById.values.reduce(0) { sum, record in
+      guard record.year == year, record.month == month else { return sum }
+      guard let original = record.variants[.original], original.status == .done,
+        let filename = original.filename
+      else { return sum }
+      if record.variants[.edited]?.status == .done { return sum }
+      return sum + (ExportFilenamePolicy.isOrigCompanion(filename: filename) ? 0 : 1)
+    }
+  }
+
+  /// Records-only approximation of "fully exported under this selection," capped by the
+  /// count of unedited assets in scope so that natural-stem `.original.done` records
+  /// belonging to currently-adjusted assets cannot over-contribute past the number of
+  /// assets that could legitimately be original-only.
+  ///
+  /// `adjustedCount` is required for both modes. Pass nil when the count hasn't loaded yet —
+  /// callers should render a neutral "loading" state in that case rather than treat nil as
+  /// zero.
+  func sidebarSummary(
+    year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
+    selection: ExportVersionSelection
+  ) -> MonthStatusSummary? {
+    guard let adjustedCount else { return nil }
+    let uneditedCount = max(0, totalCount - adjustedCount)
+    let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
+    switch selection {
+    case .edited:
+      let editedDone = recordCountEditedDone(year: year, month: month)
+      let exported = editedDone + min(origOnlyAtStem, uneditedCount)
+      return makeSummary(year: year, month: month, exported: exported, total: totalCount)
+    case .editedWithOriginals:
+      let bothDone = recordCountBothVariantsDone(year: year, month: month)
+      let exported = bothDone + min(origOnlyAtStem, uneditedCount)
+      return makeSummary(year: year, month: month, exported: exported, total: totalCount)
+    }
+  }
+
+  /// Year-scope variant. Iterates each month with its (totalCount, adjustedCount) pair, sums
+  /// the per-month exported counts, and returns the rolled-up total. Months whose
+  /// adjustedCount is nil contribute zero to the total — callers should suppress the
+  /// year-level badge until all populated months have reported.
+  func sidebarYearExportedCount(
+    year: Int,
+    totalCountsByMonth: [Int: Int],
+    adjustedCountsByMonth: [Int: Int?],
+    selection: ExportVersionSelection
+  ) -> Int {
+    var total = 0
+    for month in 1...12 {
+      let monthTotal = totalCountsByMonth[month] ?? 0
+      if monthTotal == 0 { continue }
+      let monthAdjusted = adjustedCountsByMonth[month].flatMap { $0 }
+      guard
+        let summary = sidebarSummary(
+          year: year, month: month, totalCount: monthTotal,
+          adjustedCount: monthAdjusted, selection: selection)
+      else { continue }
+      total += summary.exportedCount
+    }
+    return total
+  }
+
+  private func makeSummary(year: Int, month: Int, exported: Int, total: Int)
+    -> MonthStatusSummary
+  {
     let status: MonthExportStatus
-    if exportedCount == 0 {
+    if total == 0 {
       status = .notExported
-    } else if exportedCount < totalAssets {
+    } else if exported == 0 {
+      status = .notExported
+    } else if exported < total {
       status = .partial
     } else {
       status = .complete
     }
     return MonthStatusSummary(
-      year: year, month: month, exportedCount: exportedCount, totalCount: totalAssets,
-      status: status)
+      year: year, month: month, exportedCount: exported, totalCount: total, status: status)
   }
 
   // MARK: - Bulk import (for backup import)
 
-  /// Imports a batch of export records at once, used by the "Import Existing Backup" feature.
-  /// Each record should have status `.done`. Existing records for the same asset ID are skipped.
+  /// Imports a batch of records from the backup-scan flow, merging per variant. An existing
+  /// `.done` for a given asset+variant is preserved; weaker statuses may be replaced by an imported
+  /// `.done` variant.
   func bulkImportRecords(_ records: [ExportRecord]) {
-    var importedCount = 0
-    for record in records {
-      // Skip if we already have a .done record for this asset
-      if let existing = recordsById[record.id], existing.status == .done {
-        continue
+    var importedVariants = 0
+    var skippedVariants = 0
+    for incoming in records {
+      var merged =
+        recordsById[incoming.id]
+        ?? ExportRecord(
+          id: incoming.id, year: incoming.year, month: incoming.month, relPath: incoming.relPath)
+      merged.year = incoming.year
+      merged.month = incoming.month
+      merged.relPath = incoming.relPath
+      var changed = false
+      for (variant, variantRecord) in incoming.variants {
+        if let existing = merged.variants[variant], existing.status == .done {
+          skippedVariants += 1
+          continue
+        }
+        merged.variants[variant] = variantRecord
+        importedVariants += 1
+        changed = true
       }
-      append(.upsert(record))
-      importedCount += 1
+      if changed {
+        append(.upsert(merged))
+      }
     }
-    logger.info("Bulk imported \(importedCount) records (skipped \(records.count - importedCount))")
+    logger.info(
+      "Bulk imported \(importedVariants) variants (skipped \(skippedVariants) already-done variants)"
+    )
   }
 
   // MARK: - Internals
@@ -300,7 +554,8 @@ final class ExportRecordStore: ObservableObject {
     }
   }
 
-  private func restoreMutationCountAfterPersistenceFailure(for storeDirURL: URL, restoredCount: Int) {
+  private func restoreMutationCountAfterPersistenceFailure(for storeDirURL: URL, restoredCount: Int)
+  {
     guard currentStoreDirURL == storeDirURL else { return }
     mutationCountSinceCompact = max(mutationCountSinceCompact, restoredCount)
   }
@@ -308,20 +563,11 @@ final class ExportRecordStore: ObservableObject {
   private func apply(_ mutation: ExportRecordMutation) {
     switch mutation.op {
     case .upsert:
-      let old = recordsById[mutation.id]
-      if let oldRec = old, oldRec.status == .done {
-        adjustDoneCount(year: oldRec.year, month: oldRec.month, delta: -1)
-      }
       if let record = mutation.record {
         recordsById[mutation.id] = record
-        if record.status == .done {
-          adjustDoneCount(year: record.year, month: record.month, delta: 1)
-        }
       }
     case .delete:
-      if let oldRec = recordsById.removeValue(forKey: mutation.id), oldRec.status == .done {
-        adjustDoneCount(year: oldRec.year, month: oldRec.month, delta: -1)
-      }
+      recordsById.removeValue(forKey: mutation.id)
     }
   }
 
@@ -333,22 +579,6 @@ final class ExportRecordStore: ObservableObject {
         )
       }
     }
-  }
-
-  private func rebuildDoneCountsFromRecords() {
-    doneCountByYearMonth = [:]
-    for rec in recordsById.values where rec.status == .done {
-      adjustDoneCount(year: rec.year, month: rec.month, delta: 1)
-    }
-  }
-
-  private func ymKey(year: Int, month: Int) -> String { "\(year)-\(month)" }
-
-  private func adjustDoneCount(year: Int, month: Int, delta: Int) {
-    let key = ymKey(year: year, month: month)
-    let current = doneCountByYearMonth[key] ?? 0
-    let next = max(0, current + delta)
-    doneCountByYearMonth[key] = next
   }
 
   private func scheduleCoalescedNotify() {

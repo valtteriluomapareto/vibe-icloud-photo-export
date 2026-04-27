@@ -57,6 +57,14 @@ const faqData = {
 		},
 		{
 			'@type': 'Question',
+			name: 'What about photos I have edited in Photos?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'By default Photo Export saves the version Photos shows you, edits included, at the original filename. Turn on the "Include originals" toggle in the toolbar to also keep an original-bytes copy as a _orig companion (for example IMG_0001_orig.HEIC alongside IMG_0001.JPG).',
+			},
+		},
+		{
+			'@type': 'Question',
 			name: 'What happens if the export is interrupted?',
 			acceptedAnswer: {
 				'@type': 'Answer',
@@ -136,6 +144,12 @@ const faqData = {
 				<FeatureCard title="Thumbnail Previews" icon="🖼">
 					Fast thumbnail grid with in-memory caching. Click any photo for a
 					full-size preview.
+				</FeatureCard>
+				<FeatureCard title="Edits Included" icon="✨">
+					Exports the version Photos shows you — edits and all — at the original
+					filename. Toggle <strong>Include originals</strong> to also keep <code
+						>_orig</code
+					> companions with the original bytes.
 				</FeatureCard>
 				<FeatureCard title="Smart Export Tracking" icon="✅">
 					Remembers every exported photo. Resume-safe — never re-exports what's
@@ -320,6 +334,19 @@ const faqData = {
 						Yes. The app exports photos and videos. Live Photos are exported as
 						a single still image — full motion export (paired image + video) is
 						planned for a future release.
+					</dd>
+				</div>
+				<div class="faq-item">
+					<dt>What about photos I have edited in Photos?</dt>
+					<dd>
+						By default, Photo Export saves the version Photos shows you — edits
+						and all — at the original filename. Turn on <strong
+							>Include originals</strong
+						> in the toolbar to also keep an original-bytes copy as a <code
+							>_orig</code
+						> companion (e.g. <code>IMG_0001_orig.HEIC</code> alongside <code
+							>IMG_0001.JPG</code
+						>).
 					</dd>
 				</div>
 				<div class="faq-item">

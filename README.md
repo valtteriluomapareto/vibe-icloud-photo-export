@@ -14,6 +14,10 @@ The project is intentionally small: SwiftUI on top, system frameworks only, and 
 - Browse your library by year and month
 - Preview thumbnails and selected assets
 - Export a month, a year, or the full queue without overwriting existing files
+- Choose what to write with the toolbar's **Include originals** toggle. Off (default)
+  exports one file per photo, in the version Photos shows. On adds a `_orig` companion
+  (e.g. `IMG_0001_orig.HEIC`) for any photo edited in Photos so you keep a copy of the
+  original bytes alongside the user-visible edit
 - Track exported assets per destination so interrupted exports can resume safely
 - Pause, resume, cancel, and clear queued work
 - Import an existing backup folder to rebuild local export state on a fresh install

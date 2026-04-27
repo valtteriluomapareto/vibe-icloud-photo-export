@@ -7,6 +7,7 @@ struct OnboardingView: View {
   let onSkip: () -> Void
 
   @State private var exportAll = true
+  @State private var includeOriginals: Bool = false
 
   var body: some View {
     VStack(spacing: 24) {
@@ -68,7 +69,7 @@ struct OnboardingView: View {
             .frame(width: 28, height: 28)
             .background(Circle().fill(Color.accentColor))
 
-          VStack(alignment: .leading, spacing: 6) {
+          VStack(alignment: .leading, spacing: 10) {
             Text("Choose what to export")
               .font(.headline)
 
@@ -78,6 +79,18 @@ struct OnboardingView: View {
             }
             .pickerStyle(.radioGroup)
             .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 4) {
+              Toggle("Include originals for edited photos", isOn: $includeOriginals)
+                .toggleStyle(.checkbox)
+              Text(
+                "Off: one file per photo. On: also keep original copies for photos "
+                  + "you've edited."
+              )
+              .font(.caption)
+              .foregroundColor(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            }
           }
         }
       }
@@ -91,6 +104,9 @@ struct OnboardingView: View {
         .buttonStyle(.borderless)
 
         Button(exportAll ? "Start Export" : "Continue") {
+          // Apply the chosen versions first so the export kicked off below uses the
+          // selection the user made here, not the persisted default.
+          exportManager.versionSelection = includeOriginals ? .editedWithOriginals : .edited
           if exportAll && exportDestinationManager.canExportNow {
             exportManager.startExportAll()
           }

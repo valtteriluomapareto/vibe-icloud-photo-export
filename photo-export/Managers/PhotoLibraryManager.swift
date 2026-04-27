@@ -27,6 +27,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Replaced wholesale on each fetch rather than doing per-entry eviction.
   private var phAssetCache: [String: PHAsset] = [:]
 
+  /// Cache of adjusted-asset counts keyed by `"YYYY-M"`. Populated lazily by
+  /// `countAdjustedAssets` and cleared when the Photos library changes or the user re-authorises.
+  private var adjustedCountByYearMonth: [String: Int] = [:]
+
   nonisolated static func isAuthorizationSufficient(_ status: PHAuthorizationStatus) -> Bool {
     status == .authorized || status == .limited
   }
@@ -62,9 +66,39 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     await MainActor.run {
       self.authorizationStatus = status
       self.isAuthorized = Self.isAuthorizationSufficient(status)
+      // Authorisation changes may change which assets are visible; drop the adjusted-count
+      // cache so the next query reflects the new scope.
+      self.adjustedCountByYearMonth.removeAll()
     }
 
     return Self.isAuthorizationSufficient(status)
+  }
+
+  /// Returns the number of assets in the given year/month whose `hasAdjustments` is true.
+  ///
+  /// `PHAsset.hasAdjustments` cannot be expressed as a Photos fetch predicate, so this falls
+  /// back to iterating the month's assets. Results are cached until the next library change
+  /// or authorisation change.
+  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    let key = "\(year)-\(month)"
+    if let cached = adjustedCountByYearMonth[key] { return cached }
+    let assets = try await fetchPHAssets(year: year, month: month, mediaType: nil)
+    var count = 0
+    for asset in assets where asset.hasAdjustments { count += 1 }
+    adjustedCountByYearMonth[key] = count
+    return count
+  }
+
+  /// Returns the number of assets in the given year whose `hasAdjustments` is true. Sums the
+  /// per-month cache, populating each month on demand.
+  func countAdjustedAssets(year: Int) async throws -> Int {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    var total = 0
+    for month in 1...12 {
+      total += try await countAdjustedAssets(year: year, month: month)
+    }
+    return total
   }
 
   // MARK: - Asset Fetching (PhotoLibraryService)
@@ -384,6 +418,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Clears the entire PHAsset cache (called on library changes).
   private func invalidateCache() {
     phAssetCache.removeAll()
+    adjustedCountByYearMonth.removeAll()
   }
 
   private func fetchPHAssets(identifiers: [String]) -> [PHAsset] {
@@ -473,7 +508,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       mediaType: asset.mediaType,
       pixelWidth: asset.pixelWidth,
       pixelHeight: asset.pixelHeight,
-      duration: asset.duration
+      duration: asset.duration,
+      hasAdjustments: asset.hasAdjustments
     )
   }
 }

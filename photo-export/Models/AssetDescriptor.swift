@@ -10,6 +10,9 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
   let pixelWidth: Int
   let pixelHeight: Int
   let duration: TimeInterval
+  /// Whether Photos has edits on this asset. Used to decide whether an edited
+  /// export is even applicable for the asset.
+  let hasAdjustments: Bool
 }
 
 /// App-owned value type that replaces PHAssetResource in the export path.

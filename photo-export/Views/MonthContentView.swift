@@ -60,7 +60,8 @@ struct MonthContentView: View {
               asset: asset,
               state: viewModel.thumbnailState(for: asset),
               isSelected: asset.id == selectedAsset?.id,
-              isExported: exportRecordStore.isExported(assetId: asset.id),
+              isExported: exportRecordStore.isExported(
+                asset: asset, selection: exportManager.versionSelection),
               onRetry: { viewModel.retryThumbnail(for: asset.id) }
             )
             .frame(width: 120, height: 120)
@@ -108,32 +109,31 @@ struct MonthContentView: View {
   }
 
   private var exportSummaryView: some View {
-    let total: Int = viewModel.assets.count
-    let summary: MonthStatusSummary? = {
-      return exportRecordStore.monthSummary(year: year, month: month, totalAssets: total)
-    }()
+    let summary = exportRecordStore.monthSummary(
+      assets: viewModel.assets, selection: exportManager.versionSelection)
     return HStack(spacing: 8) {
-      if let summary {
-        switch summary.status {
-        case .complete:
-          Label(
-            "\(summary.exportedCount)/\(summary.totalCount) exported",
-            systemImage: "checkmark.seal.fill"
-          )
-          .foregroundColor(.green)
-        case .partial:
-          Label(
-            "\(summary.exportedCount)/\(summary.totalCount) exported",
-            systemImage: "arrow.triangle.2.circlepath"
-          )
-          .foregroundColor(.orange)
-        case .notExported:
-          Label("0/\(summary.totalCount) exported", systemImage: "circle")
-            .foregroundColor(.secondary)
-        }
-      } else {
-        Label("No export store", systemImage: "questionmark.circle")
-          .foregroundColor(.secondary)
+      switch summary.status {
+      case .complete:
+        // `seal.fill` is Apple vocabulary for verification, not generic task completion;
+        // `circle.fill` is the right glyph and matches the rest of the app.
+        Label(
+          "\(summary.exportedCount)/\(summary.totalCount) exported",
+          systemImage: "checkmark.circle.fill"
+        )
+        .foregroundColor(.green)
+      case .partial:
+        // `arrow.triangle.2.circlepath` reads as "syncing / refreshing"; for a static
+        // partial state use the half-filled circle so the glyph means "in between".
+        Label(
+          "\(summary.exportedCount)/\(summary.totalCount) exported",
+          systemImage: "circle.lefthalf.filled"
+        )
+        .foregroundColor(.orange)
+      case .notExported:
+        Label(
+          "0/\(summary.totalCount) exported", systemImage: "circle"
+        )
+        .foregroundColor(.secondary)
       }
       Spacer()
     }

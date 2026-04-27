@@ -30,11 +30,19 @@ struct BackupScanner {
   /// The outcome of matching scanned backup files against the Photos library.
   struct MatchResult {
     /// Files that matched exactly one Photos asset with strong confirmation.
-    var matched: [(file: ScannedFile, asset: AssetDescriptor)] = []
+    var matched: [MatchedExportFile] = []
     /// Files where multiple Photos assets fit equally well.
     var ambiguous: [ScannedFile] = []
     /// Files with no matching Photos asset found.
     var unmatched: [ScannedFile] = []
+  }
+
+  /// A scanned file that has been unambiguously matched to a Photos asset, along with which
+  /// variant of that asset the file represents.
+  struct MatchedExportFile {
+    let file: ScannedFile
+    let asset: AssetDescriptor
+    let variant: ExportVariant
   }
 
   /// Progress updates emitted during scan/match.
@@ -77,8 +85,9 @@ struct BackupScanner {
     var results: [ScannedFile] = []
 
     // List year directories
-    guard let yearEntries = try? fm.contentsOfDirectory(
-      at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+    guard
+      let yearEntries = try? fm.contentsOfDirectory(
+        at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
     else {
       logger.warning("Could not enumerate backup root: \(rootURL.path, privacy: .public)")
       return []
@@ -89,8 +98,9 @@ struct BackupScanner {
         let year = parseYear(yearDir.lastPathComponent)
       else { continue }
 
-      guard let monthEntries = try? fm.contentsOfDirectory(
-        at: yearDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+      guard
+        let monthEntries = try? fm.contentsOfDirectory(
+          at: yearDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
       else { continue }
 
       for monthDir in monthEntries {
@@ -98,10 +108,13 @@ struct BackupScanner {
           let month = parseMonth(monthDir.lastPathComponent)
         else { continue }
 
-        guard let files = try? fm.contentsOfDirectory(
-          at: monthDir,
-          includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
-          options: [.skipsHiddenFiles])
+        guard
+          let files = try? fm.contentsOfDirectory(
+            at: monthDir,
+            includingPropertiesForKeys: [
+              .isRegularFileKey, .contentModificationDateKey, .fileSizeKey,
+            ],
+            options: [.skipsHiddenFiles])
         else { continue }
 
         for fileURL in files {
@@ -115,7 +128,7 @@ struct BackupScanner {
             ext.isEmpty ? baseStem : baseStem + "." + ext
 
           let resourceValues = try? fileURL.resourceValues(forKeys: [
-            .contentModificationDateKey, .fileSizeKey
+            .contentModificationDateKey, .fileSizeKey,
           ])
 
           results.append(
@@ -151,8 +164,21 @@ struct BackupScanner {
     let pixelWidth: Int
     let pixelHeight: Int
     let duration: TimeInterval
-    /// Original filenames from resources (cached once)
-    let originalFilenames: [String]
+    /// Whether Photos reports this asset as adjusted at fingerprint time.
+    let hasAdjustments: Bool
+    /// Filenames of original-side resources (`.photo`, `.video`, `.alternatePhoto`).
+    let originalResourceFilenames: [String]
+    /// Filenames of edited-side resources (`.fullSizePhoto`, `.fullSizeVideo`). Extensions are
+    /// kept verbatim so the scanner can use them as a strong filter.
+    let editedResourceFilenames: [String]
+    /// Stems of original-side resources, used for cross-extension edited matching.
+    var originalResourceStems: [String] {
+      originalResourceFilenames.map { ($0 as NSString).deletingPathExtension }
+    }
+    /// All resource filenames (kept for backward compatibility with filename-only matching).
+    var originalFilenames: [String] {
+      originalResourceFilenames + editedResourceFilenames
+    }
   }
 
   /// Builds fingerprints for a batch of AssetDescriptors with resource info from the service.
@@ -162,7 +188,18 @@ struct BackupScanner {
   ) -> [AssetFingerprint] {
     assets.map { asset in
       let resources = service.resources(for: asset.id)
-      let filenames = resources.map { $0.originalFilename }
+      let originalFilenames =
+        resources
+        .filter {
+          ResourceSelection.isOriginalResource(type: $0.type, mediaType: asset.mediaType)
+        }
+        .map(\.originalFilename)
+      let editedFilenames =
+        resources
+        .filter {
+          ResourceSelection.isEditedResource(type: $0.type, mediaType: asset.mediaType)
+        }
+        .map(\.originalFilename)
       let creationSecond: Int? =
         asset.creationDate.map { Int($0.timeIntervalSinceReferenceDate) }
       return AssetFingerprint(
@@ -173,7 +210,9 @@ struct BackupScanner {
         pixelWidth: asset.pixelWidth,
         pixelHeight: asset.pixelHeight,
         duration: asset.duration,
-        originalFilenames: filenames
+        hasAdjustments: asset.hasAdjustments,
+        originalResourceFilenames: originalFilenames,
+        editedResourceFilenames: editedFilenames
       )
     }
   }
@@ -225,7 +264,8 @@ struct BackupScanner {
           let assets = (try? await photoLibraryService.fetchAssets(year: y, month: m)) ?? []
           assetsByYearMonth[k] = assets
           // Build fingerprints once — this is the only resource call site
-          fingerprintsByYearMonth[k] = await buildFingerprints(for: assets, using: photoLibraryService)
+          fingerprintsByYearMonth[k] = await buildFingerprints(
+            for: assets, using: photoLibraryService)
         }
       }
 
@@ -233,15 +273,6 @@ struct BackupScanner {
       var combinedFingerprints: [AssetFingerprint] = []
       for (y, m) in monthsToFetch {
         combinedFingerprints.append(contentsOf: fingerprintsByYearMonth["\(y)-\(m)"] ?? [])
-      }
-
-      // Build index: (mediaType, creationSecond) → [fingerprint indices]
-      var dateIndex: [DateIndexKey: [Int]] = [:]
-      for (i, fp) in combinedFingerprints.enumerated() {
-        if let sec = fp.creationSecond {
-          let key = DateIndexKey(mediaType: fp.mediaType, creationSecond: sec)
-          dateIndex[key, default: []].append(i)
-        }
       }
 
       // Combine assets for result references
@@ -253,6 +284,19 @@ struct BackupScanner {
       var assetById: [String: AssetDescriptor] = [:]
       for asset in combinedAssets {
         assetById[asset.id] = asset
+      }
+
+      // Pre-compute the set of group stems that have a `_orig` companion sibling in this
+      // scope. When a natural-stem file's stem appears here, the file is an `.edited`
+      // companion paired with that `_orig` original — even when the file's filename also
+      // matches a known original-resource filename (the include-originals same-extension
+      // case where the original moved out of the way to the `_orig` sibling).
+      var stemsWithOrigSibling = Set<String>()
+      for file in files {
+        if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+          stemsWithOrigSibling.insert(parsed.groupStem)
+          stemsWithOrigSibling.insert(parsed.canonicalOriginalStem)
+        }
       }
 
       for file in files {
@@ -271,15 +315,12 @@ struct BackupScanner {
         let matchOutcome = matchSingleFile(
           file,
           fingerprints: combinedFingerprints,
-          dateIndex: dateIndex
+          assetById: assetById,
+          stemsWithOrigSibling: stemsWithOrigSibling
         )
         switch matchOutcome {
-        case .matched(let fp):
-          if let asset = assetById[fp.localIdentifier] {
-            result.matched.append((file: file, asset: asset))
-          } else {
-            result.unmatched.append(file)
-          }
+        case .matched(let matched):
+          result.matched.append(matched)
         case .ambiguous:
           result.ambiguous.append(file)
         case .unmatched:
@@ -292,12 +333,6 @@ struct BackupScanner {
       "Match complete: \(result.matched.count) matched, \(result.ambiguous.count) ambiguous, \(result.unmatched.count) unmatched"
     )
     return result
-  }
-
-  /// Hash key for the (mediaType, creationSecond) index.
-  private struct DateIndexKey: Hashable {
-    let mediaType: PHAssetMediaType
-    let creationSecond: Int
   }
 
   /// Returns (year, month) tuples for a month and its two neighbors.
@@ -320,97 +355,197 @@ struct BackupScanner {
   // MARK: - Hybrid single-file matching
 
   private enum SingleMatchOutcome {
-    case matched(AssetFingerprint)
+    case matched(MatchedExportFile)
     case ambiguous
     case unmatched
   }
 
-  /// Hybrid matching for a single backup file against pre-built fingerprints.
+  /// Classifies a scanned file's filename as original-variant or edited-variant against the
+  /// supplied fingerprints, then narrows the candidate set by date and, if still ambiguous, by
+  /// file metadata (dimensions/duration).
   ///
-  /// 1. Primary: find candidates by mod-date → creation-second match (fast hash lookup)
-  /// 2. If not unique, narrow by filename from cached fingerprints
-  /// 3. Only if still ambiguous, lazily read file dimensions/duration (once per file)
+  /// Classification order:
+  /// 1. `_orig` companion: filename parses as a `_orig` candidate AND a fingerprint with
+  ///    adjustments has matching original-resource stem and extension. Fall through to
+  ///    step 2 on miss so a real user filename like `vacation_orig.JPG` is not silently lost.
+  /// 2. Exact match against a known original resource filename → `.original`, **unless** a
+  ///    `_orig` sibling exists in the same scope for the same stem and the candidate is
+  ///    adjusted (the include-originals same-extension case where the natural-stem file is
+  ///    actually the edit and the original moved out to `_orig`) — in that case classify
+  ///    as `.edited`.
+  /// 3. Collision-stripped match against a known original resource filename → `.original`
+  ///    (with the same `_orig`-sibling override as step 2).
+  /// 4. Cross-extension edited: filename's stem (collision-stripped) matches an adjusted
+  ///    asset's original-resource stem AND the file extension matches one of that asset's
+  ///    edited-resource extensions → `.edited`. Same-extension same-stem cases without a
+  ///    `_orig` sibling land in step 2/3 as `.original` (the documented default-mode
+  ///    import limitation).
   private static func matchSingleFile(
     _ file: ScannedFile,
     fingerprints: [AssetFingerprint],
-    dateIndex: [DateIndexKey: [Int]]
+    assetById: [String: AssetDescriptor],
+    stemsWithOrigSibling: Set<String>
   ) -> SingleMatchOutcome {
-    let expectedMediaType = mediaType(for: file.fileExtension)
+    // Step 1: `_orig` companion. Filename ends with `_orig` (with optional ` (N)`).
+    if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+      let origCandidates = fingerprints.filter { fp in
+        guard fp.hasAdjustments else { return false }
+        let exts = Set(
+          fp.originalResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+        )
+        guard exts.isEmpty || exts.contains(file.fileExtension) else { return false }
+        return fp.originalResourceStems.contains(parsed.groupStem)
+          || fp.originalResourceStems.contains(parsed.canonicalOriginalStem)
+      }
+      if !origCandidates.isEmpty {
+        return narrow(
+          file: file, candidates: origCandidates,
+          assetById: assetById, variant: .original)
+      }
+      // Fall through: a user filename like `vacation_orig.JPG` whose asset has no adjusted
+      // sibling at the `vacation` stem must still classify via step 2.
+    }
 
-    // Step 1: Fast date-based lookup
-    var candidates: [AssetFingerprint] = []
-    if let modDate = file.modificationDate {
-      let modSecond = Int(modDate.timeIntervalSinceReferenceDate)
-      // Check the exact second and ±1 second to handle rounding
-      for offset in -1...1 {
-        let key = DateIndexKey(mediaType: expectedMediaType, creationSecond: modSecond + offset)
-        if let indices = dateIndex[key] {
-          for i in indices {
-            let fp = fingerprints[i]
-            // Verify within 1.0 second (the hash is truncated, so refine here)
-            if let cd = fp.creationDate {
-              if abs(modDate.timeIntervalSince(cd)) <= 1.0 {
-                candidates.append(fp)
-              }
-            }
-          }
+    let fileStem = (file.filename as NSString).deletingPathExtension
+    let (canonicalFileStem, _) = ExportFilenamePolicy.stripTrailingCollisionSuffix(from: fileStem)
+    let hasOrigSibling =
+      stemsWithOrigSibling.contains(fileStem)
+      || stemsWithOrigSibling.contains(canonicalFileStem)
+
+    // Step 2: exact match to a known original-resource filename.
+    let originalExactCandidates = fingerprints.filter {
+      $0.originalResourceFilenames.contains(file.filename)
+    }
+    if !originalExactCandidates.isEmpty {
+      if hasOrigSibling {
+        let editedFromPair = originalExactCandidates.filter { fp in
+          guard fp.hasAdjustments else { return false }
+          let editedExts = Set(
+            fp.editedResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+          )
+          if editedExts.isEmpty { return true }
+          return editedExts.contains(file.fileExtension)
+        }
+        if !editedFromPair.isEmpty {
+          return narrow(
+            file: file, candidates: editedFromPair,
+            assetById: assetById, variant: .edited)
         }
       }
+      return narrow(
+        file: file, candidates: originalExactCandidates,
+        assetById: assetById, variant: .original)
     }
 
-    if candidates.count == 1 {
-      return .matched(candidates[0])
-    }
-
-    // Step 2: Narrow by filename (using cached fingerprint filenames, no Photos calls)
-    if candidates.count > 1 {
-      let byFilename = candidates.filter { fp in
-        filenameMatches(file: file, fingerprint: fp)
+    // Step 3: collision-stripped match to a known original-resource filename.
+    if file.hasCollisionSuffix {
+      let baseCandidates = fingerprints.filter {
+        $0.originalResourceFilenames.contains(file.baseFilename)
       }
-      if byFilename.count == 1 { return .matched(byFilename[0]) }
-      if byFilename.count > 1 { return .ambiguous }
-      // filename didn't help — still ambiguous from date alone
-      return .ambiguous
+      if !baseCandidates.isEmpty {
+        if hasOrigSibling {
+          let editedFromPair = baseCandidates.filter { fp in
+            guard fp.hasAdjustments else { return false }
+            let editedExts = Set(
+              fp.editedResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+            )
+            if editedExts.isEmpty { return true }
+            return editedExts.contains(file.fileExtension)
+          }
+          if !editedFromPair.isEmpty {
+            return narrow(
+              file: file, candidates: editedFromPair,
+              assetById: assetById, variant: .edited)
+          }
+        }
+        return narrow(
+          file: file, candidates: baseCandidates,
+          assetById: assetById, variant: .original)
+      }
     }
 
-    // Step 3: No date match — fall back to filename-only search across all fingerprints
-    let nameMatched = fingerprints.filter { fp in
-      fp.mediaType == expectedMediaType
-        && fp.creationDate != nil
-        && self.filenameMatches(file: file, fingerprint: fp)
+    // Step 4: cross-extension edited. The file's stem (collision-stripped) matches an
+    // adjusted asset's original-resource stem AND the file's extension matches one of that
+    // asset's edited-resource extensions.
+    let stem = (file.filename as NSString).deletingPathExtension
+    let (canonicalStem, _) = ExportFilenamePolicy.stripTrailingCollisionSuffix(from: stem)
+    let editedCandidates = fingerprints.filter { fp in
+      guard fp.hasAdjustments else { return false }
+      guard
+        fp.originalResourceStems.contains(stem)
+          || fp.originalResourceStems.contains(canonicalStem)
+      else { return false }
+      let editedExts = Set(
+        fp.editedResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+      )
+      let originalExts = Set(
+        fp.originalResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+      )
+      if !editedExts.isEmpty {
+        guard editedExts.contains(file.fileExtension) else { return false }
+        // Defensive: a same-extension natural-stem file should already have matched in
+        // step 2 (exact filename) or step 3 (collision-stripped). The only way this
+        // branch fires is the rare alternate-photo edge where a fingerprint has multiple
+        // original-side resources with different stems sharing an extension. In that
+        // case we cannot tell edit from original by filename alone — leave unmatched.
+        if originalExts.contains(file.fileExtension) { return false }
+        return true
+      }
+      // No edited-extension info — only accept when the extension differs from any
+      // original-resource extension to avoid over-matching same-extension natural-stem files.
+      return !originalExts.contains(file.fileExtension)
     }
+    if editedCandidates.isEmpty { return .unmatched }
+    return narrow(
+      file: file, candidates: editedCandidates, assetById: assetById, variant: .edited)
+  }
 
-    if nameMatched.isEmpty {
+  /// Narrows a candidate fingerprint set to a single match by date and then by lazy file
+  /// metadata.
+  private static func narrow(
+    file: ScannedFile,
+    candidates: [AssetFingerprint],
+    assetById: [String: AssetDescriptor],
+    variant: ExportVariant
+  ) -> SingleMatchOutcome {
+    func wrap(_ fp: AssetFingerprint) -> SingleMatchOutcome {
+      if let asset = assetById[fp.localIdentifier] {
+        return .matched(
+          MatchedExportFile(file: file, asset: asset, variant: variant))
+      }
       return .unmatched
     }
 
-    // Step 4: Disambiguate filename matches with lazy file metadata (read once per file)
-    let withDiscriminator = discriminateByFileMetadata(
-      file: file, candidates: nameMatched)
-
-    if withDiscriminator.count == 1 {
-      return .matched(withDiscriminator[0])
-    } else if withDiscriminator.count > 1 {
+    if candidates.count == 1 {
+      let only = candidates[0]
+      if datesAlign(file: file, fingerprint: only) { return wrap(only) }
+      // Single filename candidate whose creation date does not align with the file's mod
+      // date — require a stronger metadata confirmation before claiming a match, matching the
+      // pre-variant behaviour around the filename-only fallback.
+      let confirmed = discriminateByFileMetadata(file: file, candidates: [only])
+      if confirmed.count == 1 { return wrap(only) }
       return .ambiguous
     }
 
-    // Had filename matches but no strong discriminator confirmed any
+    if let modDate = file.modificationDate {
+      let byDate = candidates.filter { fp in
+        guard let created = fp.creationDate else { return false }
+        return abs(modDate.timeIntervalSince(created)) <= 1.0
+      }
+      if byDate.count == 1 { return wrap(byDate[0]) }
+      if byDate.count > 1 { return .ambiguous }
+    }
+
+    let discriminated = discriminateByFileMetadata(file: file, candidates: candidates)
+    if discriminated.count == 1 { return wrap(discriminated[0]) }
+    if discriminated.count > 1 { return .ambiguous }
     return .ambiguous
   }
 
-  /// Checks if a file's name matches an asset fingerprint's original filenames.
-  private static func filenameMatches(
-    file: ScannedFile, fingerprint: AssetFingerprint
-  ) -> Bool {
-    // Exact filename match
-    if fingerprint.originalFilenames.contains(file.filename) {
-      return true
-    }
-    // Base filename match (collision suffix stripped)
-    if fingerprint.originalFilenames.contains(file.baseFilename) {
-      return true
-    }
-    return false
+  private static func datesAlign(file: ScannedFile, fingerprint: AssetFingerprint) -> Bool {
+    guard let modDate = file.modificationDate, let created = fingerprint.creationDate
+    else { return false }
+    return abs(modDate.timeIntervalSince(created)) <= 1.0
   }
 
   /// Lazy discriminator: reads file dimensions/duration ONCE and checks all candidates.
@@ -458,11 +593,11 @@ struct BackupScanner {
 
   private static let imageExtensions: Set<String> = [
     "jpg", "jpeg", "heic", "heif", "png", "tiff", "tif", "gif", "bmp", "webp", "dng", "raw",
-    "cr2", "cr3", "nef", "arw", "orf", "rw2"
+    "cr2", "cr3", "nef", "arw", "orf", "rw2",
   ]
 
   private static let videoExtensions: Set<String> = [
-    "mov", "mp4", "m4v", "avi", "mkv", "3gp", "mts"
+    "mov", "mp4", "m4v", "avi", "mkv", "3gp", "mts",
   ]
 
   static func mediaType(for fileExtension: String) -> PHAssetMediaType {

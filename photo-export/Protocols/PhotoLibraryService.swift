@@ -14,6 +14,16 @@ protocol PhotoLibraryService: AnyObject {
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor?
   func countAssets(year: Int, month: Int) throws -> Int
   func countAssets(year: Int) throws -> Int
+
+  /// Number of assets in the given month whose `hasAdjustments` is `true`. Implementations are
+  /// allowed to cache this; `PHAsset.hasAdjustments` cannot be expressed as a Photos fetch
+  /// predicate, so this is typically an iteration over the month's assets.
+  func countAdjustedAssets(year: Int, month: Int) async throws -> Int
+
+  /// Number of assets in the given year whose `hasAdjustments` is `true`. Sum of the monthly
+  /// counts.
+  func countAdjustedAssets(year: Int) async throws -> Int
+
   func availableYears() throws -> [Int]
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)]
 

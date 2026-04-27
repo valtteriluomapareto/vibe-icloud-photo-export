@@ -32,7 +32,10 @@ struct ExportRecordStoreRecoveryTests {
   ) -> ExportRecord {
     ExportRecord(
       id: id, year: year, month: month, relPath: "\(year)/\(String(format: "%02d", month))/",
-      filename: "\(id).JPG", status: status, exportDate: Date(), lastError: nil)
+      variants: [
+        .original: ExportVariantRecord(
+          filename: "\(id).JPG", status: status, exportDate: Date(), lastError: nil)
+      ])
   }
 
   // MARK: - Snapshot + log overlay
@@ -58,8 +61,8 @@ struct ExportRecordStoreRecoveryTests {
 
     // Write a log with 2 mutations: update "b" to failed, add "d"
     var updatedB = snapshotRecords["b"]!
-    updatedB.status = .failed
-    updatedB.lastError = "Disk error"
+    updatedB.variants[.original] = ExportVariantRecord(
+      filename: "b.JPG", status: .failed, exportDate: Date(), lastError: "Disk error")
     let mutation1 = ExportRecordMutation.upsert(updatedB)
     let newD = makeRecord(id: "d", year: 2025, month: 4)
     let mutation2 = ExportRecordMutation.upsert(newD)
@@ -79,17 +82,17 @@ struct ExportRecordStoreRecoveryTests {
     store.configure(for: dest)
 
     #expect(store.recordsById.count == 4)
-    #expect(store.recordsById["a"]?.status == .done)
-    #expect(store.recordsById["b"]?.status == .failed)
-    #expect(store.recordsById["b"]?.lastError == "Disk error")
-    #expect(store.recordsById["c"]?.status == .done)
-    #expect(store.recordsById["d"]?.status == .done)
+    #expect(store.recordsById["a"]?.variants[.original]?.status == .done)
+    #expect(store.recordsById["b"]?.variants[.original]?.status == .failed)
+    #expect(store.recordsById["b"]?.variants[.original]?.lastError == "Disk error")
+    #expect(store.recordsById["c"]?.variants[.original]?.status == .done)
+    #expect(store.recordsById["d"]?.variants[.original]?.status == .done)
 
     // Done counts should reflect the overlay
-    #expect(store.doneCountByYearMonth["2025-1"] == 1)  // a
-    #expect(store.doneCountByYearMonth["2025-2"] == nil || store.doneCountByYearMonth["2025-2"] == 0)  // b was done → failed
-    #expect(store.doneCountByYearMonth["2025-3"] == 1)  // c
-    #expect(store.doneCountByYearMonth["2025-4"] == 1)  // d
+    #expect(store.recordCount(year: 2025, month: 1, variant: .original, status: .done) == 1)
+    #expect(store.recordCount(year: 2025, month: 2, variant: .original, status: .done) == 0)
+    #expect(store.recordCount(year: 2025, month: 3, variant: .original, status: .done) == 1)
+    #expect(store.recordCount(year: 2025, month: 4, variant: .original, status: .done) == 1)
   }
 
   // MARK: - Corrupted snapshot falls back to log
@@ -121,8 +124,8 @@ struct ExportRecordStoreRecoveryTests {
 
     // Should have recovered from log despite corrupted snapshot
     #expect(store.recordsById.count == 1)
-    #expect(store.recordsById["from-log"]?.status == .done)
-    #expect(store.doneCountByYearMonth["2025-5"] == 1)
+    #expect(store.recordsById["from-log"]?.variants[.original]?.status == .done)
+    #expect(store.recordCount(year: 2025, month: 5, variant: .original, status: .done) == 1)
   }
 
   // MARK: - Empty snapshot + populated log
@@ -153,7 +156,7 @@ struct ExportRecordStoreRecoveryTests {
 
     #expect(store.recordsById.count == 5)
     for i in 1...5 {
-      #expect(store.recordsById["log-\(i)"]?.status == .done)
+      #expect(store.recordsById["log-\(i)"]?.variants[.original]?.status == .done)
     }
   }
 
@@ -289,7 +292,7 @@ struct ExportRecordStoreRecoveryTests {
     store.configure(for: dest)
 
     #expect(store.recordsById["to-delete"] == nil)
-    #expect(store.doneCountByYearMonth["2025-1"] == nil || store.doneCountByYearMonth["2025-1"] == 0)
+    #expect(store.recordCount(year: 2025, month: 1, variant: .original, status: .done) == 0)
   }
 
   // MARK: - Persistence round-trip
@@ -313,8 +316,8 @@ struct ExportRecordStoreRecoveryTests {
     store2.configure(for: dest)
 
     #expect(store2.recordsById.count == 2)
-    #expect(store2.recordsById["rt-1"]?.status == .done)
-    #expect(store2.recordsById["rt-2"]?.status == .failed)
-    #expect(store2.recordsById["rt-2"]?.lastError == "Something broke")
+    #expect(store2.recordsById["rt-1"]?.variants[.original]?.status == .done)
+    #expect(store2.recordsById["rt-2"]?.variants[.original]?.status == .failed)
+    #expect(store2.recordsById["rt-2"]?.variants[.original]?.lastError == "Something broke")
   }
 }

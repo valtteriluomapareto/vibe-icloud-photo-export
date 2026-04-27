@@ -21,6 +21,21 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 - Handles both images and videos
 - Real-time progress tracking in the toolbar (count and current filename)
 
+### Version selection
+
+A toolbar toggle next to the export buttons chooses what to write:
+
+- **Off (default)** — one file per photo, in the version Photos shows. Edited photos
+  export the edit; unedited photos export the original. The file lands at the original
+  Photos filename with the extension of the bytes being written, e.g. a HEIC original with
+  a JPEG-rendered edit writes `IMG_0001.JPG`.
+- **On — Include originals** — same as off, plus a `_orig` companion for any photo with
+  edits in Photos. The companion holds the unmodified original bytes alongside the
+  user-visible edit. For an edited HEIC + JPEG-rendered edit the destination ends up with
+  `IMG_0001.JPG` (the edit) and `IMG_0001_orig.HEIC` (the original).
+
+Unedited photos never produce a `_orig` companion — there is nothing to pair with.
+
 ## Export destination
 
 - Standard macOS folder picker for selecting the export root

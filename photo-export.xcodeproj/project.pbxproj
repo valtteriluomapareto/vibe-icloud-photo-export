@@ -24,7 +24,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		B9FD22332DB75E32001C6BE4 /* photo-export.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "photo-export.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B9FD22332DB75E32001C6BE4 /* Photo Export.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photo Export.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9FD22412DB75E33001C6BE4 /* photo-exportTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "photo-exportTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9FD224B2DB75E33001C6BE4 /* photo-exportUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "photo-exportUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -98,7 +98,7 @@
 		B9FD22342DB75E32001C6BE4 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B9FD22332DB75E32001C6BE4 /* photo-export.app */,
+				B9FD22332DB75E32001C6BE4 /* Photo Export.app */,
 				B9FD22412DB75E33001C6BE4 /* photo-exportTests.xctest */,
 				B9FD224B2DB75E33001C6BE4 /* photo-exportUITests.xctest */,
 			);
@@ -127,7 +127,7 @@
 			packageProductDependencies = (
 			);
 			productName = "photo-export";
-			productReference = B9FD22332DB75E32001C6BE4 /* photo-export.app */;
+			productReference = B9FD22332DB75E32001C6BE4 /* Photo Export.app */;
 			productType = "com.apple.product-type.application";
 		};
 		B9FD22402DB75E33001C6BE4 /* photo-exportTests */ = {
@@ -417,7 +417,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Photo Export";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-				"INFOPLIST_KEY_NSHumanReadableCopyright" = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo Export needs access to your Photos library to browse your photos and videos and export them to a folder you choose.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -448,7 +448,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Photo Export";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-				"INFOPLIST_KEY_NSHumanReadableCopyright" = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Valtteri Luoma. All rights reserved.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo Export needs access to your Photos library to browse your photos and videos and export them to a folder you choose.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

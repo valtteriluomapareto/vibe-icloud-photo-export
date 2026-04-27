@@ -111,25 +111,45 @@ struct AssetDetailView: View {
         let durationString = String(format: "%.0fs", asset.duration)
         Text("Duration: \(durationString)")
       }
-      let id = asset.id
-      if let export = exportRecordStore.exportInfo(assetId: id) {
-        switch export.status {
-        case .done:
-          if let when = export.exportDate {
-            Text("Exported: \(dateTimeFormatter.string(from: when))")
-          } else {
-            Text("Exported")
-          }
-        case .inProgress:
-          Text("Export: In progress")
-        case .failed:
-          Text("Export failed: \(export.lastError ?? "Unknown error")")
-        case .pending:
-          Text("Export: Pending")
+      Text(asset.hasAdjustments ? "Edits: Available in Photos" : "Edits: None in Photos")
+      if let export = exportRecordStore.exportInfo(assetId: asset.id) {
+        variantStatusView(export.variants[.original], label: "Original")
+        if asset.hasAdjustments {
+          variantStatusView(export.variants[.edited], label: "Edited")
         }
       }
     }
     .font(.footnote)
+  }
+
+  @ViewBuilder
+  private func variantStatusView(_ variant: ExportVariantRecord?, label: String) -> some View {
+    if let variant {
+      switch variant.status {
+      case .done:
+        if let when = variant.exportDate {
+          Text("\(label): Exported \(dateTimeFormatter.string(from: when))")
+        } else {
+          Text("\(label): Exported")
+        }
+      case .inProgress:
+        Text("\(label): In progress")
+      case .failed:
+        if let friendly = ExportVariantRecovery.friendlyCopy(
+          for: variant.lastError, label: label)
+        {
+          // Named recoverable case — render in secondary color with copy that doesn't
+          // imply user action or guarantee recovery, just describes the retry behaviour.
+          Text(friendly)
+            .foregroundColor(.secondary)
+        } else {
+          Text("\(label) failed: \(variant.lastError ?? "Unknown error")")
+            .foregroundColor(.red)
+        }
+      case .pending:
+        Text("\(label): Pending")
+      }
+    }
   }
 
   private func mediaTypeString(from type: PHAssetMediaType) -> String {

@@ -34,23 +34,42 @@ Manages the chosen export destination folder using security-scoped bookmarks.
 Tracks which assets have been exported per-destination to avoid duplicates and support resume.
 
 - Stores records by `PHAsset.localIdentifier`
+- Per-variant state: each record carries a `variants` dictionary keyed by `original` /
+  `edited`, so the same asset can track an original export and an edited export
+  independently
+- Legacy flat records (single `filename` + `status`) decode into a synthesized `.original`
+  variant so existing users keep their progress after upgrade
 - JSONL-based persistence with compaction
 - Reconfigures automatically when the destination changes
-- Provides month-level aggregation for sidebar badges
+- Provides selection-aware month summaries for the thumbnail grid and approximate counts
+  for sidebar badges
 
 ### ExportManager
 
 Orchestrates the export queue. Depends on the other three managers.
 
 - Enqueue/pause/cancel/resume operations
-- Sequential export pipeline
-- Atomic writes: temp file → move to final location
-- Updates export records after each successful export
+- Persists the user's version selection (`edited` / `editedWithOriginals`) in
+  `UserDefaults` and snapshots it onto each enqueued job
+- Sequential export pipeline; each job writes every variant required for the asset under
+  the active selection
+- `ExportFilenamePolicy` decides the `_orig` companion filename shape; `ResourceSelection`
+  picks between original-side and edited-side `PHAssetResource`s
+- Atomic writes: per-variant temp file → move to final location, with stale `.tmp`
+  cleanup at export start
+- Updates per-variant export records after each successful write; a failed edited variant
+  does not roll back a completed original variant
 - Runs the "Import Existing Backup…" flow
 
 ## Supporting Services
 
 - `BackupScanner` scans an existing backup folder and matches files back to Photos assets.
+  Its fingerprints split original-side and edited-side resource filenames so each scanned
+  file is classified per variant before being merged into the record store.
+- `ExportFilenamePolicy` is the shared source of truth for `_orig` companion filename
+  rules and used by both the export pipeline and the backup scanner.
+- `ResourceSelection` picks the right `PHAssetResource` for a variant and is the shared
+  classifier for "original-side" vs "edited-side" resources.
 - `FileIOService` centralizes atomic file moves and timestamp handling.
 
 ## Views and View Models

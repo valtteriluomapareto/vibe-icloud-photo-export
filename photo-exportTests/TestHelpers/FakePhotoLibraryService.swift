@@ -82,6 +82,19 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return total
   }
 
+  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
+    let key = "\(year)-\(month)"
+    return (assetsByYearMonth[key] ?? []).reduce(0) { $0 + ($1.hasAdjustments ? 1 : 0) }
+  }
+
+  func countAdjustedAssets(year: Int) async throws -> Int {
+    var total = 0
+    for m in 1...12 {
+      total += try await countAdjustedAssets(year: year, month: m)
+    }
+    return total
+  }
+
   func availableYears() throws -> [Int] {
     yearCounts.map(\.year)
   }

@@ -211,98 +211,159 @@ own filename, status, exportDate, and lastError. The `filename` field
 on the `.original` variant now holds either the bare-stem form or the
 `_orig` form depending on which mode wrote it.
 
-### `isExported(asset:selection:)` becomes mode-aware
+### `isExported(asset:selection:)` is strict in both modes
 
-The current "all required variants are .done" check needs a relaxation
-for the default mode so that re-imports survive same-extension
-ambiguity (see the **Backup scanner** section below). The relaxation
-is *filename-aware* — a `.original` variant whose recorded filename is
-the `_orig` companion form (i.e. only the RAW backup is on disk, not
-the user-visible edit) does not satisfy the default mode by itself,
-because the user-visible file is missing.
+Earlier drafts of this plan tried to relax default-mode completion so
+that a re-imported same-extension adjusted asset (whose record ended
+up labeled `.original.done` despite the file actually being the edit)
+would not get re-exported. Reviewer feedback established that the
+relaxation conflates two distinct cases:
+
+- **Post-edit:** an unedited asset was previously exported as
+  `.original.done` at the natural stem. The user later applies an edit
+  in Photos. The asset is now adjusted; the user expects the new edit
+  to be exported. With a relaxed rule that accepts any natural-stem
+  `.original.done`, the asset would silently be skipped — the user
+  edits a photo and re-runs export, and nothing happens. Bad.
+- **`vacation_orig.JPG` user filename:** an asset whose actual Photos
+  filename ends with `_orig`. With a filename-only `isOrigCompanion`
+  predicate driving rejection, the unedited asset would be perpetually
+  re-exported because the predicate fires on the user's own filename.
+  Bad too.
+
+Both edge cases dissolve under a strict rule that uses the asset's
+*current* `hasAdjustments` to decide what's required, then checks
+those exact variants against the records:
 
 ```swift
 func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
   guard let record = recordsById[asset.id] else { return false }
-  switch selection {
-  case .edited:
-    // The user-visible file lives at the natural stem. Either the .edited
-    // variant (for adjusted assets) or the .original variant (for unedited
-    // assets) writes there. A .original record whose filename is the _orig
-    // companion form is a RAW backup *next to* a user-visible file —
-    // never the user-visible file itself, so it must not count alone.
-    if record.variants[.edited]?.status == .done { return true }
-    if let original = record.variants[.original],
-       original.status == .done,
-       let filename = original.filename,
-       !ExportFilenamePolicy.isOrigCompanion(filename: filename)
-    {
-      return true
-    }
-    return false
-  case .editedWithOriginals:
-    // Strict: both variants required for adjusted assets, original-only
-    // for unedited. Existing required-variants logic.
-    let required = requiredVariants(for: asset, selection: selection)
-    return required.allSatisfy { record.variants[$0]?.status == .done }
-  }
+  let required = requiredVariants(for: asset, selection: selection)
+  return required.allSatisfy { record.variants[$0]?.status == .done }
 }
 ```
 
-`ExportFilenamePolicy.isOrigCompanion(filename:)` is a new helper —
-returns true when the filename's stem ends with `_orig` (with optional
-trailing collision suffix `(N)` allowed).
+Walking the cases:
 
-Counter-example the relaxation now correctly handles: a previous
-include-originals run wrote `.original.done` at `IMG_0001_orig.HEIC`
-and `.edited.failed` (e.g. iCloud render didn't materialise). The user
-toggles the option off and runs **Export Month**. Without the filename
-check, the asset would look "done" because `.original` is `.done`, and
-the user's library would silently miss the user-visible photo. With
-the check, the asset is correctly seen as incomplete; the next run
-attempts `.edited` again.
+- **Unedited asset, default mode.** `requiredVariants = [.original]`.
+  Check `.original.done`. The filename's shape is irrelevant — the
+  asset isn't adjusted, so a `_orig`-ish filename is just the user's
+  filename. ✓
+- **Adjusted asset, default mode.** `requiredVariants = [.edited]`.
+  Check `.edited.done`. A pre-existing `.original.done` (from when
+  the asset was unedited, or from a re-import that mis-classified the
+  natural-stem file as `.original`) does not satisfy. The pipeline
+  re-enqueues `.edited`. ✓
+- **Adjusted asset, include-originals.** `requiredVariants = [.original,
+  .edited]`. Both must be done. Orphaned `_orig` companion (i.e.
+  `.original.done` at `_orig` filename, but `.edited.failed`) does
+  not satisfy. ✓
+- **Unedited asset, include-originals.** `requiredVariants = [.original]`.
+  Same as default mode for unedited. ✓
+
+The cost of this strictness shows up in two scenarios that are now
+documented limitations rather than silent skips:
+
+- **Post-edit re-export** lands the new edit at a collision-suffixed
+  path. The destination ends up with `IMG_0001.JPG` (old unedited
+  bytes, recorded as `.original.done`) and `IMG_0001 (1).JPG` (new
+  edit, recorded as `.edited.done`). The user has both states; the
+  detail pane shows both rows. A future enhancement could implement
+  *same-asset controlled overwrite* (the pipeline replaces a same-
+  asset's prior `.original` file at the natural stem when writing a
+  fresh `.edited` to the same path), but that's deliberately out of
+  scope here — the (1)-suffixed file is a one-time cost on first
+  re-export after each new edit, and no further duplicates accumulate
+  on subsequent runs.
+- **Re-import same-extension adjusted asset.** The scanner labels the
+  natural-stem JPEG as `.original`. The next default-mode export sees
+  `.edited` not done, re-exports, and lands at `IMG_0001 (1).JPG`. One
+  duplicate per asset, then steady state. Same documented limitation.
+
+`ExportFilenamePolicy.isOrigCompanion(filename:)` is **not** used in
+`isExported` under this design. The predicate is still needed by the
+sidebar's records-only count heuristic (see the `ExportRecordStore
+API surface` section) and by the scanner's `_orig` parser, but
+asset-aware completion checks consult the asset descriptor directly.
 
 ## ExportRecordStore API surface
 
 - `markVariantInProgress / markVariantExported / markVariantFailed /
   removeVariant` — keep their signatures.
 - `bulkImportRecords` — keeps the per-variant merge.
-- `monthSummary(assets:selection:)` — simplifies. Under both modes,
-  total = total assets in the month. Under default mode, exported =
-  count of assets whose `isExported(asset:selection:)` is true under
-  the filename-aware relaxed rule. Under `editedWithOriginals`,
-  exported = count of assets whose required variants are all done.
-- `sidebarSummary(year:month:totalCount:selection:)` — the
-  `adjustedCount` parameter goes away. **This is correct because
-  filename inspection on the records replaces the need for adjusted
-  counts**, not because adjusted counts are uninformative. Specifically:
 
-  | Mode | "Exported in this scope" =                                           |
-  |---|---|
-  | Default | records where `.edited.done` OR (`.original.done` AND filename is not `_orig`) |
-  | Include originals | records where (`.original.done` AND `.edited.done`) OR (`.original.done` AND filename is not `_orig`) |
+### Two evaluation paths: asset-aware vs. records-only
 
-  Both rules can be evaluated against the in-memory records alone
-  (because the `_orig` suffix is what tells us whether the original
-  record is a "backup of an edited asset" or "the only file for an
-  unedited asset"). No `PHAsset.hasAdjustments` lookup needed.
+Completion is evaluated in two places with different inputs:
+
+- **The export pipeline and the month-content view** have the loaded
+  `AssetDescriptor` and so can call the strict, asset-aware
+  `isExported(asset:selection:)`. This is the authoritative check.
+- **The sidebar `YearRow` and `MonthRow`** do not have descriptors
+  loaded for un-selected scopes. They evaluate completion from
+  records alone, using a filename heuristic that approximates the
+  asset-aware rule. This is an approximation, not a contract; the
+  detail pane and the asset-aware path remain authoritative.
+
+### Asset-aware (authoritative)
+
+- `isExported(asset:selection:)` — strict, see the previous section.
+- `monthSummary(assets:selection:)` — counts assets that satisfy
+  `isExported(asset:selection:)` against the descriptor list. Used by
+  `MonthContentView` because it has the descriptors loaded.
+
+### Records-only (sidebar approximation)
+
+A single helper computes the count of records that look fully exported
+under each mode's heuristic:
+
+```swift
+/// Records-only approximation of "fully exported under this selection."
+/// Used by sidebar rows that do not hold loaded asset descriptors.
+/// Approximates the asset-aware result by reading filename shape:
+/// a `.original` recorded at the `_orig` companion form is taken as
+/// "RAW backup of an edited asset" (does not by itself satisfy the
+/// asset); a `.original` at the natural stem is taken as the
+/// user-visible file for an unedited asset (does satisfy).
+///
+/// The approximation mis-classifies one edge case: a user-imported
+/// asset whose actual Photos filename literally ends with `_orig`
+/// (e.g. `vacation_orig.JPG`) is recorded with that filename, the
+/// predicate fires, and the sidebar under-counts. The detail pane
+/// remains correct via the asset-aware path. Documented in the manual
+/// testing guide.
+func sidebarExportedCount(
+  year: Int, month: Int? = nil, selection: ExportVersionSelection
+) -> Int
+```
+
+Per-mode rule used inside `sidebarExportedCount`:
+
+| Mode | A record is "fully exported" when… |
+|---|---|
+| Default (`.edited`) | `.edited.done` OR (`.original.done` AND filename is at the natural stem, i.e. `!isOrigCompanion(filename:)`) |
+| Include originals (`.editedWithOriginals`) | (`.original.done` AND `.edited.done`) OR (`.original.done` AND filename is at the natural stem) |
+
+`sidebarSummary(year:month:totalCount:selection:)` and
+`sidebarYearSummary(year:totalAssets:selection:)` (replacing the older
+`sidebarYearExportedCount(...)`) both call `sidebarExportedCount` and
+divide by the supplied total. Neither needs `totalCountsByMonth` or
+`adjustedCountsByMonth` parameters.
 
 - `recordCount(year:month:variant:status:)` — stays.
 - `recordCountBothVariantsDone(year:month:)` — stays; remains useful
-  for `editedWithOriginals` summaries.
-- `sidebarYearExportedCount(year:totalCountsByMonth:selection:)` —
-  the `adjustedCountsByMonth` parameter is removed.
+  inside the records-only evaluator for the include-originals mode.
 
-### New helper
-
-A small filename predicate on the policy that the store and the
-scanner both consume:
+### Filename predicate helper
 
 ```swift
 extension ExportFilenamePolicy {
   /// True when `filename`'s stem (after stripping a trailing collision
-  /// suffix like ` (1)`) ends with `_orig`. Used to tell the RAW backup
-  /// form apart from the user-visible form when both share an extension.
+  /// suffix like ` (1)`) ends with `_orig`. Used by the sidebar's
+  /// records-only count heuristic and by the scanner's `_orig` parser.
+  /// **Not** used by the asset-aware `isExported(asset:selection:)`,
+  /// which consults `asset.hasAdjustments` directly and so doesn't
+  /// need filename inspection.
   static func isOrigCompanion(filename: String) -> Bool
 }
 ```
@@ -616,8 +677,15 @@ The mode-qualified copy goes away. There is no longer any mode where
 a count of "X out of Y" might mean different denominators. Every count
 in every mode means the same thing:
 
-- `monthSummary(assets:selection:)` counts assets that satisfy
-  `isExported(asset:selection:)` against the total asset count.
+- `MonthRow` calls `sidebarSummary(year:month:totalCount:selection:)`
+  on the store. The store evaluates completion from records only via
+  `sidebarExportedCount` (records-only heuristic).
+- `YearRow` calls a new
+  `sidebarYearSummary(year:totalAssets:selection:)` on the store
+  (replacing `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)`).
+  The signature drops both per-month parameters because the
+  evaluator works directly off the in-memory records without
+  per-month context.
 - The "edited" caption next to badges goes away.
 - The neutral-while-loading state goes away (no adjusted-count load
   to wait on).
@@ -625,20 +693,26 @@ in every mode means the same thing:
   - default: `"<MonthName> <Year>: X of Y photos exported."`
   - includeOriginals: `"<MonthName> <Year>: X of Y photos fully exported (including original copies for edited photos)."`
 
-`YearRow` no longer needs the `totalCountsByMonth` and
-`adjustedCountsByMonth` parameters at all — `yearExportedCount(year:)`
-on the store is sufficient. The whole "lazy-load adjusted counts on
-month-row appearance" mechanism in `ContentView` deletes:
+The whole "lazy-load adjusted counts on month-row appearance"
+mechanism in `ContentView` deletes:
 
 - `adjustedCountsByYearMonth` state goes away.
 - `loadAdjustedCount(year:month:)` goes away.
 - `monthTotals(for:)` and `adjustedMonths(for:)` helpers go away.
 - The `.task(id: "\(year)-\(month)-adjusted")` modifier on `MonthRow`
   goes away.
-- `yearTotal` returning `Int?` becomes `Int` — no more
+- `YearRow.yearTotal` returning `Int?` becomes `Int` — no more
   "wait for monthly adjusted counts" race.
 
 This is a sizable simplification of `ContentView`.
+
+A side effect of using the records-only heuristic in the sidebar:
+under-counts (or over-counts) by one for any asset whose actual
+Photos filename ends with `_orig`. The records-only path can't tell
+the user's filename apart from the app's companion suffix. The
+asset-aware path (used by `MonthContentView`'s summary and the
+asset detail pane) remains correct. Documented in the manual
+testing guide.
 
 ### `MonthContentView`
 
@@ -665,17 +739,31 @@ No changes.
 
 ## Migration
 
-**None needed.** This branch has not shipped — no real users, no
-on-disk artefacts that need to survive. The test build the author has
-been using can be discarded (a fresh destination + fresh
-`UserDefaults` for the app on the test Mac is the entire migration
-surface).
+**None needed for users.** This branch has not shipped, so no on-disk
+artefacts in the wild need to survive.
 
-`ExportManager.init` already falls back to `.edited` when it can't
-decode the saved selection raw value, so any leftover `editedOnly` /
-`originalOnly` / `originalAndEdited` values from earlier branch
-testing simply hit the fallback after the enum is collapsed. The
-fallback line stays as-is; we don't need a special migration step.
+The test author's branch build does have stored state to clean up,
+but it's covered by ordinary code changes rather than a migration
+step:
+
+- The `ExportVersionSelection` enum drops `originalOnly`,
+  `editedOnly`, and `originalAndEdited` cases. Any leftover raw value
+  in `UserDefaults` from earlier testing fails to decode under the
+  new two-case enum.
+- The current `ExportManager.init` fallback line reads:
+  `self.versionSelection = .originalOnly`. That case no longer exists
+  after the enum collapses, so this line **must change** as part of
+  Phase 5. New fallback:
+  `self.versionSelection = .edited`.
+- Any leftover destination folder containing `_edited.<ext>` files
+  from prior branch testing is abandoned by the new scanner (no
+  parser for that suffix). The test author switches to a fresh
+  destination — same as the current "reset between scenarios"
+  approach in the manual testing guide.
+
+For the public release after this branch merges, no migration code
+or user-visible note appears. The branch's prior shape was never
+shipped.
 
 ## Implementation phasing
 
@@ -747,20 +835,24 @@ the end of each phase.
     Update tooltips and accessibility.
 17. Update `OnboardingView` step 2 sub-picker to a checkbox toggle.
     Update help text.
-18. Update `ContentView`:
+18. Update `ExportManager.init`:
+    - Change the fallback `self.versionSelection = .originalOnly`
+      to `self.versionSelection = .edited`. The old case won't even
+      compile after Phase 1; this edit is the bridge.
+19. Update `ContentView`:
     - Drop `adjustedCountsByYearMonth` state.
     - Drop `loadAdjustedCount`, `monthTotals`, `adjustedMonths`.
     - Update `YearRow` and `MonthRow` to remove mode-qualified copy
       and adjusted-count plumbing. Update tooltips.
     - Update `MonthRow.task(id:)` modifier — remove the adjusted-count
       task.
-19. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
-20. Update `AssetDetailView` to remove any references to the obsolete
+20. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
+21. Update `AssetDetailView` to remove any references to the obsolete
     "Edited only" mode in copy.
 
 ### Phase 6 — Photos service
 
-21. Delete `countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
+22. Delete `countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
     from the protocol and `PhotoLibraryManager`. Drop
     `adjustedCountByYearMonth` cache and its invalidation. Remove the
     fake's implementations.
@@ -846,14 +938,30 @@ See **Tests** below.
   `vacation_orig.JPG` (true — the predicate just checks the stem
   shape, not whether it's a real companion of any asset), and
   `IMG_0001 (1).JPG` (false).
-- A test exercising the filename-aware default-mode `isExported`
-  branch: a record with only `.original.done` at a `_orig` filename
-  does NOT satisfy default mode (because the user-visible file is
-  missing). A record with only `.original.done` at a natural-stem
-  filename DOES satisfy default mode (unedited asset case).
+- A test exercising the strict default-mode `isExported`:
+  - Adjusted asset, only `.original.done` (any filename) → false.
+  - Adjusted asset, `.edited.done` → true.
+  - Unedited asset, `.original.done` at any filename
+    (including `_orig`-shaped ones) → true.
 - A test exercising the strict `isExported(asset:
-  .editedWithOriginals)` branch: a record with only `.original.done`
-  does NOT satisfy an adjusted asset under that mode.
+  .editedWithOriginals)`:
+  - Adjusted asset, only `.edited.done` → false.
+  - Adjusted asset, both done → true.
+  - Unedited asset, only `.original.done` → true.
+- A test for the post-edit collision case: an unedited asset is
+  exported in default mode (`.original.done` at natural stem); the
+  test then sets `hasAdjustments == true` on the descriptor and
+  re-runs export; assert that the new `.edited` lands at
+  `IMG_0001 (1).JPG` and the prior `.original.done` record is
+  preserved (one-time documented duplicate).
+- A test exercising the records-only sidebar count heuristic
+  (`sidebarExportedCount`):
+  - A `.original.done` at natural stem counts under default mode.
+  - A `.original.done` at `_orig` filename does NOT count under
+    default mode unless paired with `.edited.done`.
+  - A user-filename edge case (`vacation_orig.JPG` recorded as
+    `.original.done`) under-counts in the sidebar — assert the
+    documented behaviour.
 - A pipeline test for paired-stem pre-allocation: pre-seed the
   destination with `IMG_0001.JPG` belonging to no Photos asset, then
   run a fresh include-originals export of an adjusted asset whose
@@ -919,38 +1027,44 @@ The existing testing guide will be completely rewritten in Phase 9.
 
 ## Risks / open questions
 
-### Same-extension import ambiguity
+### Same-extension same-stem import ambiguity
 
 When the original is a JPEG and the edit is also a JPEG, default-mode
 exports produce a single file at `IMG_0001.JPG` containing the edited
 bytes. The scanner cannot tell from the filename alone whether that
-file is the original or the edit. The relaxed `isExported` and a
-documented limitation cover the export-skip-on-re-run case. The
-edge case the user can hit:
+file is the original or the edit. Because `isExported` is strict
+(uses `requiredVariants` against the descriptor's `hasAdjustments`),
+the next default-mode run for an adjusted asset will see
+`.edited.done? false` and re-export, producing a one-time
+`IMG_0001 (1).JPG` companion alongside the existing `IMG_0001.JPG`.
+The user has two files for that asset.
 
-1. Export in default mode.
-2. Lose the records (fresh install / different Mac / corrupted store).
-3. Run **Import Existing Backup**. Records say `.original` is done.
-4. Toggle on "include originals."
-5. Re-run export. The app sees that the asset's `.original` is "done"
-   but actually the file on disk is the edited bytes. The app writes
-   `.edited` (no problem, distinct file at a different stem? no — same
-   stem, same ext). Collision suffix added to the second write. Both
-   files are the edited bytes; no original is preserved. The original
-   bytes are silently absent.
+This is acceptable for a v1 of the redesign:
 
-The user thinks they have RAW backups; they don't. This is the
-worst-case manifestation. Mitigations:
+- The cost is one duplicate per same-extension adjusted asset, paid
+  once on first re-export after re-import. Subsequent runs are
+  steady-state.
+- The asset detail pane shows both rows and timestamps, so the user
+  can see what happened.
+- The user can manually delete the older file if they want a clean
+  destination.
 
-- The relaxed `isExported` for default mode means most users in this
-  flow never hit the toggle and thus never trigger the bad case.
-- Documenting the limitation in the manual testing guide and the
-  website features page so power users who care about RAW
-  preservation know to keep their export records intact.
-- A future enhancement: write a small `.photo-export-config.plist` in
-  the destination root carrying the mode used. Then the scanner can
-  disambiguate. **Not** part of this redesign; flagged as future
-  work.
+A future enhancement could implement *same-asset controlled
+overwrite* (the pipeline replaces the same asset's prior `.original`
+file at the natural stem when writing a fresh `.edited` to the same
+path, and updates the records). Out of scope here. Flagged as future
+work, captured in this plan only as a path forward if user feedback
+requests it.
+
+### Post-edit re-export
+
+Same shape as the import ambiguity case but triggered by the user
+applying an edit in Photos after a previous export. Strict
+`isExported` correctly detects "this asset's `.edited` isn't done
+anymore (because the asset just became adjusted)" and re-enqueues.
+The new edit lands at `IMG_0001 (1).JPG` next to the prior
+`IMG_0001.JPG` (now containing the unedited bytes). One-time cost.
+Same future-enhancement path applies.
 
 ### "Originals only" use case
 

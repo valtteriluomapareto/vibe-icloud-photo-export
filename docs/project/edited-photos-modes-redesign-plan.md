@@ -314,45 +314,105 @@ Completion is evaluated in two places with different inputs:
 
 ### Records-only (sidebar approximation)
 
-A single helper computes the count of records that look fully exported
-under each mode's heuristic:
+The sidebar can't call `isExported(asset:selection:)` because it
+doesn't have descriptors loaded for un-selected scopes. It needs an
+approximation derived from the records alone — but a naive
+"natural-stem `.original.done` always counts" rule overcounts in two
+realistic cases:
+
+1. **Post-edit.** An asset was previously exported as unedited
+   (`.original.done` at natural stem), the user later applied an
+   edit in Photos, and the asset is now adjusted. Strict completion
+   says it's incomplete (under default mode, `.edited` is now
+   required and isn't done). A naive rule would still count it.
+2. **Same-extension re-import.** A re-imported destination has the
+   adjusted asset's edit at the natural stem, mis-classified as
+   `.original.done`. Strict completion says it's incomplete.
+
+To match the asset-aware result without loading descriptors, the
+sidebar uses a **filename-aware count + an
+adjusted-count-based cap**. The cap reuses the lazily-loaded
+`countAdjustedAssets` plumbing from the existing
+`originalAndEdited` summary (which proved load-bearing for the
+same reason). This is the trade-off Codex's earlier review pass
+flagged but the redesign initially over-simplified away.
 
 ```swift
-/// Records-only approximation of "fully exported under this selection."
-/// Used by sidebar rows that do not hold loaded asset descriptors.
-/// Approximates the asset-aware result by reading filename shape:
-/// a `.original` recorded at the `_orig` companion form is taken as
-/// "RAW backup of an edited asset" (does not by itself satisfy the
-/// asset); a `.original` at the natural stem is taken as the
-/// user-visible file for an unedited asset (does satisfy).
+/// Records-only approximation of "fully exported under this
+/// selection," capped by the count of unedited assets in scope so
+/// that natural-stem .original.done records belonging to currently-
+/// adjusted assets cannot over-contribute.
 ///
-/// The approximation mis-classifies one edge case: a user-imported
-/// asset whose actual Photos filename literally ends with `_orig`
-/// (e.g. `vacation_orig.JPG`) is recorded with that filename, the
-/// predicate fires, and the sidebar under-counts. The detail pane
-/// remains correct via the asset-aware path. Documented in the manual
-/// testing guide.
-func sidebarExportedCount(
-  year: Int, month: Int? = nil, selection: ExportVersionSelection
-) -> Int
+/// `adjustedCount` is required for both modes. Pass nil only when
+/// the count hasn't loaded yet — callers should render a neutral
+/// "loading" state in that case rather than treat nil as zero.
+func sidebarSummary(
+  year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
+  selection: ExportVersionSelection
+) -> MonthStatusSummary?
+
+/// Year-scope variant. Iterates each month with its (totalCount,
+/// adjustedCount) pair, sums the per-month exported counts, and
+/// returns the rolled-up summary. Pass nil for a month's
+/// adjustedCount when it hasn't loaded; the sidebar renders the
+/// year-level badge as neutral until every populated month has
+/// reported.
+func sidebarYearSummary(
+  year: Int,
+  totalCountsByMonth: [Int: Int],
+  adjustedCountsByMonth: [Int: Int?],
+  selection: ExportVersionSelection
+) -> MonthStatusSummary?
 ```
 
-Per-mode rule used inside `sidebarExportedCount`:
+Per-mode formula inside both methods, expressed against records in
+scope:
 
-| Mode | A record is "fully exported" when… |
-|---|---|
-| Default (`.edited`) | `.edited.done` OR (`.original.done` AND filename is at the natural stem, i.e. `!isOrigCompanion(filename:)`) |
-| Include originals (`.editedWithOriginals`) | (`.original.done` AND `.edited.done`) OR (`.original.done` AND filename is at the natural stem) |
+```text
+bothDone        = records with .original.done AND .edited.done
+editedDone      = records with .edited.done (regardless of .original)
+origOnlyAtStem  = records with .original.done at the natural stem
+                  (i.e. !isOrigCompanion(filename:)) AND .edited NOT done
+uneditedCount   = max(0, totalCount - adjustedCount)
 
-`sidebarSummary(year:month:totalCount:selection:)` and
-`sidebarYearSummary(year:totalAssets:selection:)` (replacing the older
-`sidebarYearExportedCount(...)`) both call `sidebarExportedCount` and
-divide by the supplied total. Neither needs `totalCountsByMonth` or
-`adjustedCountsByMonth` parameters.
+Default mode:
+  exported = editedDone + min(origOnlyAtStem, uneditedCount)
+
+Include originals:
+  exported = bothDone + min(origOnlyAtStem, uneditedCount)
+```
+
+Walking the cases the cap covers:
+
+- **All assets correctly exported.** `editedDone` (or `bothDone`)
+  picks up every adjusted asset; `origOnlyAtStem` picks up every
+  unedited asset; the `min` is a no-op (both sides equal).
+- **Post-edit.** When an asset becomes adjusted after export,
+  `adjustedCount` increases by 1, `uneditedCount` decreases by 1,
+  and the `min` cap correctly drops one record from
+  `origOnlyAtStem`'s contribution. The asset's record is no longer
+  counted as fully exported. ✓
+- **Same-extension re-import.** Records are all
+  `.original.done` at natural stem (scanner can't tell apart edit
+  from original). `editedDone` is zero, `origOnlyAtStem` is high,
+  but the cap pins it at `uneditedCount`. The remaining adjusted
+  assets show up as not exported, prompting re-export. ✓
+- **`vacation_orig.JPG` user filename, asset unedited.** Record
+  is `.original.done` at `vacation_orig.JPG`. `isOrigCompanion`
+  fires, so the record is **not** counted in `origOnlyAtStem`.
+  Sidebar under-counts by 1. The asset-aware path is correct.
+  Documented in the manual testing guide.
+
+The undercount in the `vacation_orig` case is acceptable; it's a
+one-asset error in a corner case. The post-edit and re-import
+overcounts the cap prevents are common and would mislead users
+into thinking work is complete that isn't.
 
 - `recordCount(year:month:variant:status:)` — stays.
-- `recordCountBothVariantsDone(year:month:)` — stays; remains useful
-  inside the records-only evaluator for the include-originals mode.
+- `recordCountBothVariantsDone(year:month:)` — stays.
+- A new helper `recordCount(year:month:variant:status:filenameKind:)`
+  (or its inline equivalent in the formula above) computes
+  `origOnlyAtStem` by filtering on `isOrigCompanion(filename:) == false`.
 
 ### Filename predicate helper
 
@@ -543,7 +603,7 @@ extension ExportFilenamePolicy {
 `BackupScanner.matchSingleFile` becomes:
 
 1. **Try `_orig` companion.** If `parseOriginalCandidate(filename:)`
-   succeeds, look for a fingerprint that satisfies *all of*:
+   succeeds, **collect** all fingerprints that satisfy *all of*:
    - `hasAdjustments == true`,
    - file extension matches one of the fingerprint's original
      resource extensions,
@@ -559,11 +619,22 @@ extension ExportFilenamePolicy {
    Mirror of the parsing pattern from the previous `_edited`
    classifier.
 
-   If a unique candidate matches, classify as `.original`. **If no
-   candidate matches, fall through to step 2 — do not return early.**
-   This guards against a real user filename ending in `_orig` (e.g.
-   `vacation_orig.JPG`) being silently lost when there is no asset
-   with adjustments and stem `vacation`.
+   If at least one candidate matches, **pass the candidate set into
+   the existing `narrow(file:candidates:assetById:variant:)` helper**
+   with `variant: .original`. `narrow` resolves a unique fingerprint
+   by date and lazy file-metadata discriminators, the same way the
+   pre-redesign `_edited` flow worked. This handles the realistic
+   case where two adjusted assets share an original Photos filename
+   (e.g. `IMG_TEST.JPG`) and would both match the stem check; date
+   and metadata pick the right one. Returning an `.ambiguous` from
+   `narrow` is also valid — that surfaces as an ambiguous import
+   match, the same as it does for cross-extension edited files in
+   step 4.
+
+   If **no** candidate matches the filter, **fall through to step 2 —
+   do not return early.** This guards against a real user filename
+   ending in `_orig` (e.g. `vacation_orig.JPG`) being silently lost
+   when there is no asset with adjustments and stem `vacation`.
 
 2. Else if the filename exactly matches a known original resource
    filename → `.original`.
@@ -628,19 +699,26 @@ classifier changes.
 
 ## PhotoLibraryService
 
-`countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)` no
-longer have callers — the sidebar's mode-aware denominator goes away.
-Two paths:
+`countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
+**stay**. The sidebar's records-only count rule needs an
+adjusted-assets cap to avoid overcounting in the post-edit and
+same-extension re-import cases (see the **Records-only sidebar
+approximation** section above).
 
-1. Delete the methods (and their cache, and their invalidation in
-   `photoLibraryDidChange` and authorization changes). Cleaner; less
-   code.
-2. Keep them in case future modes need them. We don't currently need
-   them.
+This means:
 
-**Recommend (1).** YAGNI; we can always re-add when something else
-needs adjusted counts. The cache invalidation logic stays (it
-invalidates the PHAsset cache too, which is still useful).
+- The methods stay on `PhotoLibraryService`, `PhotoLibraryManager`,
+  and the fake.
+- The lazy cache (`adjustedCountByYearMonth`) and its invalidation
+  on `photoLibraryDidChange` and authorization changes stay.
+- `ContentView` keeps `adjustedCountsByYearMonth` state,
+  `loadAdjustedCount(year:month:)`, and the
+  `.task(id: "\(year)-\(month)-adjusted")` modifier on `MonthRow`.
+- `YearRow`'s `yearTotal` returning `Int?` (suppresses the badge
+  while any month's adjusted count is still loading) stays.
+
+The plan's earlier "delete countAdjustedAssets" section was the
+mistake — the simplification was a mirage.
 
 ## UI
 
@@ -705,46 +783,63 @@ single sentence:
 
 ### Sidebar (`ContentView` `YearRow`, `MonthRow`)
 
-The mode-qualified copy goes away. There is no longer any mode where
-a count of "X out of Y" might mean different denominators. Every count
-in every mode means the same thing:
+The mode-qualified `"edited"` text and badge caption from the
+previously-shipped feature go away — under the two new modes, every
+asset is in scope, so there is no longer a denominator difference
+that needs a qualifier. But the `originalAndEdited` summary's
+infrastructure (lazy adjusted counts per month, `yearTotal` returning
+`Int?` while counts load, the `.task(id:)` on `MonthRow`) **stays**,
+because the records-only count rule still needs `adjustedCount` as
+its cap (see **Records-only sidebar approximation** above).
 
-- `MonthRow` calls `sidebarSummary(year:month:totalCount:selection:)`
-  on the store. The store evaluates completion from records only via
-  `sidebarExportedCount` (records-only heuristic).
-- `YearRow` calls a new
-  `sidebarYearSummary(year:totalAssets:selection:)` on the store
-  (replacing `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)`).
-  The signature drops both per-month parameters because the
-  evaluator works directly off the in-memory records without
-  per-month context.
-- The "edited" caption next to badges goes away.
-- The neutral-while-loading state goes away (no adjusted-count load
-  to wait on).
+Concretely:
+
+- `MonthRow` calls
+  `sidebarSummary(year:month:totalCount:adjustedCount:selection:)`
+  on the store, passing the lazily-loaded adjusted count. While
+  `adjustedCount` is nil, the row renders the neutral "…" state
+  (existing pattern carries over).
+- `YearRow` calls
+  `sidebarYearSummary(year:totalCountsByMonth:adjustedCountsByMonth:selection:)`,
+  passing the same per-month maps that `ContentView` already
+  maintains. While *any* populated month's adjusted count is nil,
+  the year-level badge is suppressed (existing
+  `yearTotal` returns nil → no badge).
+- The "edited" caption next to badges goes away. The neutral
+  "…" state for missing adjusted counts stays.
 - Tooltips on year/month rows simplify to a single sentence per mode:
   - default: `"<MonthName> <Year>: X of Y photos exported."`
   - includeOriginals: `"<MonthName> <Year>: X of Y photos fully exported (including original copies for edited photos)."`
 
-The whole "lazy-load adjusted counts on month-row appearance"
-mechanism in `ContentView` deletes:
+What stays in `ContentView`:
 
-- `adjustedCountsByYearMonth` state goes away.
-- `loadAdjustedCount(year:month:)` goes away.
-- `monthTotals(for:)` and `adjustedMonths(for:)` helpers go away.
-- The `.task(id: "\(year)-\(month)-adjusted")` modifier on `MonthRow`
-  goes away.
-- `YearRow.yearTotal` returning `Int?` becomes `Int` — no more
-  "wait for monthly adjusted counts" race.
+- `adjustedCountsByYearMonth` state.
+- `loadAdjustedCount(year:month:)`.
+- `monthTotals(for:)` and `adjustedMonths(for:)` helpers.
+- The `.task(id: "\(year)-\(month)-adjusted")` modifier on
+  `MonthRow`.
+- `YearRow.yearTotal` returning `Int?`.
 
-This is a sizable simplification of `ContentView`.
+What goes away:
 
-A side effect of using the records-only heuristic in the sidebar:
-under-counts (or over-counts) by one for any asset whose actual
-Photos filename ends with `_orig`. The records-only path can't tell
-the user's filename apart from the app's companion suffix. The
-asset-aware path (used by `MonthContentView`'s summary and the
-asset detail pane) remains correct. Documented in the manual
-testing guide.
+- The mode-qualified `"edited"` caption next to badges.
+- The mode-aware partial/notExported text variants.
+
+The plan's previous draft mistakenly listed the adjusted-count
+plumbing for deletion. That deletion would have produced a sidebar
+that overcounts whenever a user edits a photo in Photos after a
+prior export, or whenever a re-imported destination contains
+same-extension adjusted assets — both cases would silently report
+"100% backed up" when work was actually pending. Keeping the
+plumbing keeps the sidebar honest.
+
+Sidebar still has one residual approximation: a user-imported asset
+whose actual Photos filename ends with `_orig` (e.g.
+`vacation_orig.JPG`) is recorded with that filename, and
+`isOrigCompanion` fires structurally, so `origOnlyAtStem` does not
+include the record. Sidebar under-counts by 1 for each such asset.
+The detail pane and `MonthContentView` summary remain correct via
+the asset-aware path. Documented in the manual testing guide.
 
 ### `MonthContentView`
 
@@ -882,47 +977,52 @@ not a sequence of compile-clean intermediate states.
 13. Update `monthSummary(assets:selection:)` — drop the `editedOnly`
     branch; the surviving two branches both call the strict
     asset-aware `isExported(asset:selection:)` per descriptor.
-14. Replace `sidebarSummary(year:month:totalCount:adjustedCount:selection:)`
-    with `sidebarSummary(year:month:totalCount:selection:)` — drop
-    the `adjustedCount` parameter. Body uses the new
-    `sidebarExportedCount(year:month:selection:)` records-only
-    heuristic (which *does* use `isOrigCompanion`, since it has no
-    descriptor to consult).
-15. Add `sidebarExportedCount(year:month:selection:)` — records-only
-    filename heuristic per the table in the
-    **ExportRecordStore API surface** section.
-16. Replace `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)`
-    with `sidebarYearSummary(year:totalAssets:selection:)`. The new
-    method drops both per-month parameters and calls
-    `sidebarExportedCount(year: month: nil, selection:)` internally.
+14. Update `sidebarSummary(year:month:totalCount:adjustedCount:selection:)` —
+    keep the `adjustedCount` parameter (the cap is load-bearing).
+    Body uses the records-only formula in **Records-only sidebar
+    approximation**: `editedDone + min(origOnlyAtStem, uneditedCount)`
+    for default mode, `bothDone + min(origOnlyAtStem, uneditedCount)`
+    for include-originals. `origOnlyAtStem` filters records by
+    `!isOrigCompanion(filename:)`. Drop the `editedOnly` branch.
+15. Update `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)` —
+    keep both per-month parameters. Body iterates each month and
+    accumulates the per-month exported count using the rule above.
+    Rename to `sidebarYearSummary` if it makes more sense to return
+    a `MonthStatusSummary`-shaped value; otherwise keep as-is.
 
 ### Phase 5 — UI
 
-17. Replace `ExportToolbarView.versionPicker` with the toggle button.
+16. Replace `ExportToolbarView.versionPicker` with the toggle button.
     Update tooltips and accessibility.
-18. Update `OnboardingView` step 2 sub-picker to a checkbox toggle.
+17. Update `OnboardingView` step 2 sub-picker to a checkbox toggle.
     Update help text.
-19. Update `ExportManager.init`:
+18. Update `ExportManager.init`:
     - Change the fallback `self.versionSelection = .originalOnly`
       to `self.versionSelection = .edited`. The old case won't even
       compile after Phase 1; this edit is the bridge.
-20. Update `ContentView`:
-    - Drop `adjustedCountsByYearMonth` state.
-    - Drop `loadAdjustedCount`, `monthTotals`, `adjustedMonths`.
+19. Update `ContentView`:
+    - Keep `adjustedCountsByYearMonth` state, `loadAdjustedCount`,
+      `monthTotals`, `adjustedMonths`, and the
+      `.task(id: "\(year)-\(month)-adjusted")` modifier on
+      `MonthRow`. They're still needed for the records-only sidebar
+      cap.
     - Update `YearRow` and `MonthRow` to remove mode-qualified copy
-      and adjusted-count plumbing. Update tooltips.
-    - Update `MonthRow.task(id:)` modifier — remove the adjusted-count
-      task.
-21. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
-22. Update `AssetDetailView` to remove any references to the obsolete
+      ("edited" caption next to badges, partial/notExported text
+      variants). Update tooltips.
+    - Keep `YearRow.yearTotal` returning `Int?` (suppresses badge
+      while any month's adjusted count is loading).
+20. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
+21. Update `AssetDetailView` to remove any references to the obsolete
     "Edited only" mode in copy.
 
 ### Phase 6 — Photos service
 
-23. Delete `countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
-    from the protocol and `PhotoLibraryManager`. Drop
-    `adjustedCountByYearMonth` cache and its invalidation. Remove the
-    fake's implementations.
+22. **No changes.** `countAdjustedAssets(year:month:)` and
+    `countAdjustedAssets(year:)` stay (along with their cache and
+    invalidation paths). The plan's earlier draft listed them for
+    deletion; that was the error. Phase 6 is now empty — kept here
+    so the phase numbering stays aligned with earlier drafts of the
+    plan.
 
 ### Phase 7 — Tests
 
@@ -930,20 +1030,20 @@ See **Tests** below.
 
 ### Phase 8 — Documentation
 
-24. Rewrite the **Version selection** section of
+23. Rewrite the **Version selection** section of
     `website/src/content/docs/features.md` to describe the toggle.
-25. Rewrite the relevant section of
+24. Rewrite the relevant section of
     `website/src/content/docs/getting-started.md`.
-26. Update `website/src/content/docs/export-icloud-photos.md` for the
+25. Update `website/src/content/docs/export-icloud-photos.md` for the
     same.
-27. Update README's Current Capabilities bullet for the toggle.
-28. Update `docs/reference/persistence-store.md` to reflect that
+26. Update README's Current Capabilities bullet for the toggle.
+27. Update `docs/reference/persistence-store.md` to reflect that
     filenames may carry `_orig` suffix.
-29. The previous parent and P2 plans were already moved to
+28. The previous parent and P2 plans were already moved to
     `docs/project/archive/` in a prior commit on this branch; verify
     the `Supersedes` header at the top of this plan still points at
     the correct archive paths.
-30. Rewrite `docs/project/edited-photos-manual-testing-guide.md`
+29. Rewrite `docs/project/edited-photos-manual-testing-guide.md`
     against the new modes (very large rewrite — most scenarios
     change).
 
@@ -1021,14 +1121,25 @@ See **Tests** below.
   re-runs export; assert that the new `.edited` lands at
   `IMG_0001 (1).JPG` and the prior `.original.done` record is
   preserved (one-time documented duplicate).
-- A test exercising the records-only sidebar count heuristic
-  (`sidebarExportedCount`):
-  - A `.original.done` at natural stem counts under default mode.
-  - A `.original.done` at `_orig` filename does NOT count under
-    default mode unless paired with `.edited.done`.
-  - A user-filename edge case (`vacation_orig.JPG` recorded as
-    `.original.done`) under-counts in the sidebar — assert the
-    documented behaviour.
+- Sidebar count tests (`sidebarSummary` /
+  `sidebarYearSummary`) covering the cap behaviour:
+  - All assets exported normally → `editedDone` (or `bothDone`) +
+    `min(origOnlyAtStem, uneditedCount)` equals total. ✓
+  - Post-edit case: a record was `.original.done` at natural stem
+    when the asset was unedited; the descriptor now reports
+    `hasAdjustments == true`, raising `adjustedCount` and lowering
+    `uneditedCount`. The cap drops one from `origOnlyAtStem`'s
+    contribution; the asset is correctly NOT counted as exported.
+  - Same-extension re-import case: 100 records all
+    `.original.done` at natural stem (post-import); 30 of the
+    underlying assets are adjusted. Default mode count returns
+    70, matching the asset-aware result.
+  - Documented `vacation_orig.JPG` edge case: a record is
+    `.original.done` at a `_orig`-shaped user filename; the
+    sidebar under-counts by 1 (`isOrigCompanion` fires
+    structurally and excludes the record from `origOnlyAtStem`).
+    Assert the documented under-count rather than the asset-aware
+    truth.
 - A pipeline test for paired-stem pre-allocation: pre-seed the
   destination with `IMG_0001.JPG` belonging to no Photos asset, then
   run a fresh include-originals export of an adjusted asset whose
@@ -1043,6 +1154,15 @@ See **Tests** below.
   `IMG_0001 (1).JPG` (edit) and `IMG_0001 (1)_orig.JPG`. Verify both
   classify correctly without canonical-stem stripping losing the
   native suffix.
+- A scanner test for `_orig` matching with multiple candidate
+  fingerprints: two adjusted assets share an original Photos
+  filename (`IMG_TEST.JPG`); the destination contains
+  `IMG_TEST.JPG` and `IMG_TEST_orig.JPG` for one of them. Step 1
+  collects both candidates, `narrow(...)` resolves the right one
+  by date / metadata. Verify the correct asset is matched, not the
+  other. Add a sibling test with both candidates having identical
+  dates: assert `.ambiguous` rather than a coin-flip
+  classification.
 
 ### Removed
 

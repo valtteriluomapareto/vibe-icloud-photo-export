@@ -215,26 +215,52 @@ on the `.original` variant now holds either the bare-stem form or the
 
 The current "all required variants are .done" check needs a relaxation
 for the default mode so that re-imports survive same-extension
-ambiguity (see the **Backup scanner** section below):
+ambiguity (see the **Backup scanner** section below). The relaxation
+is *filename-aware* — a `.original` variant whose recorded filename is
+the `_orig` companion form (i.e. only the RAW backup is on disk, not
+the user-visible edit) does not satisfy the default mode by itself,
+because the user-visible file is missing.
 
 ```swift
 func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
   guard let record = recordsById[asset.id] else { return false }
   switch selection {
   case .edited:
-    // Default mode: any done variant counts as "the user has a file for
-    // this asset on disk." This matters for re-imports where the scanner
-    // can't always tell apart an unsuffixed edited JPEG from an
-    // unsuffixed original JPEG (same stem, same extension).
-    return record.variants[.original]?.status == .done
-        || record.variants[.edited]?.status == .done
+    // The user-visible file lives at the natural stem. Either the .edited
+    // variant (for adjusted assets) or the .original variant (for unedited
+    // assets) writes there. A .original record whose filename is the _orig
+    // companion form is a RAW backup *next to* a user-visible file —
+    // never the user-visible file itself, so it must not count alone.
+    if record.variants[.edited]?.status == .done { return true }
+    if let original = record.variants[.original],
+       original.status == .done,
+       let filename = original.filename,
+       !ExportFilenamePolicy.isOrigCompanion(filename: filename)
+    {
+      return true
+    }
+    return false
   case .editedWithOriginals:
-    // Strict: both variants required for adjusted assets.
+    // Strict: both variants required for adjusted assets, original-only
+    // for unedited. Existing required-variants logic.
     let required = requiredVariants(for: asset, selection: selection)
     return required.allSatisfy { record.variants[$0]?.status == .done }
   }
 }
 ```
+
+`ExportFilenamePolicy.isOrigCompanion(filename:)` is a new helper —
+returns true when the filename's stem ends with `_orig` (with optional
+trailing collision suffix `(N)` allowed).
+
+Counter-example the relaxation now correctly handles: a previous
+include-originals run wrote `.original.done` at `IMG_0001_orig.HEIC`
+and `.edited.failed` (e.g. iCloud render didn't materialise). The user
+toggles the option off and runs **Export Month**. Without the filename
+check, the asset would look "done" because `.original` is `.done`, and
+the user's library would silently miss the user-visible photo. With
+the check, the asset is correctly seen as incomplete; the next run
+attempts `.edited` again.
 
 ## ExportRecordStore API surface
 
@@ -244,46 +270,158 @@ func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bo
 - `monthSummary(assets:selection:)` — simplifies. Under both modes,
   total = total assets in the month. Under default mode, exported =
   count of assets whose `isExported(asset:selection:)` is true under
-  the relaxed rule. Under `editedWithOriginals`, exported = count of
-  assets whose required variants are all done.
-- `sidebarSummary(year:month:totalCount:adjustedCount:selection:)` —
-  the `adjustedCount` parameter goes away. The `editedOnly`-specific
-  branch goes away. Sidebar counts are now a single unambiguous
-  ratio: `(assets done in this scope) / (total assets in this scope)`.
-- `recordCount(year:month:variant:status:)` and
-  `recordCountBothVariantsDone(year:month:)` — both stay; the latter
-  is now used for `editedWithOriginals` summaries.
-- `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)` —
+  the filename-aware relaxed rule. Under `editedWithOriginals`,
+  exported = count of assets whose required variants are all done.
+- `sidebarSummary(year:month:totalCount:selection:)` — the
+  `adjustedCount` parameter goes away. **This is correct because
+  filename inspection on the records replaces the need for adjusted
+  counts**, not because adjusted counts are uninformative. Specifically:
+
+  | Mode | "Exported in this scope" =                                           |
+  |---|---|
+  | Default | records where `.edited.done` OR (`.original.done` AND filename is not `_orig`) |
+  | Include originals | records where (`.original.done` AND `.edited.done`) OR (`.original.done` AND filename is not `_orig`) |
+
+  Both rules can be evaluated against the in-memory records alone
+  (because the `_orig` suffix is what tells us whether the original
+  record is a "backup of an edited asset" or "the only file for an
+  unedited asset"). No `PHAsset.hasAdjustments` lookup needed.
+
+- `recordCount(year:month:variant:status:)` — stays.
+- `recordCountBothVariantsDone(year:month:)` — stays; remains useful
+  for `editedWithOriginals` summaries.
+- `sidebarYearExportedCount(year:totalCountsByMonth:selection:)` —
   the `adjustedCountsByMonth` parameter is removed.
+
+### New helper
+
+A small filename predicate on the policy that the store and the
+scanner both consume:
+
+```swift
+extension ExportFilenamePolicy {
+  /// True when `filename`'s stem (after stripping a trailing collision
+  /// suffix like ` (1)`) ends with `_orig`. Used to tell the RAW backup
+  /// form apart from the user-visible form when both share an extension.
+  static func isOrigCompanion(filename: String) -> Bool
+}
+```
 
 ## Pipeline (`ExportManager`)
 
 `ExportJob` keeps the per-job selection snapshot.
 
-`exportSingleVariant` is the main change site:
+### Group stem allocation
 
-- For `.edited`: filename is `<stem>.<editedExt>`. No suffix logic.
-- For `.original`: take the filename rule above. Specifically, the
-  pipeline knows whether `.edited` is being written for this same job
-  (it iterates `orderedVariants` per the existing pattern). If yes,
-  use `<stem>_orig.<origExt>`. If no, use `<stem>.<origExt>`.
+Three cases the pipeline must handle correctly so the pair never
+splits across stems:
 
-Group-stem inheritance from `inheritedGroupStem(from:)` continues to
-read prior-run filenames out of the record, but the parser changes:
+1. **Inherited from a prior run.** The asset already has a `.done`
+   variant record. Use that variant's filename to recover the group
+   stem, then enforce the step-1 fail-path (paired conflict guard).
 
-- An existing `.edited` variant record's filename is now expected to
-  be at the unsuffixed natural stem. Parse it with
-  `splitFilename(filename).base` — that's the group stem.
-- An existing `.original` variant record's filename may be at the
-  natural stem (if exported alone) or at the `_orig` form (if exported
-  alongside an edit). The parser strips an optional `_orig` suffix
-  before computing the group stem.
+   - Existing `.edited.done` → group stem is the unsuffixed stem of
+     its filename.
+   - Existing `.original.done` at natural stem → group stem is the
+     unsuffixed stem of its filename. (This case happens for unedited
+     assets and for include-originals exports of unedited assets.)
+   - Existing `.original.done` at `_orig` form → strip the trailing
+     `_orig` (and any optional `(N)` collision suffix) to recover the
+     group stem.
 
-The `EnqueueOutcome` enum simplifies: the `.nothingApplicable` case
-goes away (no selection produces an empty required set anymore).
-`enqueue*` returns `.enqueued(Int)` or `.alreadyComplete`. The
-toolbar's empty-run message correspondingly drops the
-"no edited versions" copy and keeps only the "already exported" copy.
+2. **Fresh export, default mode.** Only one variant is required for
+   the asset. No pairing needed; the pipeline resolves a single
+   filename via `uniqueFileURL` against the one target file.
+
+3. **Fresh export, include-originals mode for an adjusted asset.**
+   Both variants are required and neither is inherited. **Allocate
+   the paired group stem before writing either variant**, so the pair
+   cannot end up on different stems. Concretely:
+
+   ```swift
+   private func allocatePairedGroupStem(
+     baseStem: String, editedExt: String, originalExt: String, destDir: URL
+   ) -> String {
+     var stem = baseStem
+     var index = 1
+     while index < 10_000 {
+       let editedTarget = destDir.appendingPathComponent(stem)
+         .appendingPathExtension(editedExt)
+       let origTarget = destDir.appendingPathComponent(stem + "_orig")
+         .appendingPathExtension(originalExt)
+       if !fileSystem.fileExists(atPath: editedTarget.path)
+         && !fileSystem.fileExists(atPath: origTarget.path)
+       {
+         return stem
+       }
+       stem = "\(baseStem) (\(index))"
+       index += 1
+     }
+     return stem
+   }
+   ```
+
+   The chosen stem is then passed to *both* variant writes; the
+   `.edited` lands at `<stem>.<editedExt>`, the `.original` at
+   `<stem>_orig.<origExt>`, paired by construction.
+
+   This replaces the current `allocateEditedOnlyGroupStem` (which was
+   for `editedOnly` mode and is no longer reachable). Same shape, new
+   suffix.
+
+### Scenario the explicit pre-allocation prevents
+
+Without this rule, with `.original` writing first (current order):
+
+1. `.original` resolves to `IMG_0001_orig.HEIC` (free) and writes.
+2. `.edited` then tries `IMG_0001.JPG` and finds it taken (by an
+   unrelated asset in the same destination).
+3. `.edited` increments to `IMG_0001 (1).JPG`.
+4. Result: `IMG_0001_orig.HEIC` (companion of stem `IMG_0001`) and
+   `IMG_0001 (1).JPG` (edit at stem `IMG_0001 (1)`). Pair is split.
+
+With pre-allocation, the pipeline notices `IMG_0001.JPG` is taken
+when it scans for the paired stem, increments the *whole pair* to
+`IMG_0001 (1)`, and writes `IMG_0001 (1)_orig.HEIC` +
+`IMG_0001 (1).JPG` together. Stems match.
+
+Add a regression test asserting this behaviour: pre-seed the
+destination with a stray file at the asset's natural-stem edited
+filename and verify the paired export of a fresh include-originals
+write lands at the next-available paired stem rather than splitting.
+
+### `exportSingleVariant`
+
+For `.edited`: filename is `<stem>.<editedExt>`. No suffix logic.
+
+For `.original`: the pipeline knows whether `.edited` is being
+written for this same job (it iterates `orderedVariants`). If yes,
+use `<stem>_orig.<origExt>`. If no, use `<stem>.<origExt>`.
+
+For fresh include-originals jobs, the stem comes from
+`allocatePairedGroupStem` and is shared between the two variant
+writes.
+
+### `inheritedGroupStem(from:)`
+
+The parser is updated:
+
+- An existing `.edited` variant record's filename → unsuffixed
+  natural stem. `splitFilename(filename).base`.
+- An existing `.original` variant record's filename — call
+  `parseOriginalCandidate(filename:)`. If parsed (i.e. has `_orig`),
+  use the parsed `groupStem`. Otherwise the filename is at the
+  natural stem; use `splitFilename(filename).base`.
+
+The previous `_edited` recognition path is removed.
+
+### `EnqueueOutcome`
+
+Simplifies: the `.nothingApplicable` case goes away (no selection
+produces an empty required set anymore). `enqueue*` returns
+`.enqueued(Int)` or `.alreadyComplete`. The toolbar's empty-run
+message correspondingly drops the "no edited versions" copy and
+keeps only the "already exported" copy.
 
 The picker-locking gate (already in place) still applies: the toggle
 button must be disabled while `hasActiveExportWork` is true.
@@ -326,10 +464,29 @@ extension ExportFilenamePolicy {
 
 `BackupScanner.matchSingleFile` becomes:
 
-1. If the filename has the `_orig` suffix, parse it and try to match
-   the canonical stem to a fingerprint's original resource stem AND
-   require `hasAdjustments == true` AND require the file extension
-   to match the original resource extension. → `.original`.
+1. **Try `_orig` companion.** If `parseOriginalCandidate(filename:)`
+   succeeds, look for a fingerprint that satisfies *all of*:
+   - `hasAdjustments == true`,
+   - file extension matches one of the fingerprint's original
+     resource extensions,
+   - the parsed `groupStem` matches one of the fingerprint's
+     original resource stems **OR** the parsed `canonicalOriginalStem`
+     matches one of those stems.
+
+   The two-stem check is load-bearing: when a user's actual original
+   filename ends with ` (N)` (e.g. they imported an asset already named
+   `IMG_0001 (1).JPG`), the asset's stem in the fingerprint is
+   `IMG_0001 (1)` and `groupStem` is what matches; when the suffix is
+   one the app added itself, only `canonicalOriginalStem` matches.
+   Mirror of the parsing pattern from the previous `_edited`
+   classifier.
+
+   If a unique candidate matches, classify as `.original`. **If no
+   candidate matches, fall through to step 2 — do not return early.**
+   This guards against a real user filename ending in `_orig` (e.g.
+   `vacation_orig.JPG`) being silently lost when there is no asset
+   with adjustments and stem `vacation`.
+
 2. Else if the filename exactly matches a known original resource
    filename → `.original`.
 3. Else if the filename's collision-stripped form matches a known
@@ -352,6 +509,22 @@ recorded as `.original`, and the next default-mode export run will see
 This means the scanner cannot losslessly round-trip variant identity
 for the same-extension same-stem case. We accept this as a
 documented limitation of the simplified naming.
+
+### Scanner regression tests to add
+
+- A user whose actual original resource filename is `vacation_orig.JPG`
+  (matching the suffix shape but not the suffix semantic). Step 1
+  fails to match (no asset with `vacation` stem and adjustments) and
+  the file falls through to step 2 where its exact filename matches
+  the user's original resource. → `.original`. Verifies the
+  fall-through, not an early return.
+- An asset whose original resource filename is `IMG_0001 (1).JPG`
+  (native ` (1)` in the user's filename, not app-added). The
+  destination contains `IMG_0001 (1).JPG` (the edit) and
+  `IMG_0001 (1)_orig.JPG` (the companion). Step 1's `groupStem`
+  branch matches the companion to the fingerprint; the natural-stem
+  file matches via step 2. Both classify correctly without the app
+  collapsing the native suffix into a canonical stem.
 
 ### Asset fingerprint
 
@@ -523,60 +696,71 @@ the end of each phase.
      `<stem>.<editedExt>` (no suffix).
    - Drop `parseEditedCandidate` and `ExportFilenameClassification.edited`.
    - Add `parseOriginalCandidate(filename:) -> ParsedOriginalCandidate?`.
+   - Add `isOrigCompanion(filename:) -> Bool` (predicate used by both
+     the store's `isExported` and the sidebar's count rules).
 
 ### Phase 2 — Pipeline
 
-4. Update `ExportManager.exportSingleVariant` filename derivation to
+4. Replace `allocateEditedOnlyGroupStem` with
+   `allocatePairedGroupStem(baseStem:editedExt:originalExt:destDir:)`
+   that scans for a stem where both the natural-stem edited target
+   and the `_orig` original target are simultaneously free.
+5. Update `ExportManager.exportSingleVariant` filename derivation to
    use the new policy and the "is `.edited` paired in this run?"
-   signal.
-5. Update `inheritedGroupStem(from:)` to recognise both unsuffixed
+   signal. For fresh include-originals jobs, the stem comes from
+   `allocatePairedGroupStem` and is shared by both variant writes.
+6. Update `inheritedGroupStem(from:)` to recognise both unsuffixed
    filenames (the new natural form) and `_orig`-suffixed filenames.
    Drop the `_edited` recognition path.
-6. Update `EnqueueOutcome` to drop `.nothingApplicable`.
+7. Update `EnqueueOutcome` to drop `.nothingApplicable`.
    `noApplicableCopy` and its callers go away.
-7. Update `bulkImportRecords` (no signature change; it merges by
+8. Update `bulkImportRecords` (no signature change; it merges by
    variant; new files just have new filename shapes).
 
 ### Phase 3 — Scanner
 
-8. Update `BackupScanner.matchSingleFile` to the new classification
-   order (`_orig` first, then exact original, then collision-stripped
-   original, then cross-extension edited, then unmatched).
-9. Drop the `editedCandidates` filter path that relied on `_edited`
-   parsing.
-10. Update `AssetFingerprint` if any field becomes unused (it likely
-    keeps `editedResourceFilenames` for the cross-extension classifier).
+9. Update `BackupScanner.matchSingleFile` to the new classification
+   order: `_orig` (with both-stem matching and fall-through on miss)
+   → exact original → collision-stripped original → cross-extension
+   edited → unmatched.
+10. Drop the `editedCandidates` filter path that relied on `_edited`
+    parsing.
+11. Update `AssetFingerprint` if any field becomes unused (it likely
+    keeps `editedResourceFilenames` for the cross-extension
+    classifier and the `_orig` extension check).
 
 ### Phase 4 — Record store
 
-11. Update `isExported(asset:selection:)` to the relaxed default-mode
-    rule.
-12. Update `monthSummary(assets:selection:)` — drop the `editedOnly`
-    branch; the surviving two branches simplify.
-13. Update `sidebarSummary(year:month:totalCount:adjustedCount:selection:)`
-    — remove the `adjustedCount` parameter. Update
-    `sidebarYearExportedCount` similarly.
+12. Update `isExported(asset:selection:)` to the filename-aware
+    default-mode rule (uses `ExportFilenamePolicy.isOrigCompanion`).
+13. Update `monthSummary(assets:selection:)` — drop the `editedOnly`
+    branch; the surviving two branches use the filename-aware rule.
+14. Update `sidebarSummary(year:month:totalCount:selection:)` —
+    remove the `adjustedCount` parameter. Both modes derive their
+    "exported" count from records using the filename-aware rule.
+15. Update `sidebarYearExportedCount(year:totalCountsByMonth:selection:)`
+    — drop the `adjustedCountsByMonth` parameter.
 
 ### Phase 5 — UI
 
-14. Replace `ExportToolbarView.versionPicker` with the toggle button.
+16. Replace `ExportToolbarView.versionPicker` with the toggle button.
     Update tooltips and accessibility.
-15. Update `OnboardingView` step 2 sub-picker to a checkbox toggle.
+17. Update `OnboardingView` step 2 sub-picker to a checkbox toggle.
     Update help text.
-16. Update `ContentView`:
+18. Update `ContentView`:
     - Drop `adjustedCountsByYearMonth` state.
     - Drop `loadAdjustedCount`, `monthTotals`, `adjustedMonths`.
     - Update `YearRow` and `MonthRow` to remove mode-qualified copy
       and adjusted-count plumbing. Update tooltips.
     - Update `MonthRow.task(id:)` modifier — remove the adjusted-count
       task.
-17. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
-18. Update `AssetDetailView` to remove any references to the obsolete
+19. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
+20. Update `AssetDetailView` to remove any references to the obsolete
     "Edited only" mode in copy.
 
 ### Phase 6 — Photos service
 
-19. Delete `countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
+21. Delete `countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
     from the protocol and `PhotoLibraryManager`. Drop
     `adjustedCountByYearMonth` cache and its invalidation. Remove the
     fake's implementations.
@@ -656,13 +840,34 @@ See **Tests** below.
 
 ### New
 
-- A test exercising the relaxed `isExported(asset: .edited selection)`
-  branch: a record with only `.original` done satisfies an adjusted
-  asset under default mode, even though the "preferred" variant is
-  `.edited`.
+- A test for `ExportFilenamePolicy.isOrigCompanion(filename:)` —
+  table-driven across `IMG_0001.JPG` (false), `IMG_0001_orig.JPG`
+  (true), `IMG_0001_orig (1).JPG` (true with collision suffix),
+  `vacation_orig.JPG` (true — the predicate just checks the stem
+  shape, not whether it's a real companion of any asset), and
+  `IMG_0001 (1).JPG` (false).
+- A test exercising the filename-aware default-mode `isExported`
+  branch: a record with only `.original.done` at a `_orig` filename
+  does NOT satisfy default mode (because the user-visible file is
+  missing). A record with only `.original.done` at a natural-stem
+  filename DOES satisfy default mode (unedited asset case).
 - A test exercising the strict `isExported(asset:
-  .editedWithOriginals)` branch: a record with only `.original` does
-  NOT satisfy an adjusted asset under that mode.
+  .editedWithOriginals)` branch: a record with only `.original.done`
+  does NOT satisfy an adjusted asset under that mode.
+- A pipeline test for paired-stem pre-allocation: pre-seed the
+  destination with `IMG_0001.JPG` belonging to no Photos asset, then
+  run a fresh include-originals export of an adjusted asset whose
+  natural-stem edit would land at `IMG_0001.JPG`. Assert the resulting
+  pair lands at `IMG_0001 (1).JPG` + `IMG_0001 (1)_orig.<ext>`, both
+  on the same incremented stem (no split).
+- A scanner test asserting fall-through on `vacation_orig.JPG` when
+  no asset has `vacation` stem with adjustments — the file matches
+  via step 2 (exact original) and classifies as `.original`.
+- A scanner test for native ` (N)` stems: an asset whose original
+  resource filename is `IMG_0001 (1).JPG`. Destination contains
+  `IMG_0001 (1).JPG` (edit) and `IMG_0001 (1)_orig.JPG`. Verify both
+  classify correctly without canonical-stem stripping losing the
+  native suffix.
 
 ### Removed
 
@@ -797,6 +1002,23 @@ manual click of **Export All** picks up the missing companions.
 
 We document this in the manual testing guide so testers don't flag it
 as a defect.
+
+### Failed-edit / orphaned-`_orig` recovery state
+
+A failed `.edited` write in include-originals mode leaves the asset
+with a `_orig` companion on disk and no user-visible file. Three
+guards prevent this from looking "done" to the user:
+
+1. The filename-aware `isExported(asset: .edited)` rule does not count
+   `.original.done` at a `_orig` filename as satisfying the asset.
+2. The `requiredVariants(.editedWithOriginals)` rule keeps
+   `.edited` in the required set, so the strict completion check on
+   include-originals also reports the asset as incomplete.
+3. The detail pane shows `Edited: <recoverable copy>` per the existing
+   `ExportVariantRecovery` enum.
+
+Re-running export retries the failed `.edited`. No orphaned-companion
+state silently passes as complete.
 
 ## Effort estimate
 

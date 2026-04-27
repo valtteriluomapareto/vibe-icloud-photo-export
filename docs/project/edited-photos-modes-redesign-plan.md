@@ -329,19 +329,22 @@ realistic cases:
    adjusted asset's edit at the natural stem, mis-classified as
    `.original.done`. Strict completion says it's incomplete.
 
-To match the asset-aware result without loading descriptors, the
-sidebar uses a **filename-aware count + an
-adjusted-count-based cap**. The cap reuses the lazily-loaded
-`countAdjustedAssets` plumbing from the existing
-`originalAndEdited` summary (which proved load-bearing for the
-same reason). This is the trade-off Codex's earlier review pass
-flagged but the redesign initially over-simplified away.
+To reduce false "complete" badges without loading descriptors, the
+sidebar uses a **filename-aware count + an adjusted-count-based cap**.
+The cap reuses the lazily-loaded `countAdjustedAssets` plumbing from
+the existing `originalAndEdited` summary (which proved load-bearing
+for the same reason). This is still an approximation: it matches the
+important complete-scope and full-import cases, but mixed partial
+states can still disagree with the asset-aware truth because records
+alone cannot say which natural-stem `.original.done` rows belong to
+currently adjusted assets.
 
 ```swift
 /// Records-only approximation of "fully exported under this
 /// selection," capped by the count of unedited assets in scope so
 /// that natural-stem .original.done records belonging to currently-
-/// adjusted assets cannot over-contribute.
+/// adjusted assets cannot over-contribute past the number of assets
+/// that could legitimately be original-only.
 ///
 /// `adjustedCount` is required for both modes. Pass nil only when
 /// the count hasn't loaded yet — callers should render a neutral
@@ -387,11 +390,11 @@ Walking the cases the cap covers:
 - **All assets correctly exported.** `editedDone` (or `bothDone`)
   picks up every adjusted asset; `origOnlyAtStem` picks up every
   unedited asset; the `min` is a no-op (both sides equal).
-- **Post-edit.** When an asset becomes adjusted after export,
-  `adjustedCount` increases by 1, `uneditedCount` decreases by 1,
-  and the `min` cap correctly drops one record from
-  `origOnlyAtStem`'s contribution. The asset's record is no longer
-  counted as fully exported. ✓
+- **Post-edit in an otherwise complete scope.** When an asset becomes
+  adjusted after export, `adjustedCount` increases by 1,
+  `uneditedCount` decreases by 1, and the `min` cap drops one record
+  from `origOnlyAtStem`'s contribution. The asset's record is no
+  longer counted as fully exported. ✓
 - **Same-extension re-import.** Records are all
   `.original.done` at natural stem (scanner can't tell apart edit
   from original). `editedDone` is zero, `origOnlyAtStem` is high,
@@ -402,11 +405,23 @@ Walking the cases the cap covers:
   fires, so the record is **not** counted in `origOnlyAtStem`.
   Sidebar under-counts by 1. The asset-aware path is correct.
   Documented in the manual testing guide.
+- **Mixed partial scope.** If only some unedited assets have been
+  exported, natural-stem `.original.done` records for currently
+  adjusted assets can still fit under the `uneditedCount` cap. Example:
+  10 assets, 5 currently adjusted, 3 unedited originals exported, and
+  5 adjusted same-extension imports mis-recorded as natural-stem
+  `.original.done`. The formula returns `min(8, 5) = 5` for the
+  original-only contribution, while asset-aware completion would count
+  3. This residual overcount is accepted for the sidebar only; the
+  export pipeline, month summary, thumbnails, and detail pane use the
+  strict asset-aware path.
 
 The undercount in the `vacation_orig` case is acceptable; it's a
-one-asset error in a corner case. The post-edit and re-import
-overcounts the cap prevents are common and would mislead users
-into thinking work is complete that isn't.
+one-asset error in a corner case. The mixed-partial overcount is also
+accepted because making the sidebar exact would require loading
+descriptors for every visible year/month. The cap prevents the most
+misleading complete-scope overcounts while keeping the sidebar cheap;
+authoritative views remain asset-aware.
 
 - `recordCount(year:month:variant:status:)` — stays.
 - `recordCountBothVariantsDone(year:month:)` — stays.
@@ -523,16 +538,30 @@ For fresh include-originals jobs, the stem comes from
 `allocatePairedGroupStem` and is shared between the two variant
 writes.
 
-### `inheritedGroupStem(from:)`
+### `inheritedGroupStem(from:descriptor:resources:)`
 
-The parser is updated:
+The parser becomes asset/resource-aware. This is load-bearing because
+`_orig` is both an app companion marker and a string a user can put in
+an actual original filename (for example `vacation_orig.JPG`).
 
 - An existing `.edited` variant record's filename → unsuffixed
   natural stem. `splitFilename(filename).base`.
-- An existing `.original` variant record's filename — call
-  `parseOriginalCandidate(filename:)`. If parsed (i.e. has `_orig`),
-  use the parsed `groupStem`. Otherwise the filename is at the
-  natural stem; use `splitFilename(filename).base`.
+- An existing `.original` variant record's filename:
+  1. First get the asset's current original-side resource via
+     `ResourceSelection.selectOriginalResource(from:resources,mediaType:)`.
+  2. If the recorded filename exactly equals that resource's
+     `originalFilename`, treat it as the user's natural filename and
+     use `splitFilename(filename).base`, even if the stem ends with
+     `_orig`.
+  3. Otherwise call `parseOriginalCandidate(filename:)`. If parsed,
+     use the parsed `groupStem`; this is the app companion case.
+  4. If parsing fails, use `splitFilename(filename).base`.
+
+This keeps an asset actually named `vacation_orig.JPG` paired under
+the `vacation_orig` group stem after it later becomes adjusted. The
+new edited file becomes `vacation_orig (1).<editedExt>` if the
+original file already occupies `vacation_orig.<origExt>`, not
+`vacation.<editedExt>`.
 
 The previous `_edited` recognition path is removed.
 
@@ -946,9 +975,13 @@ not a sequence of compile-clean intermediate states.
    use the new policy and the "is `.edited` paired in this run?"
    signal. For fresh include-originals jobs, the stem comes from
    `allocatePairedGroupStem` and is shared by both variant writes.
-6. Update `inheritedGroupStem(from:)` to recognise both unsuffixed
-   filenames (the new natural form) and `_orig`-suffixed filenames.
-   Drop the `_edited` recognition path.
+6. Update `inheritedGroupStem(from:descriptor:resources:)` to
+   recognise both unsuffixed filenames (the new natural form) and
+   `_orig`-suffixed companion filenames. Compare an existing
+   `.original` filename against the asset's current original resource
+   filename before stripping `_orig`, so user filenames like
+   `vacation_orig.JPG` stay on the `vacation_orig` group stem. Drop
+   the `_edited` recognition path.
 7. Update `EnqueueOutcome` to drop `.nothingApplicable`.
    `noApplicableCopy` and its callers go away.
 8. Update `bulkImportRecords` (no signature change; it merges by
@@ -1128,12 +1161,19 @@ See **Tests** below.
   - Post-edit case: a record was `.original.done` at natural stem
     when the asset was unedited; the descriptor now reports
     `hasAdjustments == true`, raising `adjustedCount` and lowering
-    `uneditedCount`. The cap drops one from `origOnlyAtStem`'s
-    contribution; the asset is correctly NOT counted as exported.
+    `uneditedCount`. In an otherwise-complete scope, the cap drops one
+    from `origOnlyAtStem`'s contribution; the asset is correctly NOT
+    counted as exported.
   - Same-extension re-import case: 100 records all
     `.original.done` at natural stem (post-import); 30 of the
     underlying assets are adjusted. Default mode count returns
     70, matching the asset-aware result.
+  - Mixed partial limitation: 10 assets, 5 adjusted, 3 unedited
+    originals exported, and 5 adjusted same-extension imports
+    mis-recorded as natural-stem `.original.done`. Default mode returns
+    5 even though asset-aware completion is 3. Assert this documented
+    residual approximation so future changes don't accidentally rely on
+    sidebar counts as authoritative.
   - Documented `vacation_orig.JPG` edge case: a record is
     `.original.done` at a `_orig`-shaped user filename; the
     sidebar under-counts by 1 (`isOrigCompanion` fires
@@ -1146,6 +1186,12 @@ See **Tests** below.
   natural-stem edit would land at `IMG_0001.JPG`. Assert the resulting
   pair lands at `IMG_0001 (1).JPG` + `IMG_0001 (1)_orig.<ext>`, both
   on the same incremented stem (no split).
+- A pipeline test for inherited stems with a real `_orig` filename:
+  export an unedited asset whose original resource filename is
+  `vacation_orig.JPG`, then mark the asset adjusted and re-run default
+  export. The inherited group stem must stay `vacation_orig`; the
+  edited file should land at `vacation_orig (1).JPG` (or equivalent
+  edited extension), not `vacation.JPG`.
 - A scanner test asserting fall-through on `vacation_orig.JPG` when
   no asset has `vacation` stem with adjustments — the file matches
   via step 2 (exact original) and classifies as `.original`.

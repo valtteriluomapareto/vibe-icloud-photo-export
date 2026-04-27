@@ -489,15 +489,32 @@ button must be disabled while `hasActiveExportWork` is true.
 
 ## Backup scanner
 
-The scanner needs three small changes.
+The scanner needs three small changes plus a related type cleanup.
 
-### 1. Drop the `_edited` parser path
+### 1. Drop the `_edited` parser path and the classification enum
 
-`ExportFilenamePolicy.parseEditedCandidate(filename:)` and the
-`ExportFilenameClassification.edited` enum case go away — *new* exports
-no longer produce `_edited` filenames, and we don't need to support
-parsing them on import. (See the **Migration** section for the
-on-disk implication.)
+`ExportFilenamePolicy.parseEditedCandidate(filename:)` goes away —
+*new* exports no longer produce `_edited` filenames, and we don't
+need to support parsing them on import. (See the **Migration**
+section for the on-disk implication.)
+
+The associated `ExportFilenameClassification` enum is also removed
+**in its entirety**, not just the `.edited` case. Its only purpose
+was to record *how* the scanner matched a file; under the new design
+the scanner has fewer paths and the only data the import flow
+actually consumes from `MatchedExportFile` is `variant`,
+`asset`, and `file`. Concretely:
+
+- Delete the `ExportFilenameClassification` enum from
+  `ExportFilenamePolicy.swift`.
+- Drop the `classification: ExportFilenameClassification` field from
+  `BackupScanner.MatchedExportFile`.
+- Update the import flow in `ExportManager.startImport` (which
+  previously read `matched.classification` for nothing load-bearing)
+  to consume only `matched.variant`.
+
+If a future feature needs to know the matching path for diagnostics,
+re-introduce a thinner enum at that point. For this redesign, drop it.
 
 ### 2. Add a `_orig` parser
 
@@ -782,8 +799,27 @@ shipped.
 
 ## Implementation phasing
 
-Order is chosen so that the working tree compiles and tests pass at
-the end of each phase.
+**Phases 1–6 are one compile unit, not separate commits.** Earlier
+drafts of this plan said each phase should leave the tree compiling;
+that was overoptimistic — collapsing the `ExportVersionSelection`
+enum cases and removing filename APIs in Phase 1 immediately breaks
+every callsite that pattern-matches the enum or calls the deleted
+APIs (the `ExportManager.init` fallback line, the toolbar/onboarding
+picker tags, every `switch selection` arm in `requiredVariants` /
+`isExported` / `monthSummary` / the toolbar's empty-run scope copy,
+every `editedFilename` / `parseEditedCandidate` caller). There is no
+reasonable order in which the model change lands first and the
+callsites later still compile.
+
+The phases below are kept as **logical groupings for review**
+purposes: a reader walking the plan finds the model changes
+together, the pipeline changes together, etc. In practice they all
+land in a single commit (or a tightly-stacked branch) covering the
+full code surface. Then phases 7–8 (tests and docs) follow as their
+own commits.
+
+Treat the numbered phases as a checklist of what must be touched,
+not a sequence of compile-clean intermediate states.
 
 ### Phase 1 — Models and policy
 
@@ -797,10 +833,13 @@ the end of each phase.
    - The "edited filename" callable becomes
      `editedFilename(stem:editedResourceFilename:) -> String` returning
      `<stem>.<editedExt>` (no suffix).
-   - Drop `parseEditedCandidate` and `ExportFilenameClassification.edited`.
+   - Drop `parseEditedCandidate` and the entire
+     `ExportFilenameClassification` enum (see Phase 3 for the
+     scanner-side cleanup that this enables).
    - Add `parseOriginalCandidate(filename:) -> ParsedOriginalCandidate?`.
-   - Add `isOrigCompanion(filename:) -> Bool` (predicate used by both
-     the store's `isExported` and the sidebar's count rules).
+   - Add `isOrigCompanion(filename:) -> Bool` (predicate used by the
+     sidebar's records-only count heuristic and the scanner's `_orig`
+     parser — **not** by `isExported`, which stays asset-aware).
 
 ### Phase 2 — Pipeline
 

@@ -562,14 +562,29 @@ Steps 1–3 cover the unambiguous original cases. Step 4 covers the
 cross-extension edited case (HEIC original + JPEG edit, exported in
 either mode). The same-extension same-stem case (JPEG original + JPEG
 edit, exported in default mode) is **classified as `.original` by
-step 2**, not `.edited`. This is intentional and is what the relaxed
-`isExported` accommodates: a re-imported same-extension asset will be
-recorded as `.original`, and the next default-mode export run will see
-"some variant is done" via the relaxed check and skip the asset.
+step 2**, not `.edited` — there is no information in the filename to
+distinguish edited bytes from original bytes when both share an
+extension and a stem.
 
-This means the scanner cannot losslessly round-trip variant identity
-for the same-extension same-stem case. We accept this as a
-documented limitation of the simplified naming.
+This is the documented import limitation. Under the strict
+asset-aware `isExported`, a same-extension adjusted asset whose
+record came in as `.original.done` from a re-import will look
+incomplete on the next default-mode run (because
+`requiredVariants(.edited)` for an adjusted asset isn't satisfied by
+a `.original` record), and the pipeline re-exports `.edited`. The
+`uniqueFileURL` collision logic adds a `(1)` suffix because the
+natural-stem path is taken. The destination ends up with
+`IMG_0001.JPG` (the file as found by the scanner — it's the edit
+bytes, but the records call it `.original`) plus `IMG_0001 (1).JPG`
+(the re-exported edit, recorded as `.edited.done`). One duplicate
+per same-extension adjusted asset, then steady state.
+
+This is the trade-off the new naming convention accepts: the
+scanner cannot losslessly round-trip variant identity for the
+same-extension case, and the strict completion rule cannot
+disambiguate without descriptor context. The duplicate is recorded
+correctly and visible in the asset detail pane; future work could
+add same-asset controlled overwrite to resolve it cleanly.
 
 ### Scanner regression tests to add
 
@@ -819,40 +834,53 @@ the end of each phase.
 
 ### Phase 4 — Record store
 
-12. Update `isExported(asset:selection:)` to the filename-aware
-    default-mode rule (uses `ExportFilenamePolicy.isOrigCompanion`).
+12. Update `isExported(asset:selection:)` to the **strict
+    asset-aware** rule. The body becomes
+    `requiredVariants(for: asset, selection: selection).allSatisfy { record.variants[$0]?.status == .done }`.
+    No filename inspection; no use of `isOrigCompanion`. The asset's
+    current `hasAdjustments` (consulted via `requiredVariants`) is
+    the source of truth.
 13. Update `monthSummary(assets:selection:)` — drop the `editedOnly`
-    branch; the surviving two branches use the filename-aware rule.
-14. Update `sidebarSummary(year:month:totalCount:selection:)` —
-    remove the `adjustedCount` parameter. Both modes derive their
-    "exported" count from records using the filename-aware rule.
-15. Update `sidebarYearExportedCount(year:totalCountsByMonth:selection:)`
-    — drop the `adjustedCountsByMonth` parameter.
+    branch; the surviving two branches both call the strict
+    asset-aware `isExported(asset:selection:)` per descriptor.
+14. Replace `sidebarSummary(year:month:totalCount:adjustedCount:selection:)`
+    with `sidebarSummary(year:month:totalCount:selection:)` — drop
+    the `adjustedCount` parameter. Body uses the new
+    `sidebarExportedCount(year:month:selection:)` records-only
+    heuristic (which *does* use `isOrigCompanion`, since it has no
+    descriptor to consult).
+15. Add `sidebarExportedCount(year:month:selection:)` — records-only
+    filename heuristic per the table in the
+    **ExportRecordStore API surface** section.
+16. Replace `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)`
+    with `sidebarYearSummary(year:totalAssets:selection:)`. The new
+    method drops both per-month parameters and calls
+    `sidebarExportedCount(year: month: nil, selection:)` internally.
 
 ### Phase 5 — UI
 
-16. Replace `ExportToolbarView.versionPicker` with the toggle button.
+17. Replace `ExportToolbarView.versionPicker` with the toggle button.
     Update tooltips and accessibility.
-17. Update `OnboardingView` step 2 sub-picker to a checkbox toggle.
+18. Update `OnboardingView` step 2 sub-picker to a checkbox toggle.
     Update help text.
-18. Update `ExportManager.init`:
+19. Update `ExportManager.init`:
     - Change the fallback `self.versionSelection = .originalOnly`
       to `self.versionSelection = .edited`. The old case won't even
       compile after Phase 1; this edit is the bridge.
-19. Update `ContentView`:
+20. Update `ContentView`:
     - Drop `adjustedCountsByYearMonth` state.
     - Drop `loadAdjustedCount`, `monthTotals`, `adjustedMonths`.
     - Update `YearRow` and `MonthRow` to remove mode-qualified copy
       and adjusted-count plumbing. Update tooltips.
     - Update `MonthRow.task(id:)` modifier — remove the adjusted-count
       task.
-20. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
-21. Update `AssetDetailView` to remove any references to the obsolete
+21. Update `MonthContentView.exportSummaryView` to mode-agnostic copy.
+22. Update `AssetDetailView` to remove any references to the obsolete
     "Edited only" mode in copy.
 
 ### Phase 6 — Photos service
 
-22. Delete `countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
+23. Delete `countAdjustedAssets(year:month:)` and `countAdjustedAssets(year:)`
     from the protocol and `PhotoLibraryManager`. Drop
     `adjustedCountByYearMonth` cache and its invalidation. Remove the
     fake's implementations.
@@ -863,20 +891,20 @@ See **Tests** below.
 
 ### Phase 8 — Documentation
 
-20. Rewrite the **Version selection** section of
+24. Rewrite the **Version selection** section of
     `website/src/content/docs/features.md` to describe the toggle.
-21. Rewrite the relevant section of
+25. Rewrite the relevant section of
     `website/src/content/docs/getting-started.md`.
-22. Update `website/src/content/docs/export-icloud-photos.md` for the
+26. Update `website/src/content/docs/export-icloud-photos.md` for the
     same.
-23. Update README's Current Capabilities bullet for the toggle.
-24. Update `docs/reference/persistence-store.md` to reflect that
+27. Update README's Current Capabilities bullet for the toggle.
+28. Update `docs/reference/persistence-store.md` to reflect that
     filenames may carry `_orig` suffix.
-25. Move `docs/project/support-edited-photos-export-plan.md` and
-    `docs/project/edited-photos-p2-followups-plan.md` to
-    `docs/project/archive/` — they're superseded by this redesign.
-    `git mv` so history follows.
-26. Rewrite `docs/project/edited-photos-manual-testing-guide.md`
+29. The previous parent and P2 plans were already moved to
+    `docs/project/archive/` in a prior commit on this branch; verify
+    the `Supersedes` header at the top of this plan still points at
+    the correct archive paths.
+30. Rewrite `docs/project/edited-photos-manual-testing-guide.md`
     against the new modes (very large rewrite — most scenarios
     change).
 
@@ -1123,11 +1151,13 @@ A failed `.edited` write in include-originals mode leaves the asset
 with a `_orig` companion on disk and no user-visible file. Three
 guards prevent this from looking "done" to the user:
 
-1. The filename-aware `isExported(asset: .edited)` rule does not count
-   `.original.done` at a `_orig` filename as satisfying the asset.
-2. The `requiredVariants(.editedWithOriginals)` rule keeps
-   `.edited` in the required set, so the strict completion check on
-   include-originals also reports the asset as incomplete.
+1. Under default mode, `requiredVariants` for an adjusted asset is
+   `[.edited]`. The `.original.done` record at the `_orig` filename
+   isn't even consulted; only `.edited.done?` is checked, and it
+   isn't done. The asset is incomplete.
+2. Under include-originals mode, `requiredVariants` is
+   `[.original, .edited]`. Both must be done. `.edited` isn't, so
+   the asset is incomplete.
 3. The detail pane shows `Edited: <recoverable copy>` per the existing
    `ExportVariantRecovery` enum.
 

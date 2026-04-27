@@ -666,27 +666,40 @@ extension ExportFilenamePolicy {
    when there is no asset with adjustments and stem `vacation`.
 
 2. Else if the filename exactly matches a known original resource
-   filename → `.original`.
+   filename → `.original`, **unless** a `_orig` companion sibling
+   exists in the same scope for this file's stem AND the candidate is
+   adjusted with matching edited-resource extensions, in which case
+   the natural-stem file is the **edit** that was paired with that
+   `_orig` original — classify as `.edited`.
 3. Else if the filename's collision-stripped form matches a known
-   original resource filename → `.original`.
+   original resource filename → `.original` (with the same
+   `_orig`-sibling override as step 2).
 4. Else if the filename's stem (collision-stripped) matches a known
    original resource stem AND the asset has `hasAdjustments == true`
    AND the file extension matches one of the asset's edited resource
    extensions → `.edited`.
 5. Else unmatched.
 
+The `_orig`-sibling override in steps 2/3 makes the include-originals
+same-extension case (JPEG + JPEG edit, exported with the toggle on)
+round-trip losslessly: the destination contains `IMG_0001.JPG` (the
+edit) and `IMG_0001_orig.JPG` (the original), and step 1 plus the
+override correctly classify each. The scanner pre-builds a per-scope
+`stemsWithOrigSibling` set from the scanned files before classifying so
+the override has O(1) per-file lookup.
+
 Steps 1–3 cover the unambiguous original cases. Step 4 covers the
 cross-extension edited case (HEIC original + JPEG edit, exported in
-either mode). The same-extension same-stem case (JPEG original + JPEG
-edit, exported in default mode) is **classified as `.original` by
-step 2**, not `.edited` — there is no information in the filename to
-distinguish edited bytes from original bytes when both share an
-extension and a stem.
+either mode). The remaining ambiguity is the **same-extension default
+mode** case (JPEG + JPEG edit exported with the toggle off, no `_orig`
+sibling on disk): the natural-stem file gets classified as `.original`
+by step 2 because there's no signal — neither a `_orig` sibling nor a
+distinct extension — that would identify it as the edit.
 
 This is the documented import limitation. Under the strict
 asset-aware `isExported`, a same-extension adjusted asset whose
-record came in as `.original.done` from a re-import will look
-incomplete on the next default-mode run (because
+record came in as `.original.done` from a default-mode re-import will
+look incomplete on the next default-mode run (because
 `requiredVariants(.edited)` for an adjusted asset isn't satisfied by
 a `.original` record), and the pipeline re-exports `.edited`. The
 `uniqueFileURL` collision logic adds a `(1)` suffix because the
@@ -767,10 +780,11 @@ ToolbarItem(placement: .automatic) {
 }
 ```
 
-`exportManager.includeOriginals` is a `@Published Bool` derived from
-the `ExportVersionSelection` (false → `.edited`, true → `.editedWithOriginals`).
-The setter persists to UserDefaults under the existing
-`exportVersionSelection` key, mapping bool to enum raw value.
+`exportManager.includeOriginals` is a derived `Bool` accessor backed by
+the `@Published var versionSelection` (false ↔ `.edited`, true ↔
+`.editedWithOriginals`). Mutations route through `versionSelection`'s
+`didSet`, which persists to `UserDefaults` under the existing
+`exportVersionSelection` key.
 
 The help tooltip:
 
@@ -1010,18 +1024,12 @@ not a sequence of compile-clean intermediate states.
 13. Update `monthSummary(assets:selection:)` — drop the `editedOnly`
     branch; the surviving two branches both call the strict
     asset-aware `isExported(asset:selection:)` per descriptor.
-14. Update `sidebarSummary(year:month:totalCount:adjustedCount:selection:)` —
-    keep the `adjustedCount` parameter (the cap is load-bearing).
-    Body uses the records-only formula in **Records-only sidebar
-    approximation**: `editedDone + min(origOnlyAtStem, uneditedCount)`
-    for default mode, `bothDone + min(origOnlyAtStem, uneditedCount)`
-    for include-originals. `origOnlyAtStem` filters records by
-    `!isOrigCompanion(filename:)`. Drop the `editedOnly` branch.
-15. Update `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)` —
-    keep both per-month parameters. Body iterates each month and
-    accumulates the per-month exported count using the rule above.
-    Rename to `sidebarYearSummary` if it makes more sense to return
-    a `MonthStatusSummary`-shaped value; otherwise keep as-is.
+14. Update `sidebarSummary(year:month:totalCount:adjustedCount:selection:)`
+    per the formula and cap rules in **Records-only sidebar
+    approximation** above. Drop the `editedOnly` branch.
+15. Update `sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)`
+    to iterate per month and sum each month's `sidebarSummary` exported
+    count under the same rules. Drop the `editedOnly` branch.
 
 ### Phase 5 — UI
 
@@ -1048,35 +1056,26 @@ not a sequence of compile-clean intermediate states.
 21. Update `AssetDetailView` to remove any references to the obsolete
     "Edited only" mode in copy.
 
-### Phase 6 — Photos service
-
-22. **No changes.** `countAdjustedAssets(year:month:)` and
-    `countAdjustedAssets(year:)` stay (along with their cache and
-    invalidation paths). The plan's earlier draft listed them for
-    deletion; that was the error. Phase 6 is now empty — kept here
-    so the phase numbering stays aligned with earlier drafts of the
-    plan.
-
-### Phase 7 — Tests
+### Phase 6 — Tests
 
 See **Tests** below.
 
-### Phase 8 — Documentation
+### Phase 7 — Documentation
 
-23. Rewrite the **Version selection** section of
+22. Rewrite the **Version selection** section of
     `website/src/content/docs/features.md` to describe the toggle.
-24. Rewrite the relevant section of
+23. Rewrite the relevant section of
     `website/src/content/docs/getting-started.md`.
-25. Update `website/src/content/docs/export-icloud-photos.md` for the
+24. Update `website/src/content/docs/export-icloud-photos.md` for the
     same.
-26. Update README's Current Capabilities bullet for the toggle.
-27. Update `docs/reference/persistence-store.md` to reflect that
+25. Update README's Current Capabilities bullet for the toggle.
+26. Update `docs/reference/persistence-store.md` to reflect that
     filenames may carry `_orig` suffix.
-28. The previous parent and P2 plans were already moved to
+27. The previous parent and P2 plans were already moved to
     `docs/project/archive/` in a prior commit on this branch; verify
     the `Supersedes` header at the top of this plan still points at
     the correct archive paths.
-29. Rewrite `docs/project/edited-photos-manual-testing-guide.md`
+28. Rewrite `docs/project/edited-photos-manual-testing-guide.md`
     against the new modes (very large rewrite — most scenarios
     change).
 
@@ -1256,7 +1255,7 @@ Approximate target shape after rewrite:
 - **Group K — Other shipped behaviours.** Pause/resume, stale `.tmp`,
   optional paired-original conflict.
 
-The existing testing guide will be completely rewritten in Phase 9.
+The existing testing guide will be completely rewritten in Phase 7.
 
 ## Risks / open questions
 

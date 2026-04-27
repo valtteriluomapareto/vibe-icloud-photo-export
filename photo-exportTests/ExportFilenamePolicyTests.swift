@@ -4,76 +4,96 @@ import Testing
 @testable import Photo_Export
 
 struct ExportFilenamePolicyTests {
-  // MARK: - originalFilename(for:)
+  // MARK: - originalFilename
 
-  @Test func originalFilenameIsUnchanged() {
-    #expect(ExportFilenamePolicy.originalFilename(for: "IMG_0001.JPG") == "IMG_0001.JPG")
+  @Test func originalFilenameWithoutSuffix() {
     #expect(
-      ExportFilenamePolicy.originalFilename(for: "some thing (weird).HEIC")
-        == "some thing (weird).HEIC")
+      ExportFilenamePolicy.originalFilename(stem: "IMG_0001", ext: "JPG", withSuffix: false)
+        == "IMG_0001.JPG")
   }
 
-  // MARK: - editedFilename(originalGroupStem:editedResourceFilename:)
+  @Test func originalFilenameWithOrigSuffix() {
+    #expect(
+      ExportFilenamePolicy.originalFilename(stem: "IMG_0001", ext: "HEIC", withSuffix: true)
+        == "IMG_0001_orig.HEIC")
+  }
+
+  @Test func originalFilenamePreservesCollisionSuffixInStem() {
+    #expect(
+      ExportFilenamePolicy.originalFilename(stem: "IMG_0001 (1)", ext: "JPG", withSuffix: true)
+        == "IMG_0001 (1)_orig.JPG")
+  }
+
+  // MARK: - editedFilename
 
   @Test func editedFilenameUsesGroupStemPlusEditedExtension() {
     #expect(
       ExportFilenamePolicy.editedFilename(
-        originalGroupStem: "IMG_0001",
+        stem: "IMG_0001",
         editedResourceFilename: "IMG_E0001.JPG"
-      ) == "IMG_0001_edited.JPG")
+      ) == "IMG_0001.JPG")
   }
 
   @Test func editedFilenamePicksUpRenderedJpegFromHeicOriginal() {
-    // The canonical example: HEIC original, JPEG rendered edit.
     #expect(
       ExportFilenamePolicy.editedFilename(
-        originalGroupStem: "IMG_0001",
+        stem: "IMG_0001",
         editedResourceFilename: "FullSizeRender.JPG"
-      ) == "IMG_0001_edited.JPG")
+      ) == "IMG_0001.JPG")
   }
 
-  @Test func editedFilenamePreservesCollisionSuffixInGroupStem() {
+  @Test func editedFilenamePreservesCollisionSuffixInStem() {
     #expect(
       ExportFilenamePolicy.editedFilename(
-        originalGroupStem: "IMG_0001 (1)",
+        stem: "IMG_0001 (1)",
         editedResourceFilename: "IMG_E0001.JPG"
-      ) == "IMG_0001 (1)_edited.JPG")
+      ) == "IMG_0001 (1).JPG")
   }
 
-  // MARK: - parseEditedCandidate(filename:)
+  // MARK: - parseOriginalCandidate
 
-  @Test func parseEditedCandidateRecognizesPlainEditedFilename() {
-    let parsed = ExportFilenamePolicy.parseEditedCandidate(filename: "IMG_0001_edited.JPG")
+  @Test func parseOriginalCandidateRecognizesPlainOrigFilename() {
+    let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: "IMG_0001_orig.JPG")
     #expect(parsed?.groupStem == "IMG_0001")
     #expect(parsed?.canonicalOriginalStem == "IMG_0001")
     #expect(parsed?.fileCollisionSuffix == nil)
     #expect(parsed?.fileExtension == "JPG")
   }
 
-  @Test func parseEditedCandidatePreservesGroupCollisionSuffix() {
-    let parsed = ExportFilenamePolicy.parseEditedCandidate(
-      filename: "IMG_0001 (1)_edited.JPG")
+  @Test func parseOriginalCandidatePreservesGroupCollisionSuffix() {
+    let parsed = ExportFilenamePolicy.parseOriginalCandidate(
+      filename: "IMG_0001 (1)_orig.JPG")
     #expect(parsed?.groupStem == "IMG_0001 (1)")
     #expect(parsed?.canonicalOriginalStem == "IMG_0001")
     #expect(parsed?.fileCollisionSuffix == nil)
   }
 
-  @Test func parseEditedCandidateRecognizesFinalFileCollisionSuffix() {
-    let parsed = ExportFilenamePolicy.parseEditedCandidate(filename: "IMG_0001_edited (1).JPG")
+  @Test func parseOriginalCandidateRecognizesFinalFileCollisionSuffix() {
+    let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: "IMG_0001_orig (1).JPG")
     #expect(parsed?.groupStem == "IMG_0001")
     #expect(parsed?.canonicalOriginalStem == "IMG_0001")
     #expect(parsed?.fileCollisionSuffix == 1)
   }
 
-  @Test func parseEditedCandidateReturnsNilForNonEditedFilename() {
-    #expect(ExportFilenamePolicy.parseEditedCandidate(filename: "IMG_0001.JPG") == nil)
+  @Test func parseOriginalCandidateReturnsNilForNonOrigFilename() {
+    #expect(ExportFilenamePolicy.parseOriginalCandidate(filename: "IMG_0001.JPG") == nil)
     #expect(
-      ExportFilenamePolicy.parseEditedCandidate(filename: "vacation_2020.JPG") == nil)
+      ExportFilenamePolicy.parseOriginalCandidate(filename: "vacation_2020.JPG") == nil)
   }
 
-  @Test func parseEditedCandidateRequiresEditedSuffixOnStem() {
-    // Has "_edited" inside but not as suffix — should still return nil.
+  @Test func parseOriginalCandidateRequiresOrigSuffixOnStem() {
     #expect(
-      ExportFilenamePolicy.parseEditedCandidate(filename: "my_edited_photo.JPG") == nil)
+      ExportFilenamePolicy.parseOriginalCandidate(filename: "my_orig_photo.JPG") == nil)
+  }
+
+  // MARK: - isOrigCompanion
+
+  @Test func isOrigCompanionMatchesPlainAndCollisionForms() {
+    #expect(ExportFilenamePolicy.isOrigCompanion(filename: "IMG_0001.JPG") == false)
+    #expect(ExportFilenamePolicy.isOrigCompanion(filename: "IMG_0001 (1).JPG") == false)
+    #expect(ExportFilenamePolicy.isOrigCompanion(filename: "IMG_0001_orig.JPG") == true)
+    #expect(ExportFilenamePolicy.isOrigCompanion(filename: "IMG_0001_orig (1).JPG") == true)
+    // The predicate is shape-only: a real user filename ending in `_orig` matches.
+    #expect(ExportFilenamePolicy.isOrigCompanion(filename: "vacation_orig.JPG") == true)
   }
 }

@@ -46,9 +46,9 @@ The folder needs to be writable. The app remembers your choice across launches u
 Once the destination is set, you'll see the main window with a **year/month sidebar** on the left and a **thumbnail grid** in the center. From here you can:
 
 - Click a month to browse its photos
-- Use the segmented **Originals / Edited / Both** picker in the toolbar to choose which
-  versions to export. Edited exports add an `_edited` suffix and only apply to assets that
-  have edits in Photos.
+- Use the **Include originals** toggle in the toolbar to choose what gets written. Off
+  (default) exports one file per photo, in the version Photos shows. On adds a `_orig`
+  companion for any photo edited in Photos so you keep a copy of the original bytes.
 - Click **Export All** in the toolbar to queue the entire library
 - Use **File → Import Existing Backup...** (Cmd+Shift+I) if you already have a previous export and want to avoid re-copying those files
 

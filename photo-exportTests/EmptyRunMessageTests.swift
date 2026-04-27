@@ -124,93 +124,12 @@ struct EmptyRunMessageTests {
     #expect(manager.emptyRunMessage == nil)
   }
 
-  // MARK: - editedOnly with no adjusted assets — distinct from "already exported"
-
-  @Test func editedOnlyMonthWithNoAdjustedAssetsShowsNoApplicableMessage() async throws {
-    let (manager, photoLib, dest, _) = makeTestHarness()
-    defer { dest.cleanup() }
-    manager.versionSelection = .editedOnly
-
-    // Month has assets, but none are adjusted. Required variants is empty for every asset,
-    // so no jobs are enqueued — but this is "nothing edited to back up here", not
-    // "already exported". The toolbar message must distinguish.
-    let unedited1 = TestAssetFactory.makeAsset(id: "u1", hasAdjustments: false)
-    let unedited2 = TestAssetFactory.makeAsset(id: "u2", hasAdjustments: false)
-    photoLib.assetsByYearMonth["2025-9"] = [unedited1, unedited2]
-    photoLib.resourcesByAssetId["u1"] = [
-      TestAssetFactory.makeResource(originalFilename: "U1.JPG")
-    ]
-    photoLib.resourcesByAssetId["u2"] = [
-      TestAssetFactory.makeResource(originalFilename: "U2.JPG")
-    ]
-
-    manager.startExportMonth(year: 2025, month: 9)
-    await waitForEnqueueIdle(manager)
-
-    #expect(manager.emptyRunMessage == "This month has no edited versions to export.")
-    #expect(manager.totalJobsEnqueued == 0)
-  }
-
-  @Test func editedOnlyAllWithNoAdjustedAssetsShowsNoApplicableMessage() async throws {
-    let (manager, photoLib, dest, _) = makeTestHarness()
-    defer { dest.cleanup() }
-    manager.versionSelection = .editedOnly
-
-    let asset = TestAssetFactory.makeAsset(
-      id: "all-u", creationDate: makeDate(2024, 5, 1), hasAdjustments: false)
-    photoLib.assetsByYearMonth["2024-5"] = [asset]
-    photoLib.resourcesByAssetId["all-u"] = [
-      TestAssetFactory.makeResource(originalFilename: "U.JPG")
-    ]
-    photoLib.yearCounts = [(year: 2024, count: 1)]
-
-    manager.startExportAll()
-    await waitForEnqueueIdle(manager)
-
-    #expect(
-      manager.emptyRunMessage == "This destination has no edited versions to export.")
-  }
-
-  @Test func editedOnlyAllWithMixedAdjustedAndUneditedShowsAlreadyExported() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
-    defer { dest.cleanup() }
-    manager.versionSelection = .editedOnly
-
-    // 2023 has an adjusted asset that's already done (.alreadyComplete for that year).
-    // 2024 has only unedited assets (.nothingApplicable for that year).
-    // The library-wide message should be "already exported", not "no edited versions"
-    // — at least one year's worth of edited work is genuinely complete.
-    let adjusted = TestAssetFactory.makeAsset(
-      id: "adj-2023", creationDate: makeDate(2023, 6, 1), hasAdjustments: true)
-    let unedited = TestAssetFactory.makeAsset(
-      id: "u-2024", creationDate: makeDate(2024, 6, 1), hasAdjustments: false)
-    photoLib.assetsByYearMonth["2023-6"] = [adjusted]
-    photoLib.assetsByYearMonth["2024-6"] = [unedited]
-    photoLib.resourcesByAssetId["adj-2023"] = [
-      TestAssetFactory.makeResource(type: .photo, originalFilename: "A.JPG"),
-      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullA.JPG"),
-    ]
-    photoLib.resourcesByAssetId["u-2024"] = [
-      TestAssetFactory.makeResource(originalFilename: "U.JPG")
-    ]
-    photoLib.yearCounts = [(year: 2024, count: 1), (year: 2023, count: 1)]
-    store.markVariantExported(
-      assetId: "adj-2023", variant: .edited, year: 2023, month: 6,
-      relPath: "2023/06/", filename: "A_edited.JPG", exportedAt: Date())
-
-    manager.startExportAll()
-    await waitForEnqueueIdle(manager)
-
-    #expect(manager.emptyRunMessage == "Everything in this destination is already exported.")
-  }
-
   // MARK: - Clearing rules
 
   @Test func newStartExportClearsPriorMessage() async throws {
     let (manager, photoLib, dest, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    // First click: nothing to do — message shows.
     let asset = TestAssetFactory.makeAsset(id: "done-1")
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId["done-1"] = [
@@ -224,15 +143,12 @@ struct EmptyRunMessageTests {
     await waitForEnqueueIdle(manager)
     #expect(manager.emptyRunMessage != nil)
 
-    // Second click on a different month with real work — the prior message must clear at the
-    // start of the new run, not linger past it.
     let workAsset = TestAssetFactory.makeAsset(id: "todo-2")
     photoLib.assetsByYearMonth["2025-6"] = [workAsset]
     photoLib.resourcesByAssetId["todo-2"] = [
       TestAssetFactory.makeResource(originalFilename: "B.JPG")
     ]
     manager.startExportMonth(year: 2025, month: 6)
-    // Synchronously after the call, the message should already be cleared.
     #expect(manager.emptyRunMessage == nil)
     await waitForEnqueueIdle(manager)
   }
@@ -254,7 +170,7 @@ struct EmptyRunMessageTests {
     await waitForEnqueueIdle(manager)
     #expect(manager.emptyRunMessage != nil)
 
-    manager.versionSelection = .editedOnly
+    manager.versionSelection = .editedWithOriginals
     #expect(manager.emptyRunMessage == nil)
   }
 

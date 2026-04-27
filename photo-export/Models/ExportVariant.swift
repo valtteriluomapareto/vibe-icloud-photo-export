@@ -8,25 +8,26 @@ enum ExportVariant: String, Codable, CaseIterable, Hashable, Sendable {
 
 /// User-facing selection that drives which variants are required per asset.
 enum ExportVersionSelection: String, Codable, CaseIterable, Sendable {
-  case originalOnly
-  case editedOnly
-  case originalAndEdited
+  /// One file per asset: edited bytes if Photos has an edit, original bytes otherwise.
+  /// The user sees what they see in Photos.app.
+  case edited
+  /// `edited` plus a `_orig` companion for any asset that has Photos edits. Lets the user
+  /// keep RAW or pre-edit backups alongside the user-visible rendering.
+  case editedWithOriginals
 }
 
 /// Required variants for an asset under the active selection.
 ///
-/// Edited export is only applicable when `asset.hasAdjustments` is true. When
-/// `editedOnly` is selected and the asset has no edits, the empty set filters
-/// the asset out of export work entirely.
+/// Every asset is applicable in every mode: an unedited asset is exported as `.original`,
+/// an adjusted asset as `.edited` (with an additional `.original` companion under
+/// `editedWithOriginals`).
 func requiredVariants(for asset: AssetDescriptor, selection: ExportVersionSelection)
   -> Set<ExportVariant>
 {
   switch selection {
-  case .originalOnly:
-    return [.original]
-  case .editedOnly:
-    return asset.hasAdjustments ? [.edited] : []
-  case .originalAndEdited:
+  case .edited:
+    return asset.hasAdjustments ? [.edited] : [.original]
+  case .editedWithOriginals:
     return asset.hasAdjustments ? [.original, .edited] : [.original]
   }
 }

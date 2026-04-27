@@ -275,10 +275,14 @@ final class ExportRecordStore: ObservableObject {
     recordsById[assetId]?.variants[.original]?.status == .done
   }
 
-  /// Selection-aware completion check for a single asset.
+  /// Strict, asset-aware completion check for a single asset.
+  ///
+  /// Consults the asset's current `hasAdjustments` (via `requiredVariants`) and verifies
+  /// every required variant is `.done`. No filename inspection — a `.original.done` row at
+  /// any filename satisfies an unedited asset's requirement, and an adjusted asset is only
+  /// satisfied when `.edited.done` (and `.original.done` under `editedWithOriginals`).
   func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
     let required = requiredVariants(for: asset, selection: selection)
-    if required.isEmpty { return true }
     guard let record = recordsById[asset.id] else { return false }
     return required.allSatisfy { record.variants[$0]?.status == .done }
   }
@@ -321,16 +325,10 @@ final class ExportRecordStore: ObservableObject {
       ?? 0
 
     var exported = 0
-    var total = 0
-    for asset in assets {
-      let required = requiredVariants(for: asset, selection: selection)
-      if required.isEmpty { continue }
-      total += 1
-      let record = recordsById[asset.id]
-      let allDone = required.allSatisfy { record?.variants[$0]?.status == .done }
-      if allDone { exported += 1 }
+    for asset in assets where isExported(asset: asset, selection: selection) {
+      exported += 1
     }
-    return makeSummary(year: year, month: month, exported: exported, total: total)
+    return makeSummary(year: year, month: month, exported: exported, total: assets.count)
   }
 
   /// Count of records in `year`/`month` whose variant matches the requested `variant` with the
@@ -348,8 +346,8 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// Count of records in `year`/`month` whose `.original` and `.edited` variants are both
-  /// `.done`. These records are definitely fully complete under `originalAndEdited` regardless
-  /// of whether the asset is currently adjusted.
+  /// `.done`. These records are definitely fully complete under `editedWithOriginals`
+  /// regardless of whether the asset is currently adjusted.
   func recordCountBothVariantsDone(year: Int, month: Int) -> Int {
     recordsById.values.reduce(0) { sum, record in
       guard record.year == year, record.month == month else { return sum }
@@ -359,41 +357,58 @@ final class ExportRecordStore: ObservableObject {
     }
   }
 
-  /// Selection-aware summary for a sidebar row that does not have loaded `AssetDescriptor`s.
-  /// `adjustedCount` must be supplied by the caller from `PhotoLibraryService.countAdjustedAssets`
-  /// except for `originalOnly` where it is not consulted; pass nil to indicate the count has not
-  /// finished loading so the view can show a neutral state.
+  /// Count of records in `year`/`month` whose `.edited` variant is `.done`. Used by the
+  /// records-only sidebar formula for the default mode.
+  func recordCountEditedDone(year: Int, month: Int) -> Int {
+    recordCount(year: year, month: month, variant: .edited, status: .done)
+  }
+
+  /// Count of records in `year`/`month` with `.original.done` at a natural-stem filename
+  /// (i.e. not a `_orig` companion) AND `.edited` not `.done`. Used by the records-only
+  /// sidebar formula to estimate "unedited asset, exported once" rows without loading
+  /// descriptors.
+  func recordCountOriginalDoneAtNaturalStem(year: Int, month: Int) -> Int {
+    recordsById.values.reduce(0) { sum, record in
+      guard record.year == year, record.month == month else { return sum }
+      guard let original = record.variants[.original], original.status == .done,
+        let filename = original.filename
+      else { return sum }
+      if record.variants[.edited]?.status == .done { return sum }
+      return sum + (ExportFilenamePolicy.isOrigCompanion(filename: filename) ? 0 : 1)
+    }
+  }
+
+  /// Records-only approximation of "fully exported under this selection," capped by the
+  /// count of unedited assets in scope so that natural-stem `.original.done` records
+  /// belonging to currently-adjusted assets cannot over-contribute past the number of
+  /// assets that could legitimately be original-only.
+  ///
+  /// `adjustedCount` is required for both modes. Pass nil when the count hasn't loaded yet —
+  /// callers should render a neutral "loading" state in that case rather than treat nil as
+  /// zero.
   func sidebarSummary(
     year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
     selection: ExportVersionSelection
   ) -> MonthStatusSummary? {
+    guard let adjustedCount else { return nil }
+    let uneditedCount = max(0, totalCount - adjustedCount)
+    let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
     switch selection {
-    case .originalOnly:
-      let done = recordCount(year: year, month: month, variant: .original, status: .done)
-      return makeSummary(year: year, month: month, exported: done, total: totalCount)
-    case .editedOnly:
-      guard let adjustedCount else { return nil }
-      let done = recordCount(year: year, month: month, variant: .edited, status: .done)
-      return makeSummary(year: year, month: month, exported: done, total: adjustedCount)
-    case .originalAndEdited:
-      guard let adjustedCount else { return nil }
-      // An adjusted asset is complete only when both variants are done. An unedited asset is
-      // complete when its `.original` is done. Records with `.original` done but `.edited` not
-      // done could be either (unedited and complete) or (adjusted with the edited variant still
-      // missing or failed); the approximation caps that ambiguous set at the total unedited
-      // asset count so we never claim a fully-done asset we don't have evidence for.
+    case .edited:
+      let editedDone = recordCountEditedDone(year: year, month: month)
+      let exported = editedDone + min(origOnlyAtStem, uneditedCount)
+      return makeSummary(year: year, month: month, exported: exported, total: totalCount)
+    case .editedWithOriginals:
       let bothDone = recordCountBothVariantsDone(year: year, month: month)
-      let originalDone = recordCount(
-        year: year, month: month, variant: .original, status: .done)
-      let originalOnlyDone = max(0, originalDone - bothDone)
-      let uneditedCount = max(0, totalCount - adjustedCount)
-      let exported = bothDone + min(originalOnlyDone, uneditedCount)
+      let exported = bothDone + min(origOnlyAtStem, uneditedCount)
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     }
   }
 
-  /// Aggregate year-wide exported count under the active selection. Uses the same approximation
-  /// rules as `sidebarSummary` and sums across months.
+  /// Year-scope variant. Iterates each month with its (totalCount, adjustedCount) pair, sums
+  /// the per-month exported counts, and returns the rolled-up total. Months whose
+  /// adjustedCount is nil contribute zero to the total — callers should suppress the
+  /// year-level badge until all populated months have reported.
   func sidebarYearExportedCount(
     year: Int,
     totalCountsByMonth: [Int: Int],

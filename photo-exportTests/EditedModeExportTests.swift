@@ -4,10 +4,10 @@ import Testing
 
 @testable import Photo_Export
 
-/// Covers the edited-variant export pipeline: filename contract, collision pairing, failure
-/// propagation, and selection-aware enqueue/skip behaviour.
+/// Covers the export pipeline for the redesigned two-mode selection: filename contract,
+/// collision pairing, failure propagation, and selection-aware enqueue/skip behaviour.
 @MainActor
-struct EditedVariantExportTests {
+struct EditedModeExportTests {
   // MARK: - Test harness
 
   private func makeTestHarness() -> (
@@ -19,11 +19,10 @@ struct EditedVariantExportTests {
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
     let tempDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("EditedVariantTest-\(UUID().uuidString)", isDirectory: true)
+      .appendingPathComponent("EditedModeTest-\(UUID().uuidString)", isDirectory: true)
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
 
-    // Reset the persisted selection so each test starts from a known state.
     UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
 
     let manager = ExportManager(
@@ -47,12 +46,12 @@ struct EditedVariantExportTests {
     }
   }
 
-  // MARK: - Edited-only with unedited assets
+  // MARK: - Default mode: unedited asset writes original at the natural stem
 
-  @Test func editedOnlySkipsUneditedAssets() async throws {
+  @Test func editedDefaultExportsUneditedAtOriginalFilename() async throws {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .editedOnly
+    manager.versionSelection = .edited
 
     let unedited = TestAssetFactory.makeAsset(id: "plain-asset", hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-3"] = [unedited]
@@ -63,17 +62,20 @@ struct EditedVariantExportTests {
     manager.startExportMonth(year: 2025, month: 3)
     await waitForQueueDrained(manager)
 
-    #expect(writer.writeCalls.isEmpty)
-    #expect(store.exportInfo(assetId: "plain-asset") == nil)
-    #expect(manager.totalJobsEnqueued == 0)
+    #expect(writer.writeCalls.count == 1)
+    #expect(writer.writeCalls.first?.resource.type == .photo)
+    let record = store.exportInfo(assetId: "plain-asset")
+    #expect(record?.variants[.original]?.status == .done)
+    #expect(record?.variants[.original]?.filename == "IMG_0001.JPG")
+    #expect(record?.variants[.edited] == nil)
   }
 
-  // MARK: - Edited-only writes _edited filename
+  // MARK: - Default mode: adjusted asset writes the edit at the natural stem
 
-  @Test func editedOnlyWritesEditedFilename() async throws {
+  @Test func editedDefaultWritesEditAtNaturalStem() async throws {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .editedOnly
+    manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(id: "edited-asset", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
@@ -89,16 +91,16 @@ struct EditedVariantExportTests {
     #expect(writer.writeCalls.first?.resource.type == .fullSizePhoto)
     let record = store.exportInfo(assetId: "edited-asset")
     #expect(record?.variants[.edited]?.status == .done)
-    #expect(record?.variants[.edited]?.filename == "IMG_0001_edited.JPG")
+    #expect(record?.variants[.edited]?.filename == "IMG_0001.JPG")
     #expect(record?.variants[.original] == nil)
   }
 
-  // MARK: - HEIC original + JPEG edit → _edited.JPG
+  // MARK: - HEIC original + JPEG edit → edit lands at IMG_0001.JPG
 
-  @Test func heicOriginalPlusJpegEditProducesEditedJpeg() async throws {
+  @Test func heicOriginalPlusJpegEditProducesJpegAtNaturalStem() async throws {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .editedOnly
+    manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(id: "heic-asset", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-5"] = [asset]
@@ -112,15 +114,15 @@ struct EditedVariantExportTests {
 
     #expect(writer.writeCalls.count == 1)
     let record = store.exportInfo(assetId: "heic-asset")
-    #expect(record?.variants[.edited]?.filename == "IMG_0001_edited.JPG")
+    #expect(record?.variants[.edited]?.filename == "IMG_0001.JPG")
   }
 
-  // MARK: - Original + edited writes both
+  // MARK: - editedWithOriginals adjusted asset writes both files paired
 
-  @Test func originalAndEditedWritesBothVariants() async throws {
+  @Test func editedWithOriginalsWritesPrimaryAndOrigCompanion() async throws {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .originalAndEdited
+    manager.versionSelection = .editedWithOriginals
 
     let asset = TestAssetFactory.makeAsset(id: "dual-asset", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-6"] = [asset]
@@ -135,15 +137,15 @@ struct EditedVariantExportTests {
     #expect(writer.writeCalls.count == 2)
     let record = store.exportInfo(assetId: "dual-asset")
     #expect(record?.variants[.original]?.status == .done)
-    #expect(record?.variants[.original]?.filename == "IMG_0001.JPG")
+    #expect(record?.variants[.original]?.filename == "IMG_0001_orig.JPG")
     #expect(record?.variants[.edited]?.status == .done)
-    #expect(record?.variants[.edited]?.filename == "IMG_0001_edited.JPG")
+    #expect(record?.variants[.edited]?.filename == "IMG_0001.JPG")
   }
 
-  @Test func originalAndEditedUneditedAssetWritesOriginalOnly() async throws {
+  @Test func editedWithOriginalsUneditedAssetWritesOriginalOnly() async throws {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .originalAndEdited
+    manager.versionSelection = .editedWithOriginals
 
     let unedited = TestAssetFactory.makeAsset(id: "plain", hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-7"] = [unedited]
@@ -157,21 +159,21 @@ struct EditedVariantExportTests {
     #expect(writer.writeCalls.count == 1)
     let record = store.exportInfo(assetId: "plain")
     #expect(record?.variants[.original]?.status == .done)
+    #expect(record?.variants[.original]?.filename == "IMG_0001.JPG")
     #expect(record?.variants[.edited] == nil)
   }
 
-  // MARK: - Missing edited resource fails the edited variant (not "skipped")
+  // MARK: - Default mode adjusted asset with no edited resource fails edited variant
 
-  @Test func editedOnlyFailsWhenEditedResourceUnavailable() async throws {
+  @Test func defaultModeAdjustedFailsWhenEditedResourceUnavailable() async throws {
     let (manager, photoLib, dest, _, _, store) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .editedOnly
+    manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(id: "broken-edit", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-8"] = [asset]
     photoLib.resourcesByAssetId["broken-edit"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
-      // No .fullSizePhoto resource despite hasAdjustments.
     ]
 
     manager.startExportMonth(year: 2025, month: 8)
@@ -182,13 +184,13 @@ struct EditedVariantExportTests {
     #expect(record?.variants[.edited]?.lastError == "Edited resource unavailable")
   }
 
-  // MARK: - Pair-preserving re-export after collision
+  // MARK: - Companion follows the asset's collision-suffixed group stem
 
-  @Test func pairedCompanionFollowsOriginalCollisionSuffix() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+  @Test func pairedCompanionFollowsCollisionSuffix() async throws {
+    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
     defer { dest.cleanup() }
+    manager.versionSelection = .editedWithOriginals
 
-    manager.versionSelection = .originalOnly
     let aOriginal = TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
     let bOriginal = TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
     let bEdited = TestAssetFactory.makeResource(
@@ -203,110 +205,59 @@ struct EditedVariantExportTests {
     manager.startExportMonth(year: 2025, month: 9)
     await waitForQueueDrained(manager)
 
+    // Asset A goes first, gets natural-stem `IMG_0001.JPG` (unedited, no `_orig`).
     #expect(store.exportInfo(assetId: "asset-a")?.variants[.original]?.filename == "IMG_0001.JPG")
-    #expect(
-      store.exportInfo(assetId: "asset-b")?.variants[.original]?.filename == "IMG_0001 (1).JPG")
 
-    // Flip selection to include edited, re-run the month. Asset B's edited companion must pair
-    // against its recorded original group stem.
-    manager.versionSelection = .originalAndEdited
-    manager.startExportMonth(year: 2025, month: 9)
-    await waitForQueueDrained(manager)
-
+    // Asset B's pair allocates the next free stem `IMG_0001 (1)` because the natural-stem
+    // edited target `IMG_0001.JPG` is taken by Asset A.
     let bRecord = store.exportInfo(assetId: "asset-b")
-    #expect(bRecord?.variants[.edited]?.status == .done)
-    #expect(bRecord?.variants[.edited]?.filename == "IMG_0001 (1)_edited.JPG")
+    #expect(bRecord?.variants[.edited]?.filename == "IMG_0001 (1).JPG")
+    #expect(bRecord?.variants[.original]?.filename == "IMG_0001 (1)_orig.JPG")
   }
 
-  // MARK: - Symmetric pair preservation (edited first, then original)
+  // MARK: - Step-1 fail-path guard for paired `_orig` companion
 
-  @Test func symmetricPairingWhenEditedExportedFirst() async throws {
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
-    defer { dest.cleanup() }
-
-    // Pre-seed Asset A's original on disk so Asset B's edited-only export collides.
-    let monthDir = try dest.urlForMonth(year: 2025, month: 10, createIfNeeded: true)
-    FileManager.default.createFile(
-      atPath: monthDir.appendingPathComponent("IMG_0001.JPG").path,
-      contents: Data("dummy".utf8))
-
-    manager.versionSelection = .editedOnly
-    let assetB = TestAssetFactory.makeAsset(id: "b-only", hasAdjustments: true)
-    photoLib.assetsByYearMonth["2025-10"] = [assetB]
-    photoLib.resourcesByAssetId["b-only"] = [
-      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
-      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
-    ]
-
-    manager.startExportMonth(year: 2025, month: 10)
-    await waitForQueueDrained(manager)
-
-    let editedRecord = store.exportInfo(assetId: "b-only")
-    #expect(editedRecord?.variants[.edited]?.filename == "IMG_0001 (1)_edited.JPG")
-
-    // Now switch to originalAndEdited; the original variant must pair against the recorded group
-    // stem "IMG_0001 (1)".
-    manager.versionSelection = .originalAndEdited
-    manager.startExportMonth(year: 2025, month: 10)
-    await waitForQueueDrained(manager)
-
-    let fullRecord = store.exportInfo(assetId: "b-only")
-    #expect(fullRecord?.variants[.original]?.status == .done)
-    #expect(fullRecord?.variants[.original]?.filename == "IMG_0001 (1).JPG")
-    _ = fileSystem  // silence unused warning
-  }
-
-  // MARK: - Step-1 fail-path guard
-
-  @Test func pairedOriginalFailsInsteadOfOverwritingAnotherAssetsFile() async throws {
+  @Test func pairedCompanionFailsInsteadOfOverwritingAnotherAssetsFile() async throws {
     let (manager, photoLib, dest, _, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    manager.versionSelection = .editedOnly
-    // Asset B exports edited-only first.
+    // Default mode for asset B first: writes the edit at the natural stem.
+    manager.versionSelection = .edited
     let assetB = TestAssetFactory.makeAsset(id: "b", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-11"] = [assetB]
     photoLib.resourcesByAssetId["b"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
       TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
     ]
-    // Pre-seed IMG_0001.JPG on disk so Asset B's stem resolves to "IMG_0001 (1)".
-    let monthDir = try dest.urlForMonth(year: 2025, month: 11, createIfNeeded: true)
-    FileManager.default.createFile(
-      atPath: monthDir.appendingPathComponent("IMG_0001.JPG").path,
-      contents: Data("dummy".utf8))
 
     manager.startExportMonth(year: 2025, month: 11)
     await waitForQueueDrained(manager)
-    #expect(store.exportInfo(assetId: "b")?.variants[.edited]?.filename == "IMG_0001 (1)_edited.JPG")
+    #expect(store.exportInfo(assetId: "b")?.variants[.edited]?.filename == "IMG_0001.JPG")
 
-    // Asset C separately takes the "IMG_0001 (1).JPG" stem on disk (simulating another
-    // asset exporting in between).
+    // Pre-seed `IMG_0001_orig.JPG` with another asset's bytes — asset B's later switch to
+    // include-originals must fail rather than overwrite it.
+    let monthDir = try dest.urlForMonth(year: 2025, month: 11, createIfNeeded: true)
     FileManager.default.createFile(
-      atPath: monthDir.appendingPathComponent("IMG_0001 (1).JPG").path,
+      atPath: monthDir.appendingPathComponent("IMG_0001_orig.JPG").path,
       contents: Data("other-asset".utf8))
 
-    // Switching Asset B to originalAndEdited should fail its original variant rather than
-    // overwriting Asset C's file or re-allocating a different stem that splits the pair.
-    manager.versionSelection = .originalAndEdited
+    manager.versionSelection = .editedWithOriginals
     manager.startExportMonth(year: 2025, month: 11)
     await waitForQueueDrained(manager)
 
     let bRecord = store.exportInfo(assetId: "b")
     #expect(bRecord?.variants[.original]?.status == .failed)
     #expect(bRecord?.variants[.original]?.lastError?.contains("already exists") == true)
-    // Asset C's bytes on disk must be untouched.
-    let cData = try Data(
-      contentsOf: monthDir.appendingPathComponent("IMG_0001 (1).JPG"))
+    let cData = try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001_orig.JPG"))
     #expect(String(data: cData, encoding: .utf8) == "other-asset")
   }
 
-  // MARK: - Stale .tmp cleanup at export start
+  // MARK: - Stale .tmp cleanup
 
   @Test func staleTempFileIsRemovedBeforeWrite() async throws {
     let (manager, photoLib, dest, _, _, _) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .originalOnly
+    manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(id: "stale-tmp", hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-12"] = [asset]
@@ -314,7 +265,6 @@ struct EditedVariantExportTests {
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
     ]
 
-    // Seed a stale sibling .tmp at the target.
     let monthDir = try dest.urlForMonth(year: 2025, month: 12, createIfNeeded: true)
     let staleTmp = monthDir.appendingPathComponent("IMG_0001.JPG.tmp")
     FileManager.default.createFile(atPath: staleTmp.path, contents: Data("leftover".utf8))
@@ -323,18 +273,16 @@ struct EditedVariantExportTests {
     manager.startExportMonth(year: 2025, month: 12)
     await waitForQueueDrained(manager)
 
-    // After export finishes, the sibling .tmp should be gone.
     #expect(!FileManager.default.fileExists(atPath: staleTmp.path))
   }
 
-  // MARK: - Switching selection enqueues only missing variants
+  // MARK: - Switching selection enqueues only the missing variant
 
-  @Test func originalAndEditedEnqueuesOnlyMissingEditedForAlreadyExportedOriginals() async throws
-  {
+  @Test func switchingToIncludeOriginalsEnqueuesOnlyMissingOriginal() async throws {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    manager.versionSelection = .originalOnly
+    manager.versionSelection = .edited
     let asset = TestAssetFactory.makeAsset(id: "switch-asset", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["switch-asset"] = [
@@ -345,39 +293,126 @@ struct EditedVariantExportTests {
     manager.startExportMonth(year: 2025, month: 1)
     await waitForQueueDrained(manager)
     #expect(writer.writeCalls.count == 1)
-    #expect(store.exportInfo(assetId: "switch-asset")?.variants[.original]?.status == .done)
+    #expect(store.exportInfo(assetId: "switch-asset")?.variants[.edited]?.status == .done)
 
-    // Flip selection; only the edited variant is new work.
-    manager.versionSelection = .originalAndEdited
+    manager.versionSelection = .editedWithOriginals
     manager.startExportMonth(year: 2025, month: 1)
     await waitForQueueDrained(manager)
 
     #expect(writer.writeCalls.count == 2)
-    #expect(writer.writeCalls.last?.resource.type == .fullSizePhoto)
-    #expect(store.exportInfo(assetId: "switch-asset")?.variants[.edited]?.status == .done)
+    let rec = store.exportInfo(assetId: "switch-asset")
+    #expect(rec?.variants[.original]?.status == .done)
+    #expect(rec?.variants[.original]?.filename == "IMG_0001_orig.JPG")
+    #expect(rec?.variants[.edited]?.filename == "IMG_0001.JPG")
   }
 
-  // MARK: - Original succeeds and edited fails independently
+  // MARK: - Post-edit re-export collides at natural stem with one-time `(1)` suffix
 
-  // MARK: - Sidebar summary accuracy for originalAndEdited
+  @Test func postEditReExportLandsAtCollisionSuffixedPath() async throws {
+    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    defer { dest.cleanup() }
+    manager.versionSelection = .edited
 
-  @Test func sidebarSummaryDoesNotOvercountWhenOnlyEditedIsDone() async throws {
+    // Initial export: asset is unedited.
+    var asset = TestAssetFactory.makeAsset(id: "post-edit", hasAdjustments: false)
+    photoLib.assetsByYearMonth["2025-2"] = [asset]
+    photoLib.resourcesByAssetId["post-edit"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
+    ]
+    manager.startExportMonth(year: 2025, month: 2)
+    await waitForQueueDrained(manager)
+    #expect(store.exportInfo(assetId: "post-edit")?.variants[.original]?.filename == "IMG_0001.JPG")
+
+    // The user later edits the photo in Photos. Re-run default export.
+    asset = TestAssetFactory.makeAsset(id: "post-edit", hasAdjustments: true)
+    photoLib.assetsByYearMonth["2025-2"] = [asset]
+    manager.startExportMonth(year: 2025, month: 2)
+    await waitForQueueDrained(manager)
+
+    let rec = store.exportInfo(assetId: "post-edit")
+    // Old `.original.done` is preserved at natural stem; new `.edited.done` lands at the
+    // next available stem because the natural stem is taken.
+    #expect(rec?.variants[.original]?.status == .done)
+    #expect(rec?.variants[.original]?.filename == "IMG_0001.JPG")
+    #expect(rec?.variants[.edited]?.status == .done)
+    #expect(rec?.variants[.edited]?.filename == "IMG_0001 (1).JPG")
+  }
+
+  // MARK: - Inherited group stem with a real `_orig` user filename
+
+  @Test func userOrigFilenameStaysOnItsGroupStemAfterAdjustment() async throws {
+    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    defer { dest.cleanup() }
+    manager.versionSelection = .edited
+
+    var asset = TestAssetFactory.makeAsset(id: "user-orig", hasAdjustments: false)
+    photoLib.assetsByYearMonth["2025-3"] = [asset]
+    photoLib.resourcesByAssetId["user-orig"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "vacation_orig.JPG"),
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
+    ]
+    manager.startExportMonth(year: 2025, month: 3)
+    await waitForQueueDrained(manager)
+    #expect(
+      store.exportInfo(assetId: "user-orig")?.variants[.original]?.filename
+        == "vacation_orig.JPG")
+
+    // Asset becomes adjusted; re-run default export. The new edit should follow the user's
+    // own group stem `vacation_orig`, not collapse to `vacation`.
+    asset = TestAssetFactory.makeAsset(id: "user-orig", hasAdjustments: true)
+    photoLib.assetsByYearMonth["2025-3"] = [asset]
+    manager.startExportMonth(year: 2025, month: 3)
+    await waitForQueueDrained(manager)
+
+    let rec = store.exportInfo(assetId: "user-orig")
+    #expect(rec?.variants[.edited]?.filename == "vacation_orig (1).JPG")
+  }
+
+  // MARK: - Pre-allocation: pre-seeded natural-stem file forces pair onto next stem
+
+  @Test func freshPairAvoidsSplitWhenNaturalEditedStemIsTaken() async throws {
+    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    defer { dest.cleanup() }
+    manager.versionSelection = .editedWithOriginals
+
+    // Seed a stray file at the asset's natural-stem edited filename.
+    let monthDir = try dest.urlForMonth(year: 2025, month: 4, createIfNeeded: true)
+    FileManager.default.createFile(
+      atPath: monthDir.appendingPathComponent("IMG_0001.JPG").path,
+      contents: Data("stray".utf8))
+
+    let asset = TestAssetFactory.makeAsset(id: "fresh-pair", hasAdjustments: true)
+    photoLib.assetsByYearMonth["2025-4"] = [asset]
+    photoLib.resourcesByAssetId["fresh-pair"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
+    ]
+
+    manager.startExportMonth(year: 2025, month: 4)
+    await waitForQueueDrained(manager)
+
+    let rec = store.exportInfo(assetId: "fresh-pair")
+    #expect(rec?.variants[.edited]?.filename == "IMG_0001 (1).JPG")
+    #expect(rec?.variants[.original]?.filename == "IMG_0001 (1)_orig.HEIC")
+  }
+
+  // MARK: - Sidebar summary accuracy
+
+  @Test func sidebarSummaryForEditedWithOriginalsAdjustedOnlyOneVariantDone() async throws {
     let (_, _, dest, _, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    // One adjusted asset exported edited-only; the original variant is NOT done.
+    // Asset is adjusted; only `.edited.done` recorded (no `.original.done`).
     store.markVariantExported(
       assetId: "edited-only-asset", variant: .edited, year: 2025, month: 6,
-      relPath: "2025/06/", filename: "IMG_0001_edited.JPG", exportedAt: Date())
+      relPath: "2025/06/", filename: "IMG_0001.JPG", exportedAt: Date())
     store.flushForTesting()
 
-    // The sidebar under originalAndEdited would previously have counted this as complete,
-    // because `editedDone` was added directly. The fixed formula counts only records where
-    // both variants are done (zero here) and caps original-only completions at the unedited
-    // asset count (also zero here).
+    // Under editedWithOriginals: bothDone=0, origOnlyAtStem=0, uneditedCount=0 → 0 exported.
     let summary = store.sidebarSummary(
       year: 2025, month: 6, totalCount: 1, adjustedCount: 1,
-      selection: .originalAndEdited)
+      selection: .editedWithOriginals)
     #expect(summary?.exportedCount == 0)
     #expect(summary?.status == .notExported)
   }
@@ -389,11 +424,10 @@ struct EditedVariantExportTests {
     let now = Date()
     store.markVariantExported(
       assetId: "adj-asset", variant: .original, year: 2025, month: 7,
-      relPath: "2025/07/", filename: "IMG_0001.JPG", exportedAt: now)
+      relPath: "2025/07/", filename: "IMG_0001_orig.JPG", exportedAt: now)
     store.markVariantExported(
       assetId: "adj-asset", variant: .edited, year: 2025, month: 7,
-      relPath: "2025/07/", filename: "IMG_0001_edited.JPG", exportedAt: now)
-    // An unedited asset with original done only.
+      relPath: "2025/07/", filename: "IMG_0001.JPG", exportedAt: now)
     store.markExported(
       assetId: "plain-asset", year: 2025, month: 7, relPath: "2025/07/",
       filename: "IMG_0002.JPG", exportedAt: now)
@@ -401,7 +435,7 @@ struct EditedVariantExportTests {
 
     let summary = store.sidebarSummary(
       year: 2025, month: 7, totalCount: 2, adjustedCount: 1,
-      selection: .originalAndEdited)
+      selection: .editedWithOriginals)
     #expect(summary?.exportedCount == 2)
     #expect(summary?.status == .complete)
   }
@@ -411,13 +445,12 @@ struct EditedVariantExportTests {
   @Test func originalSucceedsEvenIfEditedFails() async throws {
     let (manager, photoLib, dest, _, _, store) = makeTestHarness()
     defer { dest.cleanup() }
-    manager.versionSelection = .originalAndEdited
+    manager.versionSelection = .editedWithOriginals
 
     let asset = TestAssetFactory.makeAsset(id: "mixed", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     photoLib.resourcesByAssetId["mixed"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
-      // No .fullSizePhoto — edited variant will fail.
     ]
 
     manager.startExportMonth(year: 2025, month: 2)

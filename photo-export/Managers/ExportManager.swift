@@ -49,6 +49,14 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  /// Toolbar/onboarding-friendly view of `versionSelection`. Off ↔ `.edited`, on ↔
+  /// `.editedWithOriginals`. Mutations route back through `versionSelection` so
+  /// `@Published` observation and `UserDefaults` persistence flow through one source.
+  var includeOriginals: Bool {
+    get { versionSelection == .editedWithOriginals }
+    set { versionSelection = newValue ? .editedWithOriginals : .edited }
+  }
+
   // MARK: - Published State (Import)
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
@@ -95,7 +103,7 @@ final class ExportManager: ObservableObject {
     {
       self.versionSelection = saved
     } else {
-      self.versionSelection = .originalOnly
+      self.versionSelection = .edited
     }
   }
 
@@ -116,12 +124,10 @@ final class ExportManager: ObservableObject {
           year: year, month: month, selection: selection, generation: gen)
         guard self.generation == gen else { return }
         switch outcome {
-        case .enqueued:
+        case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
           setEmptyRunMessage("This month is already exported.")
-        case .nothingApplicable:
-          setEmptyRunMessage(noApplicableCopy(scope: .month, selection: selection))
         }
         processQueueIfNeeded()
       } catch {
@@ -144,12 +150,10 @@ final class ExportManager: ObservableObject {
           year: year, selection: selection, generation: gen)
         guard self.generation == gen else { return }
         switch outcome {
-        case .enqueued:
+        case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
           setEmptyRunMessage("This year is already exported.")
-        case .nothingApplicable:
-          setEmptyRunMessage(noApplicableCopy(scope: .year, selection: selection))
         }
         processQueueIfNeeded()
       } catch {
@@ -175,7 +179,7 @@ final class ExportManager: ObservableObject {
       do {
         let allYears = try photoLibraryService.availableYears()
         var totalEnqueued = 0
-        var anyAlreadyComplete = false
+        var sawUnauthorized = false
         for year in allYears {
           let outcome = try await enqueueYear(
             year: year, selection: selection, generation: gen)
@@ -187,21 +191,14 @@ final class ExportManager: ObservableObject {
           case .enqueued(let count):
             totalEnqueued += count
           case .alreadyComplete:
-            anyAlreadyComplete = true
-          case .nothingApplicable:
             break
+          case .unauthorized:
+            sawUnauthorized = true
           }
         }
         self.isEnqueueingAll = false
-        if totalEnqueued == 0 {
-          // If any year had applicable-but-done work, the library *was* doing work and is
-          // now complete. Only when no year had any applicable assets at all do we show the
-          // "no edited versions" copy.
-          if anyAlreadyComplete {
-            setEmptyRunMessage("Everything in this destination is already exported.")
-          } else {
-            setEmptyRunMessage(noApplicableCopy(scope: .all, selection: selection))
-          }
+        if totalEnqueued == 0 && !sawUnauthorized {
+          setEmptyRunMessage("Everything in this destination is already exported.")
         }
         processQueueIfNeeded()
       } catch {
@@ -213,37 +210,14 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Outcome of an enqueue scan over a month, year, or library. Distinct from a bare
-  /// "0 jobs enqueued" so the toolbar can tell the user *why* nothing was queued: either
-  /// every applicable asset is already done, or no asset matches the active selection (the
-  /// only case today is `editedOnly` over a scope with zero adjusted assets).
+  /// Outcome of an enqueue scan over a month, year, or library. Either real work was
+  /// queued, every asset in scope is already done, or the Photos library is not
+  /// accessible and we cannot scan at all (the latter is a defensive case — the export
+  /// button is gated on `isAuthorized` in the UI, so users should not reach this path).
   private enum EnqueueOutcome: Equatable {
     case enqueued(Int)
     case alreadyComplete
-    case nothingApplicable
-  }
-
-  private enum EnqueueScope { case month, year, all }
-
-  private func noApplicableCopy(
-    scope: EnqueueScope, selection: ExportVersionSelection
-  ) -> String {
-    // Only `editedOnly` produces an empty required-variants set today. If we add another
-    // selection that filters assets out, extend this switch with the new copy.
-    switch (scope, selection) {
-    case (.month, .editedOnly):
-      return "This month has no edited versions to export."
-    case (.year, .editedOnly):
-      return "This year has no edited versions to export."
-    case (.all, .editedOnly):
-      return "This destination has no edited versions to export."
-    case (.month, _):
-      return "This month is already exported."
-    case (.year, _):
-      return "This year is already exported."
-    case (.all, _):
-      return "Everything in this destination is already exported."
-    }
+    case unauthorized
   }
 
   func cancelAndClear() {
@@ -322,22 +296,17 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Queue Handling
 
-  /// Scans the month and returns the enqueue outcome. Callers use the outcome to pick
-  /// the right user-facing message — `.alreadyComplete` and `.nothingApplicable` both
-  /// add zero jobs but mean different things to the user.
+  /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
+  /// whether to surface the "already exported" toolbar message.
   @discardableResult
   private func enqueueMonth(
     year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else { return .nothingApplicable }
+    guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
-    let applicable = assets.filter {
-      !requiredVariants(for: $0, selection: selection).isEmpty
-    }
-    if applicable.isEmpty { return .nothingApplicable }
-    let newJobs: [ExportJob] = applicable.compactMap { asset in
+    let newJobs: [ExportJob] = assets.compactMap { asset in
       guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
         return nil
       }
@@ -357,17 +326,13 @@ final class ExportManager: ObservableObject {
     year: Int, selection: ExportVersionSelection, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else { return .nothingApplicable }
+    guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
-    let applicable = assets.filter {
-      !requiredVariants(for: $0, selection: selection).isEmpty
-    }
-    if applicable.isEmpty { return .nothingApplicable }
     let calendar = Calendar.current
     var newJobs: [ExportJob] = []
-    newJobs.reserveCapacity(applicable.count)
-    for asset in applicable {
+    newJobs.reserveCapacity(assets.count)
+    for asset in assets {
       guard let created = asset.creationDate else { continue }
       let m = calendar.component(.month, from: created)
       guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
@@ -385,13 +350,6 @@ final class ExportManager: ObservableObject {
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
-  }
-
-  /// Returns true when the asset has at least one required variant that isn't already `.done`.
-  private func shouldEnqueue(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
-    let required = requiredVariants(for: asset, selection: selection)
-    if required.isEmpty { return false }
-    return !exportRecordStore.isExported(asset: asset, selection: selection)
   }
 
   func processQueueIfNeeded() {
@@ -515,7 +473,29 @@ final class ExportManager: ObservableObject {
 
       // Always attempt original before edited so edited can inherit the chosen group stem.
       let orderedVariants: [ExportVariant] = [.original, .edited].filter { missing.contains($0) }
-      var groupStem = inheritedGroupStem(from: existingRecord)
+
+      // Whether `.original` is paired with `.edited` for this asset. When true, the
+      // `.original` file is written at `<stem>_orig.<origExt>`; otherwise at the bare stem.
+      let pairOriginalWithSuffix = required.contains(.edited)
+
+      var groupStem = inheritedGroupStem(
+        from: existingRecord, descriptor: descriptor, resources: resources)
+
+      // Pre-allocate a paired stem when we will write both variants in this run with no
+      // inherited stem to anchor the pair. This guarantees the edited and `_orig` companion
+      // land on the same stem instead of splitting via per-file uniqueFileURL collisions.
+      if groupStem == nil, orderedVariants == [.original, .edited],
+        let originalRes = ResourceSelection.selectOriginalResource(
+          from: resources, mediaType: descriptor.mediaType),
+        let editedRes = ResourceSelection.selectEditedResource(
+          from: resources, mediaType: descriptor.mediaType)
+      {
+        let baseStem = splitFilename(originalRes.originalFilename).base
+        let originalExt = (originalRes.originalFilename as NSString).pathExtension
+        let editedExt = (editedRes.originalFilename as NSString).pathExtension
+        groupStem = allocatePairedGroupStem(
+          baseStem: baseStem, editedExt: editedExt, originalExt: originalExt, destDir: destDir)
+      }
 
       for variant in orderedVariants {
         do {
@@ -527,7 +507,8 @@ final class ExportManager: ObservableObject {
             destDir: destDir,
             relPath: relPath,
             job: job,
-            inheritedGroupStem: groupStem,
+            groupStem: groupStem,
+            pairOriginalWithSuffix: pairOriginalWithSuffix,
             generation: gen,
             inFlight: &inFlight
           )
@@ -568,8 +549,8 @@ final class ExportManager: ObservableObject {
   /// filename was materialised (so later variants can pair against it). Returns nil on recoverable
   /// "no resource" failures that are recorded in-store but do not change the pairing stem.
   ///
-  /// `inheritedGroupStem` comes from either a prior done variant record for this asset or, within
-  /// the same job, a preceding successful variant.
+  /// `groupStem` is either inherited from a prior done variant record for this asset or, within
+  /// the same job, pre-allocated when both variants will be written together.
   private func exportSingleVariant(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -577,7 +558,8 @@ final class ExportManager: ObservableObject {
     destDir: URL,
     relPath: String,
     job: ExportJob,
-    inheritedGroupStem: String?,
+    groupStem: String?,
+    pairOriginalWithSuffix: Bool,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?
   ) async throws -> String? {
@@ -612,7 +594,8 @@ final class ExportManager: ObservableObject {
       resource: resource,
       resources: resources,
       destDir: destDir,
-      inheritedGroupStem: inheritedGroupStem
+      groupStem: groupStem,
+      pairOriginalWithSuffix: pairOriginalWithSuffix
     )
 
     let tempURL = finalURL.appendingPathExtension("tmp")
@@ -681,25 +664,32 @@ final class ExportManager: ObservableObject {
     return chosenStem
   }
 
-  /// Resolves the final URL and the group stem for a variant. Implements the collision
-  /// algorithm from the feature plan (steps 0–6). Throws when a step-1 pairing conflict would
-  /// silently split the pair.
+  /// Resolves the final URL and the group stem for a variant. Throws when a paired-stem
+  /// conflict would silently split the pair (step-1 fail-path).
+  ///
+  /// `groupStem` is the chosen pair stem when known: inherited from a prior `.done` record
+  /// for this asset, or pre-allocated by `allocatePairedGroupStem` when both variants are
+  /// being written together. When nil, only one variant is being written for this asset and
+  /// the file lands at the natural stem with `uniqueFileURL` collision handling.
+  ///
+  /// `pairOriginalWithSuffix` is true when this asset's `.original` is paired with an
+  /// `.edited` (current run or prior record) and so should be written at `<stem>_orig`.
   private func resolveDestination(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
     resource: ResourceDescriptor,
     resources: [ResourceDescriptor],
     destDir: URL,
-    inheritedGroupStem: String?
+    groupStem: String?,
+    pairOriginalWithSuffix: Bool
   ) throws -> (URL, String) {
     switch variant {
     case .original:
-      let originalFilename = ExportFilenamePolicy.originalFilename(
-        for: resource.originalFilename)
-      let (origStem, origExt) = splitFilename(originalFilename)
-      if let inherited = inheritedGroupStem {
-        let candidate = destDir.appendingPathComponent(inherited)
-          .appendingPathExtension(origExt)
+      let origExt = (resource.originalFilename as NSString).pathExtension
+      if let stem = groupStem {
+        let filename = ExportFilenamePolicy.originalFilename(
+          stem: stem, ext: origExt, withSuffix: pairOriginalWithSuffix)
+        let candidate = destDir.appendingPathComponent(filename)
         if fileSystem.fileExists(atPath: candidate.path) {
           throw NSError(
             domain: "Export", code: 5,
@@ -708,67 +698,59 @@ final class ExportManager: ObservableObject {
                 "Paired original filename already exists on disk: \(candidate.lastPathComponent)"
             ])
         }
-        return (candidate, inherited)
+        return (candidate, stem)
       }
+      // Fresh single-variant `.original`: no pairing, use uniqueFileURL collision handling.
+      let (origStem, _) = splitFilename(resource.originalFilename)
       let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
-      let chosenStem = finalURL.deletingPathExtension().lastPathComponent
-      return (finalURL, chosenStem)
+      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
 
     case .edited:
       let editedExt = (resource.originalFilename as NSString).pathExtension
-      if let inherited = inheritedGroupStem {
-        let editedFilename = ExportFilenamePolicy.editedFilename(
-          originalGroupStem: inherited, editedResourceFilename: resource.originalFilename)
-        let (base, ext) = splitFilename(editedFilename)
+      if let stem = groupStem {
+        let filename = ExportFilenamePolicy.editedFilename(
+          stem: stem, editedResourceFilename: resource.originalFilename)
+        let (base, ext) = splitFilename(filename)
+        // If the inherited natural stem is already taken (post-edit case where the prior
+        // `.original.done` occupies it), uniqueFileURL splits the pair onto a `(N)`
+        // suffix. This is the documented one-time cost on first re-export after each new
+        // edit.
         let finalURL = uniqueFileURL(in: destDir, baseName: base, ext: ext)
-        return (finalURL, inherited)
+        return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
       }
-      // editedOnly with no inherited stem — allocate one from the original-side resource
-      // considering both original and edited companion file existence.
-      let (originalStem, originalExt) = editedOnlyBaseStemAndExt(
-        descriptor: descriptor, resources: resources, editedResource: resource,
-        editedExt: editedExt)
-      let chosenStem = allocateEditedOnlyGroupStem(
-        baseStem: originalStem, originalExt: originalExt, editedExt: editedExt,
-        destDir: destDir)
-      let editedFilename = ExportFilenamePolicy.editedFilename(
-        originalGroupStem: chosenStem, editedResourceFilename: resource.originalFilename)
-      let (base, ext) = splitFilename(editedFilename)
-      let finalURL = uniqueFileURL(in: destDir, baseName: base, ext: ext)
-      return (finalURL, chosenStem)
+      // Fresh single-variant `.edited` (default mode adjusted asset, no prior records).
+      // Use the original-side resource's stem so the edited file lands at e.g.
+      // `IMG_0001.JPG` (matching what Photos.app does for a single-asset export).
+      let baseStem: String
+      if let original = ResourceSelection.selectOriginalResource(
+        from: resources, mediaType: descriptor.mediaType)
+      {
+        baseStem = splitFilename(original.originalFilename).base
+      } else {
+        baseStem = splitFilename(resource.originalFilename).base
+      }
+      let finalURL = uniqueFileURL(in: destDir, baseName: baseStem, ext: editedExt)
+      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
     }
   }
 
-  private func editedOnlyBaseStemAndExt(
-    descriptor: AssetDescriptor,
-    resources: [ResourceDescriptor],
-    editedResource: ResourceDescriptor,
-    editedExt: String
-  ) -> (stem: String, ext: String) {
-    if let original = ResourceSelection.selectOriginalResource(
-      from: resources, mediaType: descriptor.mediaType)
-    {
-      let (s, e) = splitFilename(original.originalFilename)
-      return (s, e)
-    }
-    // Fallback: derive from the edited resource filename when no original-side resource exists.
-    let (s, _) = splitFilename(editedResource.originalFilename)
-    return (s, editedExt)
-  }
-
-  private func allocateEditedOnlyGroupStem(
-    baseStem: String, originalExt: String, editedExt: String, destDir: URL
+  /// Allocates a stem where both the natural-stem edited target (`<stem>.<editedExt>`) and
+  /// the `_orig` companion target (`<stem>_orig.<originalExt>`) are simultaneously free.
+  /// Bumps the per-pair collision suffix until both slots are available so the pair never
+  /// splits across stems.
+  private func allocatePairedGroupStem(
+    baseStem: String, editedExt: String, originalExt: String, destDir: URL
   ) -> String {
     var stem = baseStem
     var index = 1
     while index < 10_000 {
-      let origCandidate = destDir.appendingPathComponent(stem)
-        .appendingPathExtension(originalExt)
-      let editedCandidate = destDir.appendingPathComponent(
-        stem + ExportFilenamePolicy.editedSuffix
-      ).appendingPathExtension(editedExt)
-      if !fileSystem.fileExists(atPath: origCandidate.path)
-        && !fileSystem.fileExists(atPath: editedCandidate.path)
+      let editedTarget = destDir.appendingPathComponent(stem)
+        .appendingPathExtension(editedExt)
+      let origTarget = destDir.appendingPathComponent(
+        stem + ExportFilenamePolicy.originalSuffix
+      ).appendingPathExtension(originalExt)
+      if !fileSystem.fileExists(atPath: editedTarget.path)
+        && !fileSystem.fileExists(atPath: origTarget.path)
       {
         return stem
       }
@@ -778,18 +760,38 @@ final class ExportManager: ObservableObject {
     return stem
   }
 
-  private func inheritedGroupStem(from record: ExportRecord?) -> String? {
+  /// Recovers the group stem from a prior `.done` variant record so a follow-up run that
+  /// adds the missing variant pairs against the same stem.
+  ///
+  /// `_orig` is both an app companion marker and a string a user can put in an actual
+  /// original filename (e.g. `vacation_orig.JPG`). When the recorded `.original` filename
+  /// exactly equals the asset's current original-side resource filename, treat it as the
+  /// user's natural filename — even when its stem ends with `_orig` — so the asset stays
+  /// pinned to the `vacation_orig` stem and a later edited write becomes
+  /// `vacation_orig (1).<ext>` rather than `vacation.<ext>`.
+  private func inheritedGroupStem(
+    from record: ExportRecord?,
+    descriptor: AssetDescriptor,
+    resources: [ResourceDescriptor]
+  ) -> String? {
     guard let record else { return nil }
-    if let original = record.variants[.original], original.status == .done,
-      let filename = original.filename
+    if let edited = record.variants[.edited], edited.status == .done,
+      let filename = edited.filename
     {
       return splitFilename(filename).base
     }
-    if let edited = record.variants[.edited], edited.status == .done,
-      let filename = edited.filename,
-      let parsed = ExportFilenamePolicy.parseEditedCandidate(filename: filename)
+    if let original = record.variants[.original], original.status == .done,
+      let filename = original.filename
     {
-      return parsed.groupStem
+      let originalResourceFilename = ResourceSelection.selectOriginalResource(
+        from: resources, mediaType: descriptor.mediaType)?.originalFilename
+      if let originalResourceFilename, filename == originalResourceFilename {
+        return splitFilename(filename).base
+      }
+      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: filename) {
+        return parsed.groupStem
+      }
+      return splitFilename(filename).base
     }
     return nil
   }

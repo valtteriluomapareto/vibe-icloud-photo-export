@@ -43,7 +43,6 @@ struct BackupScanner {
     let file: ScannedFile
     let asset: AssetDescriptor
     let variant: ExportVariant
-    let classification: ExportFilenameClassification
   }
 
   /// Progress updates emitted during scan/match.
@@ -287,6 +286,19 @@ struct BackupScanner {
         assetById[asset.id] = asset
       }
 
+      // Pre-compute the set of group stems that have a `_orig` companion sibling in this
+      // scope. When a natural-stem file's stem appears here, the file is an `.edited`
+      // companion paired with that `_orig` original — even when the file's filename also
+      // matches a known original-resource filename (the include-originals same-extension
+      // case where the original moved out of the way to the `_orig` sibling).
+      var stemsWithOrigSibling = Set<String>()
+      for file in files {
+        if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+          stemsWithOrigSibling.insert(parsed.groupStem)
+          stemsWithOrigSibling.insert(parsed.canonicalOriginalStem)
+        }
+      }
+
       for file in files {
         try Task.checkCancellation()
         matchedCount += 1
@@ -303,7 +315,8 @@ struct BackupScanner {
         let matchOutcome = matchSingleFile(
           file,
           fingerprints: combinedFingerprints,
-          assetById: assetById
+          assetById: assetById,
+          stemsWithOrigSibling: stemsWithOrigSibling
         )
         switch matchOutcome {
         case .matched(let matched):
@@ -351,90 +364,154 @@ struct BackupScanner {
   /// supplied fingerprints, then narrows the candidate set by date and, if still ambiguous, by
   /// file metadata (dimensions/duration).
   ///
-  /// Classification order per the plan:
-  /// 1. Exact match against a known original resource filename → `.original`.
-  /// 2. Collision-stripped match against a known original resource filename → `.original`.
-  /// 3. Otherwise parse via `ExportFilenamePolicy.parseEditedCandidate`.
-  /// 4. Classify as `.edited` only if the parsed `canonicalOriginalStem` matches a known
-  ///    original resource stem on a candidate whose `hasAdjustments == true`.
+  /// Classification order:
+  /// 1. `_orig` companion: filename parses as a `_orig` candidate AND a fingerprint with
+  ///    adjustments has matching original-resource stem and extension. Fall through to
+  ///    step 2 on miss so a real user filename like `vacation_orig.JPG` is not silently lost.
+  /// 2. Exact match against a known original resource filename → `.original`, **unless** a
+  ///    `_orig` sibling exists in the same scope for the same stem and the candidate is
+  ///    adjusted (the include-originals same-extension case where the natural-stem file is
+  ///    actually the edit and the original moved out to `_orig`) — in that case classify
+  ///    as `.edited`.
+  /// 3. Collision-stripped match against a known original resource filename → `.original`
+  ///    (with the same `_orig`-sibling override as step 2).
+  /// 4. Cross-extension edited: filename's stem (collision-stripped) matches an adjusted
+  ///    asset's original-resource stem AND the file extension matches one of that asset's
+  ///    edited-resource extensions → `.edited`. Same-extension same-stem cases without a
+  ///    `_orig` sibling land in step 2/3 as `.original` (the documented default-mode
+  ///    import limitation).
   private static func matchSingleFile(
     _ file: ScannedFile,
     fingerprints: [AssetFingerprint],
-    assetById: [String: AssetDescriptor]
+    assetById: [String: AssetDescriptor],
+    stemsWithOrigSibling: Set<String>
   ) -> SingleMatchOutcome {
-    // Step 1a: exact match to a known original-resource filename.
+    // Step 1: `_orig` companion. Filename ends with `_orig` (with optional ` (N)`).
+    if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+      let origCandidates = fingerprints.filter { fp in
+        guard fp.hasAdjustments else { return false }
+        let exts = Set(
+          fp.originalResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+        )
+        guard exts.isEmpty || exts.contains(file.fileExtension) else { return false }
+        return fp.originalResourceStems.contains(parsed.groupStem)
+          || fp.originalResourceStems.contains(parsed.canonicalOriginalStem)
+      }
+      if !origCandidates.isEmpty {
+        return narrow(
+          file: file, candidates: origCandidates,
+          assetById: assetById, variant: .original)
+      }
+      // Fall through: a user filename like `vacation_orig.JPG` whose asset has no adjusted
+      // sibling at the `vacation` stem must still classify via step 2.
+    }
+
+    let fileStem = (file.filename as NSString).deletingPathExtension
+    let (canonicalFileStem, _) = ExportFilenamePolicy.stripTrailingCollisionSuffix(from: fileStem)
+    let hasOrigSibling =
+      stemsWithOrigSibling.contains(fileStem)
+      || stemsWithOrigSibling.contains(canonicalFileStem)
+
+    // Step 2: exact match to a known original-resource filename.
     let originalExactCandidates = fingerprints.filter {
       $0.originalResourceFilenames.contains(file.filename)
     }
     if !originalExactCandidates.isEmpty {
+      if hasOrigSibling {
+        let editedFromPair = originalExactCandidates.filter { fp in
+          guard fp.hasAdjustments else { return false }
+          let editedExts = Set(
+            fp.editedResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+          )
+          if editedExts.isEmpty { return true }
+          return editedExts.contains(file.fileExtension)
+        }
+        if !editedFromPair.isEmpty {
+          return narrow(
+            file: file, candidates: editedFromPair,
+            assetById: assetById, variant: .edited)
+        }
+      }
       return narrow(
         file: file, candidates: originalExactCandidates,
-        assetById: assetById, variant: .original,
-        classification: .original(filename: file.filename, fileCollisionSuffix: nil))
+        assetById: assetById, variant: .original)
     }
 
-    // Step 1b: collision-stripped match to a known original-resource filename.
+    // Step 3: collision-stripped match to a known original-resource filename.
     if file.hasCollisionSuffix {
       let baseCandidates = fingerprints.filter {
         $0.originalResourceFilenames.contains(file.baseFilename)
       }
       if !baseCandidates.isEmpty {
-        let stem = (file.filename as NSString).deletingPathExtension
-        let (_, suffix) = ExportFilenamePolicy.stripTrailingCollisionSuffix(from: stem)
+        if hasOrigSibling {
+          let editedFromPair = baseCandidates.filter { fp in
+            guard fp.hasAdjustments else { return false }
+            let editedExts = Set(
+              fp.editedResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+            )
+            if editedExts.isEmpty { return true }
+            return editedExts.contains(file.fileExtension)
+          }
+          if !editedFromPair.isEmpty {
+            return narrow(
+              file: file, candidates: editedFromPair,
+              assetById: assetById, variant: .edited)
+          }
+        }
         return narrow(
           file: file, candidates: baseCandidates,
-          assetById: assetById, variant: .original,
-          classification: .original(filename: file.baseFilename, fileCollisionSuffix: suffix))
+          assetById: assetById, variant: .original)
       }
     }
 
-    // Step 2: edited candidate — parse the filename.
-    guard let parsed = ExportFilenamePolicy.parseEditedCandidate(filename: file.filename)
-    else {
-      return .unmatched
-    }
-    // Match the parsed group stem first because the asset's native filename may itself end
-    // with ` (N)` (e.g. an asset imported into Photos with that filename). Fall back to the
-    // collision-stripped canonical stem so exports where the app added the suffix itself still
-    // pair with the original asset on import.
+    // Step 4: cross-extension edited. The file's stem (collision-stripped) matches an
+    // adjusted asset's original-resource stem AND the file's extension matches one of that
+    // asset's edited-resource extensions.
+    let stem = (file.filename as NSString).deletingPathExtension
+    let (canonicalStem, _) = ExportFilenamePolicy.stripTrailingCollisionSuffix(from: stem)
     let editedCandidates = fingerprints.filter { fp in
       guard fp.hasAdjustments else { return false }
-      return fp.originalResourceStems.contains(parsed.groupStem)
-        || fp.originalResourceStems.contains(parsed.canonicalOriginalStem)
-    }
-    if editedCandidates.isEmpty { return .unmatched }
-
-    // Strong extension filter: when the fingerprint's edited resource filenames have recorded
-    // extensions, the file's extension must match one of them. If every candidate is excluded,
-    // the file is not an edited companion for any known asset — leave it unmatched rather than
-    // letting date/dimension heuristics record a wrong-extension file as the `.edited` variant.
-    let filteredByExt = editedCandidates.filter { fp in
-      let exts = Set(
+      guard
+        fp.originalResourceStems.contains(stem)
+          || fp.originalResourceStems.contains(canonicalStem)
+      else { return false }
+      let editedExts = Set(
         fp.editedResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
       )
-      if exts.isEmpty { return true }
-      return exts.contains(file.fileExtension)
+      let originalExts = Set(
+        fp.originalResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
+      )
+      if !editedExts.isEmpty {
+        guard editedExts.contains(file.fileExtension) else { return false }
+        // Defensive: a same-extension natural-stem file should already have matched in
+        // step 2 (exact filename) or step 3 (collision-stripped). The only way this
+        // branch fires is the rare alternate-photo edge where a fingerprint has multiple
+        // original-side resources with different stems sharing an extension. In that
+        // case we cannot tell edit from original by filename alone — leave unmatched.
+        if originalExts.contains(file.fileExtension) { return false }
+        return true
+      }
+      // No edited-extension info — only accept when the extension differs from any
+      // original-resource extension to avoid over-matching same-extension natural-stem files.
+      return !originalExts.contains(file.fileExtension)
     }
-    if filteredByExt.isEmpty { return .unmatched }
+    if editedCandidates.isEmpty { return .unmatched }
     return narrow(
-      file: file, candidates: filteredByExt, assetById: assetById,
-      variant: .edited, classification: .edited(parsed))
+      file: file, candidates: editedCandidates, assetById: assetById, variant: .edited)
   }
 
   /// Narrows a candidate fingerprint set to a single match by date and then by lazy file
-  /// metadata. The `classification` describes why the file was placed in this candidate set.
+  /// metadata.
   private static func narrow(
     file: ScannedFile,
     candidates: [AssetFingerprint],
     assetById: [String: AssetDescriptor],
-    variant: ExportVariant,
-    classification: ExportFilenameClassification
+    variant: ExportVariant
   ) -> SingleMatchOutcome {
     func wrap(_ fp: AssetFingerprint) -> SingleMatchOutcome {
       if let asset = assetById[fp.localIdentifier] {
         return .matched(
-          MatchedExportFile(
-            file: file, asset: asset, variant: variant, classification: classification))
+          MatchedExportFile(file: file, asset: asset, variant: variant))
       }
       return .unmatched
     }

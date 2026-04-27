@@ -10,7 +10,7 @@ struct ExportToolbarView: ToolbarContent {
     }
 
     ToolbarItem(placement: .automatic) {
-      versionPicker
+      includeOriginalsToggle
     }
 
     ToolbarItem(placement: .automatic) {
@@ -22,42 +22,45 @@ struct ExportToolbarView: ToolbarContent {
     }
   }
 
-  // MARK: - Version Picker
+  // MARK: - Include-originals toggle
 
-  private var versionPicker: some View {
-    // Three short, mutually exclusive states is the textbook segmented case per HIG. With
-    // every option visible, no tooltip is needed to explain hidden choices and the
-    // localisation footprint is just three short labels.
-    Picker(
-      "Versions to export",
-      selection: Binding(
-        get: { exportManager.versionSelection },
-        set: { exportManager.versionSelection = $0 }
-      )
-    ) {
-      Text("Originals").tag(ExportVersionSelection.originalOnly)
-      Text("Edited").tag(ExportVersionSelection.editedOnly)
-      Text("Both").tag(ExportVersionSelection.originalAndEdited)
+  private var includeOriginalsToggle: some View {
+    // Explicit HStack rather than `Label(...)` so the icon and text always
+    // render side-by-side (mirroring the Destination indicator's layout) and
+    // the toolbar's "Icon Only" customization mode can't strip the label —
+    // both pieces are part of the view content, not adaptive to display mode.
+    Toggle(isOn: $exportManager.includeOriginals) {
+      HStack(alignment: .center, spacing: 6) {
+        Image(
+          systemName: exportManager.includeOriginals
+            ? "doc.on.doc.fill" : "doc.on.doc"
+        )
+        Text("Include originals")
+          .font(.callout)
+      }
     }
-    .pickerStyle(.segmented)
-    .fixedSize()
+    .toggleStyle(.button)
+    .tint(.accentColor)
     .disabled(exportManager.hasActiveExportWork)
-    .help(versionPickerHelp)
-    .accessibilityLabel("Versions to export")
-    .accessibilityHint("Choose between originals, edited versions, or both.")
+    .help(includeOriginalsHelp)
+    .accessibilityLabel("Include originals for edited photos")
+    .accessibilityHint(
+      "Off by default. Turn on to keep original-bytes copies alongside edited photos.")
   }
 
-  private var versionPickerHelp: String {
+  private var includeOriginalsHelp: String {
     if exportManager.hasActiveExportWork {
       return "Available after the current export finishes."
     }
     switch exportManager.versionSelection {
-    case .originalOnly:
-      return "Export original files at their Photos filenames."
-    case .editedOnly:
-      return "Export the current edited version of assets that have edits in Photos."
-    case .originalAndEdited:
-      return "Export originals plus a separate _edited file when Photos has edits."
+    case .edited:
+      return
+        "Each photo is exported once, in the version Photos shows. "
+        + "Turn on to also keep an original-bytes copy alongside edited photos."
+    case .editedWithOriginals:
+      return
+        "Edited photos export both the user-visible version and a _orig companion "
+        + "with the original bytes."
     }
   }
 
@@ -66,7 +69,7 @@ struct ExportToolbarView: ToolbarContent {
   @ViewBuilder
   private var destinationIndicator: some View {
     if let url = exportDestinationManager.selectedFolderURL {
-      HStack(spacing: 6) {
+      HStack(alignment: .center, spacing: 8) {
         Image(
           systemName: exportDestinationManager.isAvailable
             && exportDestinationManager.isWritable
@@ -76,18 +79,27 @@ struct ExportToolbarView: ToolbarContent {
           exportDestinationManager.isAvailable && exportDestinationManager.isWritable
             ? .green : .yellow)
 
-        Text(url.lastPathComponent)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .frame(maxWidth: 120, alignment: .leading)
-          .help(url.path)
+        // Two-row label gives this custom toolbar item a visible title that
+        // mirrors what system buttons get for free in "Icon and Text" mode.
+        VStack(alignment: .leading, spacing: 1) {
+          Text("Destination")
+            .font(.caption2)
+            .foregroundColor(.secondary)
+          Text(url.lastPathComponent)
+            .font(.callout)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(url.path)
+        }
+        .frame(maxWidth: 140, alignment: .leading)
 
         Button("Change\u{2026}") {
           exportDestinationManager.selectFolder()
         }
-        .buttonStyle(.borderless)
-        .font(.caption)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
       }
+      .padding(.trailing, 12)
     } else {
       Button("Select Export Folder\u{2026}") {
         exportDestinationManager.selectFolder()
@@ -99,7 +111,7 @@ struct ExportToolbarView: ToolbarContent {
   // MARK: - Primary Actions
 
   private var primaryActions: some View {
-    HStack(spacing: 8) {
+    HStack(alignment: .center, spacing: 8) {
       Button("Export All") {
         exportManager.startExportAll()
       }
@@ -136,12 +148,11 @@ struct ExportToolbarView: ToolbarContent {
       return "Select a writable export folder first"
     }
     switch exportManager.versionSelection {
-    case .originalOnly:
-      return "Export originals for all unexported assets."
-    case .editedOnly:
-      return "Export the edited version of all assets that have Photos edits."
-    case .originalAndEdited:
-      return "Export originals plus edited versions where Photos has edits."
+    case .edited:
+      return "Export every photo, in the version Photos shows."
+    case .editedWithOriginals:
+      return
+        "Export every photo, plus a _orig companion for any photo edited in Photos."
     }
   }
 
@@ -155,7 +166,7 @@ struct ExportToolbarView: ToolbarContent {
 
     return Group {
       if hasProgress {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
           ProgressView(value: fraction)
             .progressViewStyle(.linear)
             .frame(width: 120)
@@ -177,7 +188,7 @@ struct ExportToolbarView: ToolbarContent {
         // The user just clicked Export Month/Year/All against an already-complete library.
         // The progress bar slot is empty — show a transient confirmation in its place so the
         // click doesn't look dead.
-        HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
           Image(systemName: "checkmark.circle.fill")
             .foregroundColor(.green)
             .font(.caption)
@@ -192,7 +203,7 @@ struct ExportToolbarView: ToolbarContent {
       } else {
         // Reserve the progress slot's footprint so the toolbar layout doesn't jump when work
         // starts or stops.
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
           ProgressView(value: 0)
             .progressViewStyle(.linear)
             .frame(width: 120)
@@ -210,12 +221,12 @@ struct ExportToolbarView: ToolbarContent {
 
   private var progressCountTooltip: String {
     switch exportManager.versionSelection {
-    case .originalAndEdited:
+    case .editedWithOriginals:
       return
-        "Counts assets, not files. Each adjusted asset writes both an original and an "
-        + "_edited file but counts once. The filename below is whichever file is currently "
-        + "being written."
-    case .originalOnly, .editedOnly:
+        "Counts assets, not files. Each adjusted asset writes both an edited file and a "
+        + "_orig companion but counts once. The filename below is whichever file is "
+        + "currently being written."
+    case .edited:
       return
         "Counts assets. The filename below is the file currently being written for the "
         + "asset in progress."

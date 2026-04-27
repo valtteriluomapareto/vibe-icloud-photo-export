@@ -298,16 +298,18 @@ struct YearRow: View {
     let exported = exportRecordStore.sidebarYearExportedCount(
       year: year, totalCountsByMonth: totalCountsByMonth,
       adjustedCountsByMonth: adjustedCountsByMonth, selection: selection)
-    let total = yearTotal(for: selection)
+    let total = yearTotal()
     return HStack(spacing: 8) {
       Text(verbatim: String(year))
       Spacer()
       if let total, total > 0 && exported > 0 {
         if exported >= total {
-          completionBadge(selection: selection)
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundColor(.green)
+            .font(.caption)
         } else {
           let pct = Int(Double(exported) / Double(total) * 100)
-          Text(selection == .editedOnly ? "\(pct)% edited" : "\(pct)%")
+          Text("\(pct)%")
             .foregroundColor(.orange)
             .font(.caption)
         }
@@ -316,54 +318,29 @@ struct YearRow: View {
     .help(yearTooltip(selection: selection, exported: exported, total: total))
   }
 
-  /// Returns nil under `editedOnly` until every month with assets has reported its
-  /// adjusted count, so the badge can't briefly flash 100% while counts are still loading.
-  private func yearTotal(for selection: ExportVersionSelection) -> Int? {
-    switch selection {
-    case .originalOnly, .originalAndEdited:
-      return totalAssets
-    case .editedOnly:
-      var sum = 0
-      for month in 1...12 {
-        let monthTotal = totalCountsByMonth[month] ?? 0
-        if monthTotal == 0 { continue }
-        // Month has assets but its adjusted count hasn't loaded yet → suppress the badge.
-        guard let adjusted = adjustedCountsByMonth[month] ?? nil else { return nil }
-        sum += adjusted
-      }
-      return sum
+  /// Returns nil until every month with assets has reported its adjusted count, so the
+  /// badge can't briefly flash 100% while counts are still loading. Both modes need the
+  /// adjusted count for the records-only sidebar formula's cap.
+  private func yearTotal() -> Int? {
+    for month in 1...12 {
+      let monthTotal = totalCountsByMonth[month] ?? 0
+      if monthTotal == 0 { continue }
+      if (adjustedCountsByMonth[month] ?? nil) == nil { return nil }
     }
-  }
-
-  @ViewBuilder
-  private func completionBadge(selection: ExportVersionSelection) -> some View {
-    // The same green check is used across all three selections; the surrounding partial /
-    // not-exported states still carry an explicit "edited" qualifier under `editedOnly`,
-    // and the active toolbar picker tells the user which mode this row's completion
-    // applies to. `seal.fill` is reserved Apple vocabulary for verification (App Store
-    // verified developer etc.) and should not be used for generic task completion.
-    Image(systemName: "checkmark.circle.fill")
-      .foregroundColor(.green)
-      .font(.caption)
+    return totalAssets
   }
 
   private func yearTooltip(
     selection: ExportVersionSelection, exported: Int, total: Int?
   ) -> String {
+    guard let total else { return "Counting photos in \(year)…" }
     switch selection {
-    case .originalOnly:
-      return "\(exported) of \(total ?? 0) originals exported in \(year)."
-    case .editedOnly:
-      guard let total else {
-        return "Counting edited assets in \(year)…"
-      }
+    case .edited:
+      return "\(exported) of \(total) photos exported in \(year)."
+    case .editedWithOriginals:
       return
-        "\(exported) of \(total) edited versions exported in \(year). "
-        + "Unedited assets are not part of this selection."
-    case .originalAndEdited:
-      return
-        "\(exported) of \(total ?? 0) assets fully exported in \(year) "
-        + "(originals plus edited versions where Photos has edits)."
+        "\(exported) of \(total) photos fully exported in \(year) "
+        + "(including original copies for edited photos)."
     }
   }
 }
@@ -394,35 +371,23 @@ struct MonthRow: View {
           .font(.caption2)
           .foregroundColor(.orange)
       } else if total > 0, let summary {
-        let isEditedOnly = selection == .editedOnly
         switch summary.status {
         case .complete:
-          // Same green check across modes — the partial / not-exported counts on the same
-          // row already carry the "edited" qualifier when the selection is editedOnly, and
-          // the toolbar picker tells the user which mode this row's completion applies to.
           Image(systemName: "checkmark.circle.fill")
             .foregroundColor(.green)
             .font(.caption)
         case .partial:
-          Text(
-            isEditedOnly
-              ? "\(summary.exportedCount)/\(summary.totalCount) edited"
-              : "\(summary.exportedCount)/\(summary.totalCount)"
-          )
-          .foregroundColor(.orange)
-          .font(.caption)
+          Text("\(summary.exportedCount)/\(summary.totalCount)")
+            .foregroundColor(.orange)
+            .font(.caption)
         case .notExported:
-          Text(
-            isEditedOnly
-              ? "\(summary.totalCount) edited"
-              : "\(summary.totalCount)"
-          )
-          .foregroundColor(.secondary)
-          .font(.caption)
+          Text("\(summary.totalCount)")
+            .foregroundColor(.secondary)
+            .font(.caption)
         }
       } else if total > 0 {
-        // Adjusted count is still loading under a selection that needs it; show a neutral
-        // dash so the row doesn't flicker between 0/0 and the real value.
+        // Adjusted count is still loading; show a neutral dash so the row doesn't flicker
+        // between 0/0 and the real value.
         Text("…").foregroundColor(.secondary).font(.caption)
       }
     }
@@ -434,21 +399,15 @@ struct MonthRow: View {
     selection: ExportVersionSelection, summary: MonthStatusSummary?
   ) -> String {
     let monthName = MonthFormatting.name(for: month)
+    guard let summary else { return "Counting photos in \(monthName) \(year)…" }
     switch selection {
-    case .originalOnly:
-      guard let summary else { return "" }
+    case .edited:
       return
-        "\(monthName) \(year): \(summary.exportedCount) of \(summary.totalCount) originals exported."
-    case .editedOnly:
-      guard let summary else { return "Counting edited assets in \(monthName) \(year)…" }
+        "\(monthName) \(year): \(summary.exportedCount) of \(summary.totalCount) photos exported."
+    case .editedWithOriginals:
       return
         "\(monthName) \(year): \(summary.exportedCount) of \(summary.totalCount) "
-        + "edited versions exported. Unedited assets are not part of this selection."
-    case .originalAndEdited:
-      guard let summary else { return "" }
-      return
-        "\(monthName) \(year): \(summary.exportedCount) of \(summary.totalCount) "
-        + "assets fully exported (originals plus edited versions where Photos has edits)."
+        + "photos fully exported (including original copies for edited photos)."
     }
   }
 }

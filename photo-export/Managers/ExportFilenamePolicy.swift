@@ -1,74 +1,60 @@
 import Foundation
 
-/// Parsed shape of a candidate `_edited` filename produced by this app.
-struct ParsedEditedFilename: Equatable {
-  /// Stem used to tie variants for one exported asset together. Includes any
-  /// app-added collision suffix that was part of the group (e.g. "IMG_0001 (1)").
+/// Parsed shape of a candidate `_orig` filename produced by this app.
+struct ParsedOriginalCandidate: Equatable {
+  /// Stem before the `_orig` marker. Includes any app-added collision suffix that was part
+  /// of the group (e.g. "IMG_0001 (1)").
   var groupStem: String
-  /// Original resource stem without any app-added collision suffix
-  /// (e.g. "IMG_0001").
+  /// `groupStem` with any trailing collision suffix stripped, used for matching against
+  /// original resource stems that the app itself collision-suffixed.
   var canonicalOriginalStem: String
-  /// Trailing per-file collision suffix that was added because the exact edited
-  /// filename already existed (e.g. `(1)` in "IMG_0001_edited (1).JPG"). Nil
-  /// when the edited filename itself had no added suffix.
+  /// Trailing per-file collision suffix on the `_orig` filename itself (e.g. `(1)` in
+  /// "IMG_0001_orig (1).HEIC"). Nil when the `_orig` filename had no added suffix.
   var fileCollisionSuffix: Int?
   /// Extension as it appeared on disk. Preserves casing.
   var fileExtension: String
 }
 
-/// Classification of a filename once scanner-side original checks have failed.
-enum ExportFilenameClassification: Equatable {
-  case original(filename: String, fileCollisionSuffix: Int?)
-  case edited(ParsedEditedFilename)
-}
-
-/// Filename rules shared by the export pipeline and the backup scanner so both
-/// sides agree about what an `_edited` companion looks like.
+/// Filename rules shared by the export pipeline and the backup scanner so both sides agree
+/// about what a `_orig` companion looks like.
 enum ExportFilenamePolicy {
-  static let editedSuffix = "_edited"
+  static let originalSuffix = "_orig"
 
-  /// Original export uses the original resource filename unchanged.
-  static func originalFilename(for originalResourceFilename: String) -> String {
-    originalResourceFilename
+  /// Original-side filename for an asset. Returns `<stem>_orig.<ext>` when the variant is
+  /// being paired with an edited variant for the same asset; otherwise returns the bare
+  /// stem with the original resource's extension.
+  static func originalFilename(stem: String, ext: String, withSuffix: Bool) -> String {
+    let resolvedStem = withSuffix ? stem + originalSuffix : stem
+    return ext.isEmpty ? resolvedStem : "\(resolvedStem).\(ext)"
   }
 
-  /// Edited export builds its basename from the selected group stem (which may
-  /// include an app-added collision suffix like " (1)") and takes its extension
-  /// from the edited resource filename so it reflects the bytes being written.
-  static func editedFilename(
-    originalGroupStem: String,
-    editedResourceFilename: String
-  ) -> String {
+  /// Edited-side filename. Always written at `<stem>.<editedExt>` — no suffix.
+  static func editedFilename(stem: String, editedResourceFilename: String) -> String {
     let editedExt = (editedResourceFilename as NSString).pathExtension
-    let stem = originalGroupStem + editedSuffix
     return editedExt.isEmpty ? stem : "\(stem).\(editedExt)"
   }
 
-  /// Pure filename parsing: detects the "_edited" marker, strips any final
-  /// `(N)` collision suffix, and derives the group and canonical original
-  /// stems. Returns nil when the filename is not an edited-form candidate.
+  /// Pure filename parsing: detects the "_orig" marker, strips any final `(N)` collision
+  /// suffix, and derives the group and canonical original stems. Returns nil when the
+  /// filename is not a `_orig` candidate.
   ///
-  /// Does not consult any asset metadata. The backup scanner combines this
-  /// with fingerprint data to confirm an edited classification.
-  static func parseEditedCandidate(filename: String) -> ParsedEditedFilename? {
+  /// Does not consult any asset metadata. The backup scanner combines this with fingerprint
+  /// data to confirm a `.original` companion classification.
+  static func parseOriginalCandidate(filename: String) -> ParsedOriginalCandidate? {
     let ns = filename as NSString
     let ext = ns.pathExtension
     let stem = ns.deletingPathExtension
 
-    // Strip a trailing file-collision suffix like " (1)" if present.
     let (afterFileCollision, fileCollisionSuffix) = stripTrailingCollisionSuffix(from: stem)
 
-    // Require the "_edited" marker on the resulting stem.
-    guard afterFileCollision.hasSuffix(editedSuffix) else { return nil }
+    guard afterFileCollision.hasSuffix(originalSuffix) else { return nil }
 
-    let groupStem = String(afterFileCollision.dropLast(editedSuffix.count))
+    let groupStem = String(afterFileCollision.dropLast(originalSuffix.count))
     guard !groupStem.isEmpty else { return nil }
 
-    // Strip any app-added group collision suffix to recover the canonical
-    // original stem (e.g. "IMG_0001 (1)" -> "IMG_0001").
     let (canonicalOriginalStem, _) = stripTrailingCollisionSuffix(from: groupStem)
 
-    return ParsedEditedFilename(
+    return ParsedOriginalCandidate(
       groupStem: groupStem,
       canonicalOriginalStem: canonicalOriginalStem,
       fileCollisionSuffix: fileCollisionSuffix,
@@ -76,8 +62,22 @@ enum ExportFilenamePolicy {
     )
   }
 
-  /// Strips a trailing ` (N)` suffix from a stem. Returns the stripped stem
-  /// and the parsed N, or nil when no suffix was present.
+  /// True when `filename`'s stem (after stripping a trailing collision suffix like ` (1)`)
+  /// ends with `_orig`. Used by the sidebar's records-only count heuristic and by the
+  /// scanner's `_orig` parser. **Not** used by the asset-aware
+  /// `isExported(asset:selection:)`, which consults `asset.hasAdjustments` directly and so
+  /// doesn't need filename inspection.
+  static func isOrigCompanion(filename: String) -> Bool {
+    let ns = filename as NSString
+    let stem = ns.deletingPathExtension
+    let (afterFileCollision, _) = stripTrailingCollisionSuffix(from: stem)
+    guard afterFileCollision.hasSuffix(originalSuffix) else { return false }
+    let groupStem = String(afterFileCollision.dropLast(originalSuffix.count))
+    return !groupStem.isEmpty
+  }
+
+  /// Strips a trailing ` (N)` suffix from a stem. Returns the stripped stem and the parsed
+  /// N, or nil when no suffix was present.
   static func stripTrailingCollisionSuffix(from stem: String) -> (stripped: String, suffix: Int?) {
     guard let regex = try? NSRegularExpression(pattern: #" \((\d+)\)$"#) else {
       return (stem, nil)

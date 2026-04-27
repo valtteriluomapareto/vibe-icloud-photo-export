@@ -26,7 +26,10 @@ This document explains how the app persists export status for Photos assets.
   - `variants` (Object) — keyed by variant name (`original`, `edited`), each value an
     `ExportVariantRecord`
 - `ExportVariantRecord` (JSON):
-  - `filename` (String?) — final exported filename for that variant
+  - `filename` (String?) — final exported filename for that variant. The `.original`
+    variant's filename may be the bare stem (e.g. `IMG_0001.JPG`) or the `_orig` companion
+    form (e.g. `IMG_0001_orig.HEIC`) depending on whether it was paired with an `.edited`
+    write.
   - `status` (String) — `pending` | `inProgress` | `done` | `failed`
   - `exportDate` (ISO8601 date)
   - `lastError` (String?)
@@ -76,15 +79,23 @@ compaction.
 
 - `isExported(assetId:)` returns whether the `.original` variant is `done` — a convenience shim
   for legacy call sites.
-- `isExported(asset:selection:)` evaluates completion under the active version selection and the
-  asset's current `hasAdjustments`.
+- `isExported(asset:selection:)` evaluates completion strictly against
+  `requiredVariants(for:selection:)` — i.e. the asset's current `hasAdjustments`. No
+  filename inspection: a `.original.done` row at any filename satisfies an unedited
+  asset's requirement, and an adjusted asset is only satisfied when `.edited.done` (and
+  `.original.done` under `editedWithOriginals`).
 - `exportInfo(assetId:)` returns the full record; callers inspect
   `record.variants[.original]` and `record.variants[.edited]` directly.
-- `monthSummary(assets:selection:)` computes an asset-based summary for a selected month by
-  checking each asset's required variants.
+- `monthSummary(assets:selection:)` computes an asset-based summary for a selected month
+  by calling the strict, asset-aware `isExported` on each descriptor.
 - `sidebarSummary(year:month:totalCount:adjustedCount:selection:)` computes an approximate
-  summary for sidebar rows that do not have loaded `AssetDescriptor`s, using counts of records
-  whose `.original` or `.edited` variant is `done`.
+  summary for sidebar rows that do not have loaded `AssetDescriptor`s. The formula is
+  `editedDone + min(origOnlyAtStem, uneditedCount)` for the default mode and
+  `bothDone + min(origOnlyAtStem, uneditedCount)` for include-originals, where
+  `origOnlyAtStem` filters records by `!isOrigCompanion(filename:)`. The
+  `adjustedCount`-derived cap prevents natural-stem `.original.done` records belonging to
+  currently-adjusted assets from over-contributing past the number of assets that could
+  legitimately be original-only.
 
 ## Error Handling
 

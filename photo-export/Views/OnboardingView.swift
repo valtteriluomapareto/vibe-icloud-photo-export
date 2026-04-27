@@ -7,7 +7,7 @@ struct OnboardingView: View {
   let onSkip: () -> Void
 
   @State private var exportAll = true
-  @State private var versionSelection: ExportVersionSelection = .originalOnly
+  @State private var includeOriginals: Bool = false
 
   var body: some View {
     VStack(spacing: 24) {
@@ -81,22 +81,11 @@ struct OnboardingView: View {
             .labelsHidden()
 
             VStack(alignment: .leading, spacing: 4) {
-              Text("Versions to export")
-                .font(.subheadline)
-              Picker("Versions to export", selection: $versionSelection) {
-                Text("Originals").tag(ExportVersionSelection.originalOnly)
-                Text("Edited").tag(ExportVersionSelection.editedOnly)
-                Text("Both").tag(ExportVersionSelection.originalAndEdited)
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-              .fixedSize()
-              // Onboarding is the one moment this is guaranteed to be read; keep a single
-              // sentence that explains why "Edited" / "Both" produce extra files. The full
-              // explanation lives in the website docs and the toolbar tooltips.
+              Toggle("Include originals for edited photos", isOn: $includeOriginals)
+                .toggleStyle(.checkbox)
               Text(
-                "Edited versions are saved with an _edited suffix. "
-                  + "You can change this later in the toolbar."
+                "Off: one file per photo. On: also keep original copies for photos "
+                  + "you've edited."
               )
               .font(.caption)
               .foregroundColor(.secondary)
@@ -117,7 +106,7 @@ struct OnboardingView: View {
         Button(exportAll ? "Start Export" : "Continue") {
           // Apply the chosen versions first so the export kicked off below uses the
           // selection the user made here, not the persisted default.
-          exportManager.versionSelection = versionSelection
+          exportManager.versionSelection = includeOriginals ? .editedWithOriginals : .edited
           if exportAll && exportDestinationManager.canExportNow {
             exportManager.startExportAll()
           }

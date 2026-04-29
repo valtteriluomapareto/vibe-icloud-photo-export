@@ -86,7 +86,8 @@ xcodebuild \
 - Project website: [valtteriluomapareto.github.io/photo-export](https://valtteriluomapareto.github.io/photo-export/)
 - User docs: [`website/src/content/docs/`](website/src/content/docs/)
 - Contributor guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- Maintainer notes and plans: [`docs/README.md`](docs/README.md)
+- AI agent guide: [`AGENTS.md`](AGENTS.md)
+- Maintainer notes and plans: [`docs/README.md`](docs/README.md) (canonical map of every doc location)
 - Persistence store reference: [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
 
 ## Repository Layout
@@ -100,12 +101,7 @@ xcodebuild \
 
 ## Contributing
 
-Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup, testing expectations, and documentation ownership.
-
-If you are changing user-visible behavior, update the relevant docs in both places:
-
-- the root README for repo-level guidance
-- `website/src/content/docs/` for user-facing documentation
+Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup and testing expectations. For docs ownership and the "what to update when behavior changes" table, see [`docs/README.md`](docs/README.md).
 
 ## License
 

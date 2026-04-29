@@ -13,7 +13,7 @@ window-only captures) and at near-but-not-spec dimensions. This script:
   - writes a PNG with no transparency.
 
 Usage:
-  scripts/prepare-app-store-screenshot.py app-store-screenshot.png
+  scripts/prepare-app-store-screenshot.py design/app-store-screenshot.png
   scripts/prepare-app-store-screenshot.py raw.png -o out.png --background FFFFFF
 
 Requires Pillow:  python3 -m pip install Pillow

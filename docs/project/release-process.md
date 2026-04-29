@@ -8,7 +8,7 @@ Photo Export ships through two channels from the same tag: **GitHub Releases** (
 
 - Push access to the repository
 - Apple Developer ID certificate and notarization secrets configured in the `direct-release` GitHub Environment
-- For App Store: Apple Distribution certificate and App Store Connect API key (in `app-store-release` GitHub Environment, once automated)
+- For App Store: Apple Distribution certificate and App Store Connect API key configured in the `app-store-release` GitHub Environment
 
 ## Steps
 
@@ -51,7 +51,9 @@ Pushing the `v*` tag triggers the **release-direct** workflow which:
 
 ### 4. Submit to App Store
 
-**Before App Store CI is automated**, archive manually:
+The same `v*` tag also triggers `release-app-store.yml`, which archives, signs, and uploads to App Store Connect automatically. Once the build appears in App Store Connect, submit for App Review manually.
+
+If you ever need to archive locally (CI down, secret rotation, etc.):
 
 ```bash
 xcodebuild archive \
@@ -67,8 +69,6 @@ xcodebuild archive \
 ```
 
 Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter.
-
-**After App Store CI is automated**, the tag also triggers `release-app-store.yml` which handles archiving, signing, and uploading automatically. Submit for App Review manually in App Store Connect.
 
 ### 5. Verify
 

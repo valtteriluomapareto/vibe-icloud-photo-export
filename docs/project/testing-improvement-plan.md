@@ -1,6 +1,8 @@
 # Testing Improvement Plan
 
-Current state: **92 tests in 11 suites.** Protocol seams are in place (Step 2 done). Export pipeline and record store recovery now have coverage. Backup scanner matching is covered. Remaining gaps are MonthViewModel, ExportDestinationManager integration, and UI tests.
+Current state: **~167 tests in 18 suites.** Protocol seams are in place (Step 2 done). Export pipeline, record store recovery, backup-scanner matching, edited-mode export, and ExportDestinationManager validation/persistence all have coverage. Remaining gaps are MonthViewModel async loading, full ExportDestinationManager integration (volume unmount, security-scope pairing), and UI tests.
+
+> Re-count by running `xcodebuild ... test` and reading the test summary; this header is hand-maintained and may lag the suite by a few tests at any point in time.
 
 ---
 
@@ -162,7 +164,7 @@ Step 3  Export pipeline tests          ✅ DONE
 Step 4  BackupScanner matching tests   ✅ DONE
 Step 5  ExportRecordStore recovery     ✅ DONE
 Step 6  MonthViewModel tests           ← next priority
-Step 7  ExportDestinationManager tests ← next priority
+Step 7  ExportDestinationManager tests partial — bookmark + validation done, integration cases (unmount, scope pairing) outstanding
 Step 8  UI tests + CI integration      (valuable but highest effort)
 Step 9  Test infrastructure            (do incrementally alongside Steps 6-8)
 ```

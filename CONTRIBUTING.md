@@ -72,13 +72,9 @@ Reference material:
 
 ## Documentation Ownership
 
-Keep docs aligned with the kind of change you make:
+Where each kind of doc lives, and which page to update for which kind of change, is documented in [`docs/README.md`](docs/README.md). Read that before opening a PR that changes user-visible behavior — there is a "what to update when behavior changes" table.
 
-- Update [`README.md`](README.md) for repo overview, setup, and top-level usage guidance.
-- Update files in [`website/src/content/docs/`](website/src/content/docs/) for user-facing documentation.
-- Update files in [`docs/project/`](docs/project/) when a roadmap item, plan, or maintainer note materially changes.
-
-If a change affects setup, behavior, limitations, or project structure, update the docs in the same pull request.
+If a change affects setup, behavior, limitations, or project structure, update the relevant docs in the same pull request.
 
 ## Pull Requests
 

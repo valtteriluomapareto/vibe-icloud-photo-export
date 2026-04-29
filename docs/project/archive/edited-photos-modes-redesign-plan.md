@@ -13,9 +13,14 @@ recovery messaging, etc.) carry forward and are still in force.
 
 ## Status
 
-Plan only. No code yet. Authored after manual testing of the as-built
-feature surfaced two distinct UX problems that cannot be polished away
-within the original three-mode design.
+Shipped in 1.1.0 (PR #14, commit aafbff5). Kept as a decision record for
+the redesign rationale below — the implementation lives in
+`ExportManager`, `ExportFilenamePolicy`, `ResourceSelection`, and the
+`ExportToolbarView` "Include originals" toggle.
+
+Originally authored after manual testing of the as-built feature
+surfaced two distinct UX problems that could not be polished away within
+the original three-mode design.
 
 ## Why we are redoing this
 

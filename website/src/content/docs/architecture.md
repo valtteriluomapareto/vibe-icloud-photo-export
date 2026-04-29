@@ -90,11 +90,10 @@ The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 
 The export record store keeps per-destination state under Application Support. A detailed format description lives in [`persistence-store.md`](https://github.com/valtteriluomapareto/photo-export/blob/main/docs/reference/persistence-store.md).
 
-## Project Conventions
+## Design choices worth knowing
 
-- **Logging:** `os.Logger` with subsystem `com.valtteriluoma.photo-export`. No `print` in production code.
-- **Concurrency:** UI-facing managers are `@MainActor`. Export is currently serial.
-- **Asset identity:** Track by `PHAsset.localIdentifier`. Never overwrite existing files.
-- **Async views:** Use `.task(id:)` for cancellation-aware async loading.
-- **Linting:** SwiftLint with `--strict`, 140-char line length.
-- **Formatting:** swift-format with 4-space indentation, 120-char line length.
+- **Logging:** `os.Logger` with subsystem `com.valtteriluoma.photo-export` — visible in Console.app for diagnostics.
+- **Concurrency:** UI-facing managers run on the main actor. Export is sequential rather than parallel, by design.
+- **Asset identity:** Tracked by `PHAsset.localIdentifier`. Existing files in the destination are never overwritten — re-running an export resumes where it left off.
+
+Contributor-facing conventions (linting rules, formatting, the SwiftUI + Managers code style) live in the [contributor guide](https://github.com/valtteriluomapareto/photo-export/blob/main/CONTRIBUTING.md) and [`AGENTS.md`](https://github.com/valtteriluomapareto/photo-export/blob/main/AGENTS.md).

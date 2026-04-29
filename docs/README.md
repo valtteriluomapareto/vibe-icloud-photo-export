@@ -16,6 +16,7 @@ Active notes (current process and open work):
 - [`docs/project/release-process.md`](project/release-process.md): how to cut a release (version bump, tag, publish)
 - [`docs/project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md): backup import design notes (Phase 1 implemented)
 - [`docs/project/testing-improvement-plan.md`](project/testing-improvement-plan.md): test coverage gaps and improvement plan
+- [`docs/project/plans/auto-sync-background-sync-plan.md`](project/plans/auto-sync-background-sync-plan.md): proposed auto-sync and background-sync implementation plan
 
 Archived planning material (completed or superseded — kept as decision records):
 

@@ -1,0 +1,67 @@
+# AGENTS.md
+
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+
+## Project Overview
+
+macOS SwiftUI app that exports the Apple Photos library to local/external storage in an organized folder hierarchy. Uses system frameworks only (no CocoaPods/SwiftPM dependencies). Targets macOS 15.x with Xcode 16.x.
+
+## Build & Test Commands
+
+```bash
+# Build (Debug)
+xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+
+# Run all unit tests
+xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
+
+# Run a single test class
+xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination 'platform=macOS' -only-testing:photo-exportTests/ExportRecordStoreTests CODE_SIGNING_ALLOWED=NO test
+
+# Lint
+swiftlint --strict
+
+# Format check / auto-fix
+swift-format lint --recursive photo-export
+swift-format format --recursive --in-place photo-export
+```
+
+UI tests exist in `photo-exportUITests/` but are skipped by default in the shared scheme.
+
+## Architecture
+
+**Pattern:** SwiftUI + Managers. Views are thin; logic lives in Managers and ViewModels.
+
+**App entry point** (`photo_exportApp.swift`): Creates four `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
+
+- **PhotoLibraryManager** — Photos framework authorization and asset fetching (thumbnails, full-size images). Uses `PHCachingImageManager`.
+- **ExportDestinationManager** — Manages the chosen export destination folder (security-scoped bookmarks).
+- **ExportRecordStore** — Tracks which assets have been exported per-destination to avoid duplicates and support resume. Reconfigures when destination changes.
+- **ExportManager** — Orchestrates the export queue (enqueue/pause/cancel/resume). Depends on the other three managers.
+
+**Views:** `ContentView` is a `NavigationSplitView` with year/month sidebar. `MonthContentView` shows thumbnails for a month. `ExportToolbarView` shows export controls. `OnboardingView` handles first-run flow. `AssetDetailView` shows full-size preview.
+
+**ViewModels:** `MonthViewModel` manages asset loading for a selected month.
+
+## Documentation
+
+- **User-facing docs** live in `website/src/content/docs/` (Astro + Starlight site). Run with `cd website && npm install && npm run dev`.
+- **Maintainer notes and plans** live in `docs/project/`. The index is `docs/README.md`.
+- **Reference material** (best practices, persistence format) lives in `docs/reference/`.
+- **Roadmap** is maintained only on the website (`website/src/content/docs/roadmap.md`) — do not duplicate elsewhere.
+- When changing user-visible behavior, update both the root `README.md` and the relevant page under `website/src/content/docs/`.
+
+## Workflow
+
+- After completing a new feature or significant change, run `/codex-review` to get an AI code review before committing.
+- **Releasing:** Always run `scripts/bump-version.sh <version>` before pushing a tag. The release pipeline validates that the tag matches `MARKETING_VERSION` and will fail if they diverge.
+
+## Key Conventions
+
+- Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.
+- All managers are `@MainActor`.
+- Track exports by `PHAsset.localIdentifier`; never overwrite existing files.
+- Use `.task(id:)` for cancellation-aware async loading in views.
+- SwiftLint config (`.swiftlint.yml`): line length 140, several rules disabled (see file). CI runs `--strict`.
+- swift-format config (`.swift-format.json`): 4-space indentation, 120-char line length.
+- Website uses Prettier (with `prettier-plugin-astro`) and oxlint. Run `npm run format:check` and `npm run lint` from `website/`. Both are enforced in CI.

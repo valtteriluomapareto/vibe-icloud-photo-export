@@ -98,3 +98,28 @@ enum CollectionPlacementScope: Hashable, Sendable {
   case album(collectionLocalId: String)
   case any  // favorites + albums
 }
+
+/// In-memory shape callers use to read and upsert collection records. Joins the on-disk
+/// `(placementId, assetId)` key with the variants dictionary and the placement object so
+/// callers don't have to look up the placement separately.
+///
+/// On disk, placement metadata lives in the top-level `placements` map and each record body
+/// is just its variants dictionary; this struct is the in-memory "joined view" that
+/// `CollectionExportRecordStore.exportInfo(assetId:placement:)` returns.
+struct ScopedExportRecord: Sendable, Equatable {
+  let placement: ExportPlacement
+  let assetId: String
+  var variants: [ExportVariant: ExportVariantRecord]
+}
+
+/// Summary of one placement's records. Mirrors `MonthStatusSummary` (which exists for the
+/// timeline store) but keys by placement id rather than year/month.
+struct PlacementSummary: Sendable, Equatable {
+  let placementId: String
+  /// Distinct assets under this placement that have at least one variant in `.done`.
+  let exportedCount: Int
+  /// Distinct assets under this placement that have any record at all.
+  let totalCount: Int
+  /// `notExported` / `partial` / `complete`, computed from `(exportedCount, totalCount)`.
+  let status: MonthExportStatus
+}

@@ -15,11 +15,22 @@ final class ExportManager: ObservableObject {
 
   struct ExportJob: Equatable {
     let assetLocalIdentifier: String
-    let year: Int
-    let month: Int
+    /// The placement this job is exporting under. Drives:
+    /// - Which on-disk folder the asset lands in (`placement.relativePath`).
+    /// - Which record store records the result (timeline → `exportRecordStore`,
+    ///   `.favorites`/`.album` → `collectionExportRecordStore`); see *Routing record
+    ///   mutations to the right store* in the plan.
+    let placement: ExportPlacement
     /// Selection snapshot at enqueue time. Deterministic within a single job even if the user
     /// toggles selection mid-run.
     let selection: ExportVersionSelection
+
+    /// Year derived from the placement. Defined for timeline jobs; returns `0` for
+    /// `.favorites`/`.album` placements (which are unreachable in Phase 1 production code
+    /// — collection jobs land in Phase 3 along with the `urlForRelativeDirectory` wiring
+    /// that obsoletes year/month for collection sites).
+    var year: Int { placement.timelineYearMonth?.year ?? 0 }
+    var month: Int { placement.timelineYearMonth?.month ?? 0 }
   }
 
   // MARK: - Published State (Export)
@@ -72,8 +83,23 @@ final class ExportManager: ObservableObject {
   let photoLibraryService: any PhotoLibraryService
   let exportDestination: any ExportDestination
   let exportRecordStore: ExportRecordStore
+  let collectionExportRecordStore: CollectionExportRecordStore
   let assetResourceWriter: any AssetResourceWriter
   let fileSystem: any FileSystemService
+
+  /// True when neither store is `.failed`. Phase 1's start* methods short-circuit when this
+  /// is false to prevent the silent-false-success case where a `.failed` store would have
+  /// all its `markVariant*` writes silently no-op while files land on disk anyway.
+  ///
+  /// Note: `.unconfigured` (no destination yet for this store) is acceptable — the start
+  /// methods route by `placement.kind` and only the matching store's writes need to land.
+  /// In production both stores are configured together via `configureRecordStore(for:)` in
+  /// `photo_exportApp`, so under normal operation either both are `.ready` or both are
+  /// `.unconfigured`. Tests can leave the collection store unconfigured when they only
+  /// exercise timeline jobs.
+  var canExport: Bool {
+    exportRecordStore.state != .failed && collectionExportRecordStore.state != .failed
+  }
 
   // MARK: - Internals
   private(set) var pendingJobs: [ExportJob] = []
@@ -81,21 +107,34 @@ final class ExportManager: ObservableObject {
   private var currentTask: Task<Void, Never>?
   private(set) var currentJobAssetId: String?
   private(set) var currentJobVariant: ExportVariant?
+  /// The placement of the job currently in flight. Set in `processNext()` *before*
+  /// `currentJobAssetId` and reset everywhere `currentJobAssetId` is reset, so any
+  /// cancellation cleanup that observes `currentJobAssetId` is guaranteed to see the
+  /// matching placement. Used by both the `cancelAndClear` and run-loop catch-block
+  /// cleanup paths to route the `removeVariant` call to the correct store via
+  /// `placement.kind`.
+  private(set) var currentJobPlacement: ExportPlacement?
   private(set) var generation: Int = 0
   private(set) var isEnqueueingAll: Bool = false
-  private(set) var queuedCountsByYearMonth: [String: Int] = [:]
+  private(set) var queuedCountsByPlacementId: [String: Int] = [:]
   private var importTask: Task<Void, Never>?
 
   init(
     photoLibraryService: any PhotoLibraryService,
     exportDestination: any ExportDestination,
     exportRecordStore: ExportRecordStore,
+    collectionExportRecordStore: CollectionExportRecordStore? = nil,
     assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
     fileSystem: any FileSystemService = FileIOService()
   ) {
     self.photoLibraryService = photoLibraryService
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
+    // Default to a fresh collection store backed by the same on-disk root as the timeline
+    // store. Tests typically pass `nil` and get a default-rooted store; production wires
+    // an injected one from `photo_exportApp` so both stores share the destination's
+    // `<App Support>/<bundleId>/ExportRecords/<destinationId>/` directory.
+    self.collectionExportRecordStore = collectionExportRecordStore ?? CollectionExportRecordStore()
     self.assetResourceWriter = assetResourceWriter
     self.fileSystem = fileSystem
     if let raw = UserDefaults.standard.string(forKey: Self.versionSelectionDefaultsKey),
@@ -109,6 +148,12 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
+    guard canExport else {
+      logger.error(
+        "startExportMonth ignored: canExport == false (timelineState=\(String(describing: self.exportRecordStore.state), privacy: .public), collectionState=\(String(describing: self.collectionExportRecordStore.state), privacy: .public))"
+      )
+      return
+    }
     // Snapshot the active selection synchronously so a picker flip before the async enqueue
     // lands (after `fetchAssets` returns) cannot change the mode that was visible at click
     // time. The picker in the toolbar is also gated on `hasActiveExportWork` for clarity, but
@@ -139,6 +184,10 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportYear(year: Int) {
+    guard canExport else {
+      logger.error("startExportYear ignored: canExport == false")
+      return
+    }
     let selection = versionSelection
     clearEmptyRunMessage()
     if !isRunning && !isProcessing { resetProgressCounters() }
@@ -165,6 +214,10 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportAll() {
+    guard canExport else {
+      logger.error("startExportAll ignored: canExport == false")
+      return
+    }
     guard !isEnqueueingAll else { return }
     let selection = versionSelection
     clearEmptyRunMessage()
@@ -223,16 +276,36 @@ final class ExportManager: ObservableObject {
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
     if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
-      exportRecordStore.exportInfo(assetId: inFlightId)?.variants[inFlightVariant]?.status
-        == .inProgress
+      let inFlightPlacement = currentJobPlacement
     {
-      exportRecordStore.removeVariant(assetId: inFlightId, variant: inFlightVariant)
+      // Route the cleanup to the correct store by `placement.kind`. In Phase 1 only
+      // `.timeline` jobs reach here in production; the `.favorites`/`.album` cases land
+      // when collection exports start in Phase 3. The store-side `removeVariant` is a
+      // no-op when the variant is not `.inProgress`, so the cross-store check that used
+      // to live here is now baked into the store call.
+      switch inFlightPlacement.kind {
+      case .timeline:
+        if exportRecordStore.exportInfo(assetId: inFlightId)?.variants[inFlightVariant]?.status
+          == .inProgress
+        {
+          exportRecordStore.removeVariant(assetId: inFlightId, variant: inFlightVariant)
+        }
+      case .favorites, .album:
+        if collectionExportRecordStore.exportInfo(
+          assetId: inFlightId, placement: inFlightPlacement)?.variants[inFlightVariant]?.status
+          == .inProgress
+        {
+          collectionExportRecordStore.removeVariant(
+            assetId: inFlightId, placement: inFlightPlacement, variant: inFlightVariant)
+        }
+      }
     }
     currentJobAssetId = nil
     currentJobVariant = nil
+    currentJobPlacement = nil
     generation += 1
     pendingJobs.removeAll()
-    queuedCountsByYearMonth.removeAll()
+    queuedCountsByPlacementId.removeAll()
     currentTask?.cancel()
     currentTask = nil
     isProcessing = false
@@ -288,7 +361,7 @@ final class ExportManager: ObservableObject {
   func clearPending() {
     let removed = pendingJobs.count
     pendingJobs.removeAll()
-    queuedCountsByYearMonth.removeAll()
+    queuedCountsByPlacementId.removeAll()
     totalJobsEnqueued = max(0, totalJobsEnqueued - removed)
     updateQueueCount()
     logger.info("Cleared \(removed) pending export jobs")
@@ -306,16 +379,17 @@ final class ExportManager: ObservableObject {
     guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
+    let placement = ExportPlacement.timeline(year: year, month: month)
     let newJobs: [ExportJob] = assets.compactMap { asset in
       guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
         return nil
       }
       return ExportJob(
-        assetLocalIdentifier: asset.id, year: year, month: month, selection: selection)
+        assetLocalIdentifier: asset.id, placement: placement, selection: selection)
     }
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
-    queuedCountsByYearMonth["\(year)-\(month)", default: 0] += newJobs.count
+    queuedCountsByPlacementId[placement.id, default: 0] += newJobs.count
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
@@ -338,14 +412,15 @@ final class ExportManager: ObservableObject {
       guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
         continue
       }
+      let placement = ExportPlacement.timeline(year: year, month: m)
       newJobs.append(
         ExportJob(
-          assetLocalIdentifier: asset.id, year: year, month: m, selection: selection))
+          assetLocalIdentifier: asset.id, placement: placement, selection: selection))
     }
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
     for job in newJobs {
-      queuedCountsByYearMonth["\(job.year)-\(job.month)", default: 0] += 1
+      queuedCountsByPlacementId[job.placement.id, default: 0] += 1
     }
     updateQueueCount()
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
@@ -374,17 +449,21 @@ final class ExportManager: ObservableObject {
       isRunning = false
       currentJobAssetId = nil
       currentJobVariant = nil
+      currentJobPlacement = nil
       currentAssetFilename = nil
       updateQueueCount()
       logger.info("Export queue drained")
       return
     }
     let job = pendingJobs.removeFirst()
-    let key = "\(job.year)-\(job.month)"
-    queuedCountsByYearMonth[key, default: 1] -= 1
-    if queuedCountsByYearMonth[key, default: 0] <= 0 {
-      queuedCountsByYearMonth.removeValue(forKey: key)
+    let key = job.placement.id
+    queuedCountsByPlacementId[key, default: 1] -= 1
+    if queuedCountsByPlacementId[key, default: 0] <= 0 {
+      queuedCountsByPlacementId.removeValue(forKey: key)
     }
+    // Set placement *before* assetId per the plan's ordering rule (any cancellation that
+    // observes assetId must also see the matching placement).
+    currentJobPlacement = job.placement
     currentJobAssetId = job.assetLocalIdentifier
     currentJobVariant = nil
     updateQueueCount()
@@ -394,6 +473,7 @@ final class ExportManager: ObservableObject {
       await MainActor.run { [weak self] in
         self?.currentJobAssetId = nil
         self?.currentJobVariant = nil
+        self?.currentJobPlacement = nil
         guard let self, self.generation == currentGen else { return }
         self.totalJobsCompleted += 1
         self.processNext()
@@ -401,15 +481,19 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  /// Reads the queue depth for `(year, month)` by resolving the synthetic timeline
+  /// placement id and looking it up in the placement-keyed dict. Existing call sites use
+  /// `(year, month)` and stay unchanged.
   func queuedCount(year: Int, month: Int) -> Int {
-    queuedCountsByYearMonth["\(year)-\(month)", default: 0]
+    let placementId = ExportPlacement.timeline(year: year, month: month).id
+    return queuedCountsByPlacementId[placementId, default: 0]
   }
 
   private func resetProgressCounters() {
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
     currentAssetFilename = nil
-    queuedCountsByYearMonth.removeAll()
+    queuedCountsByPlacementId.removeAll()
   }
 
   private func updateQueueCount() {
@@ -519,8 +603,8 @@ final class ExportManager: ObservableObject {
           logger.error(
             "Variant \(variant.rawValue, privacy: .public) failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
-          exportRecordStore.markVariantFailed(
-            assetId: descriptor.id, variant: variant,
+          recordVariantFailed(
+            assetId: descriptor.id, placement: job.placement, variant: variant,
             error: error.localizedDescription, at: Date())
           inFlight = nil
         }
@@ -528,19 +612,32 @@ final class ExportManager: ObservableObject {
     } catch is CancellationError {
       logger.info(
         "Export cancelled for id: \(job.assetLocalIdentifier, privacy: .public)")
-      if let inFlight, self.generation == gen,
-        exportRecordStore.exportInfo(assetId: inFlight.assetId)?.variants[inFlight.variant]?
-          .status == .inProgress
-      {
-        exportRecordStore.removeVariant(assetId: inFlight.assetId, variant: inFlight.variant)
+      if let inFlight, self.generation == gen {
+        // Route the cancellation cleanup by the in-flight job's placement kind.
+        switch job.placement.kind {
+        case .timeline:
+          if exportRecordStore.exportInfo(assetId: inFlight.assetId)?.variants[inFlight.variant]?
+            .status == .inProgress
+          {
+            exportRecordStore.removeVariant(assetId: inFlight.assetId, variant: inFlight.variant)
+          }
+        case .favorites, .album:
+          if collectionExportRecordStore.exportInfo(
+            assetId: inFlight.assetId, placement: job.placement)?.variants[inFlight.variant]?
+            .status == .inProgress
+          {
+            collectionExportRecordStore.removeVariant(
+              assetId: inFlight.assetId, placement: job.placement, variant: inFlight.variant)
+          }
+        }
       }
     } catch {
       guard self.generation == gen else { return }
       logger.error(
         "Export failed for id: \(job.assetLocalIdentifier, privacy: .public) error: \(String(describing: error), privacy: .public)"
       )
-      exportRecordStore.markVariantFailed(
-        assetId: job.assetLocalIdentifier, variant: .original,
+      recordVariantFailed(
+        assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
         error: error.localizedDescription, at: Date())
     }
   }
@@ -580,8 +677,9 @@ final class ExportManager: ObservableObject {
       case .original: errMsg = "No exportable resource"
       case .edited: errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
       }
-      exportRecordStore.markVariantFailed(
-        assetId: descriptor.id, variant: variant, error: errMsg, at: Date())
+      recordVariantFailed(
+        assetId: descriptor.id, placement: job.placement, variant: variant, error: errMsg,
+        at: Date())
       logger.error(
         "No \(variant.rawValue, privacy: .public) resource for id: \(descriptor.id, privacy: .public)"
       )
@@ -615,8 +713,8 @@ final class ExportManager: ObservableObject {
     currentAssetFilename = finalURL.lastPathComponent
     currentJobVariant = variant
     inFlight = (assetId: descriptor.id, variant: variant)
-    exportRecordStore.markVariantInProgress(
-      assetId: descriptor.id, variant: variant, year: job.year, month: job.month,
+    recordVariantInProgress(
+      assetId: descriptor.id, placement: job.placement, variant: variant,
       relPath: relPath, filename: finalURL.lastPathComponent)
 
     try await assetResourceWriter.writeResource(resource, forAssetId: descriptor.id, to: tempURL)
@@ -654,8 +752,8 @@ final class ExportManager: ObservableObject {
       try throwIfCancelledOrStale(gen)
     }
 
-    exportRecordStore.markVariantExported(
-      assetId: descriptor.id, variant: variant, year: job.year, month: job.month,
+    recordVariantExported(
+      assetId: descriptor.id, placement: job.placement, variant: variant,
       relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date())
     inFlight = nil
     logger.info(
@@ -797,6 +895,59 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Helpers
+
+  // MARK: Record-mutation routing
+
+  /// Routes a `markVariantFailed` to the right store based on `placement.kind`. In Phase 1,
+  /// only `.timeline` paths are reachable in production; `.favorites`/`.album` are wired
+  /// for Phase 3's collection-export work but won't be exercised until then.
+  private func recordVariantFailed(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    error: String, at date: Date
+  ) {
+    switch placement.kind {
+    case .timeline:
+      exportRecordStore.markVariantFailed(
+        assetId: assetId, variant: variant, error: error, at: date)
+    case .favorites, .album:
+      collectionExportRecordStore.markVariantFailed(
+        assetId: assetId, placement: placement, variant: variant, error: error, at: date)
+    }
+  }
+
+  private func recordVariantInProgress(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    relPath: String, filename: String?
+  ) {
+    switch placement.kind {
+    case .timeline:
+      let (year, month) = placement.timelineYearMonth ?? (0, 0)
+      exportRecordStore.markVariantInProgress(
+        assetId: assetId, variant: variant,
+        year: year, month: month, relPath: relPath, filename: filename)
+    case .favorites, .album:
+      collectionExportRecordStore.markVariantInProgress(
+        assetId: assetId, placement: placement, variant: variant, filename: filename)
+    }
+  }
+
+  private func recordVariantExported(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    relPath: String, filename: String, exportedAt: Date
+  ) {
+    switch placement.kind {
+    case .timeline:
+      let (year, month) = placement.timelineYearMonth ?? (0, 0)
+      exportRecordStore.markVariantExported(
+        assetId: assetId, variant: variant,
+        year: year, month: month, relPath: relPath,
+        filename: filename, exportedAt: exportedAt)
+    case .favorites, .album:
+      collectionExportRecordStore.markVariantExported(
+        assetId: assetId, placement: placement, variant: variant,
+        filename: filename, exportedAt: exportedAt)
+    }
+  }
 
   func splitFilename(_ filename: String) -> (base: String, ext: String) {
     let url = URL(fileURLWithPath: filename)

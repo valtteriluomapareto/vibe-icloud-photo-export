@@ -81,6 +81,21 @@ extension ExportPlacement {
       createdAt: createdAt
     )
   }
+
+  /// For a `.timeline` placement, extracts `(year, month)` from its id (`timeline:YYYY-MM`).
+  /// Returns `nil` for any other kind. Used by `ExportManager` and the existing timeline
+  /// store API to derive `(year, month)` parameters from a job's placement.
+  var timelineYearMonth: (year: Int, month: Int)? {
+    guard kind == .timeline else { return nil }
+    let prefix = "timeline:"
+    guard id.hasPrefix(prefix) else { return nil }
+    let body = id.dropFirst(prefix.count)
+    let parts = body.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+    guard parts.count == 2, let year = Int(parts[0]), let month = Int(parts[1]) else {
+      return nil
+    }
+    return (year, month)
+  }
 }
 
 /// In-memory ergonomic key for record lookups: `(placementId, assetId)`. Not persisted —

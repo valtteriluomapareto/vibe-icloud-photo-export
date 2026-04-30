@@ -12,6 +12,7 @@ struct PhotoExportApp: App {
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
   @StateObject private var exportRecordStore: ExportRecordStore
+  @StateObject private var collectionExportRecordStore: CollectionExportRecordStore
   @StateObject private var exportManager: ExportManager
 
   init() {
@@ -19,12 +20,15 @@ struct PhotoExportApp: App {
     let edm = ExportDestinationManager()
     let plm = PhotoLibraryManager()
     let ers = ExportRecordStore()
+    let cers = CollectionExportRecordStore()
     _exportDestinationManager = StateObject(wrappedValue: edm)
     _photoLibraryManager = StateObject(wrappedValue: plm)
     _exportRecordStore = StateObject(wrappedValue: ers)
+    _collectionExportRecordStore = StateObject(wrappedValue: cers)
     _exportManager = StateObject(
       wrappedValue: ExportManager(
-        photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers))
+        photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
+        collectionExportRecordStore: cers))
   }
 
   var body: some Scene {
@@ -61,12 +65,14 @@ struct PhotoExportApp: App {
   }
 
   /// Runs the per-destination directory coordinator (Phase 0 lazy migration) and then
-  /// reconfigures the record store. This single hop keeps the legacy `<oldId>` → `<newId>`
-  /// rename centralized so future stores (Phase 1's collection store) can configure in any
-  /// order without orphaning the legacy directory.
+  /// reconfigures both record stores. The coordinator runs **once** per destination change,
+  /// before either store touches the directory, so the legacy `<oldId>` → `<newId>` rename
+  /// happens exactly once and neither store can race the other to create `<newId>/`
+  /// (which would orphan the legacy directory).
   private func configureRecordStore(for newId: String?) {
     guard let newId else {
       exportRecordStore.configure(for: nil)
+      collectionExportRecordStore.configure(for: nil)
       return
     }
     let coordinator = ExportRecordsDirectoryCoordinator(
@@ -76,21 +82,20 @@ struct PhotoExportApp: App {
       legacyId: exportDestinationManager.currentLegacyDestinationId()
     )
     switch result {
-    case .success:
+    case .success, .failure(.conflict):
+      // Either the migration succeeded or `<newId>/` already exists with `<oldId>/` left
+      // for inspection. Either way, configuring is safe — both stores adopt whatever's at
+      // `<newId>/`. Coordinator already logged the conflict case.
       exportRecordStore.configure(for: newId)
-    case .failure(.conflict):
-      // `<newId>/` already exists on disk; the legacy directory is left for inspection.
-      // Configuring is safe — we adopt whatever's at `<newId>/`. Coordinator already logged.
-      exportRecordStore.configure(for: newId)
+      collectionExportRecordStore.configure(for: newId)
     case .failure(.migrationFailed):
       // Transient I/O error during the legacy → new rename. `<legacyId>/` still has the
       // user's records; `<newId>/` does not exist yet. Configuring `for: newId` would
       // create `<newId>/` and trip the conflict-detection branch on every subsequent
-      // launch, permanently stranding the legacy records. Leave the store unconfigured;
-      // next launch (or the next destinationId change) retries the rename. UI will show
-      // an empty record set, which the user can recover from by relaunching once the
-      // transient condition clears.
+      // launch, permanently stranding the legacy records. Leave both stores unconfigured;
+      // next launch (or the next destinationId change) retries the rename.
       exportRecordStore.configure(for: nil)
+      collectionExportRecordStore.configure(for: nil)
     }
   }
 }

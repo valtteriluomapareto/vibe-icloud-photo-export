@@ -21,6 +21,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private var volumeObservers: [NSObjectProtocol] = []
 
+  /// Hash of the **original** bookmark bytes captured at restore time, before any stale-bookmark
+  /// refresh in `restoreBookmarkIfAvailable()` overwrites the bytes in `userDefaults`. This is
+  /// the legacy `<oldId>` an upgraded user's `ExportRecords/<oldId>/` directory was named under.
+  /// Without this snapshot, refreshing a stale bookmark would change the bytes in defaults, the
+  /// coordinator would hash the new bytes, and the existing legacy directory would silently go
+  /// missing.
+  private var stashedLegacyDestinationId: String?
+
   // MARK: - Errors
   enum ExportDestinationError: LocalizedError, Equatable {
     static func == (lhs: ExportDestinationError, rhs: ExportDestinationError) -> Bool {
@@ -120,6 +128,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isWritable = false
     statusMessage = "No export folder selected"
     destinationId = nil
+    stashedLegacyDestinationId = nil
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
     logger.info("Cleared export destination selection")
   }
@@ -217,16 +226,18 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Derives a stable `destinationId` for a folder URL.
   ///
-  /// The id is `SHA-256(volumeUUID || U+0000 || canonicalPath)`. Survives bookmark refresh on
-  /// the same drive. Changes only when the volume is reformatted, the folder is moved to a
-  /// different volume, or the user duplicates the folder via Finder.
+  /// The id is `SHA-256(volumeUUID || U+0000 || volumeRelativePath)`. Survives bookmark refresh
+  /// on the same drive **and** rename of the drive (e.g. `/Volumes/MyDrive` →
+  /// `/Volumes/PhotoBackup`) — the path component is taken in the volume's coordinate system,
+  /// not as the absolute mount path. Changes only when the volume is reformatted, the folder is
+  /// moved to a different volume, or the user duplicates the folder via Finder.
   ///
   /// Returns `nil` when the volume identifier cannot be read (typically because the drive is
   /// unmounted). Callers treat this as "destination not yet available" and wait for the volume
   /// to mount.
   static func computeDestinationId(for url: URL) -> String? {
     let resolved = url.resolvingSymlinksInPath()
-    let keys: Set<URLResourceKey> = [.volumeUUIDStringKey, .volumeIdentifierKey]
+    let keys: Set<URLResourceKey> = [.volumeUUIDStringKey, .volumeIdentifierKey, .volumeURLKey]
     guard let values = try? resolved.resourceValues(forKeys: keys) else { return nil }
     let volumeId: String
     if let uuid = values.volumeUUIDString {
@@ -238,7 +249,19 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     } else {
       return nil
     }
-    let combined = volumeId + "\u{0000}" + resolved.path
+    // Strip the volume mount prefix so renaming the drive (`/Volumes/MyDrive` →
+    // `/Volumes/PhotoBackup`) doesn't change the digest. For the boot volume the mount root
+    // is "/" and the relative path equals the absolute path.
+    let canonicalPath = resolved.standardizedFileURL.path
+    let volumeRoot = values.volume?.standardizedFileURL.path ?? ""
+    var relativePath = canonicalPath
+    if !volumeRoot.isEmpty, volumeRoot != "/", canonicalPath.hasPrefix(volumeRoot) {
+      relativePath = String(canonicalPath.dropFirst(volumeRoot.count))
+    }
+    if !relativePath.hasPrefix("/") {
+      relativePath = "/" + relativePath
+    }
+    let combined = volumeId + "\u{0000}" + relativePath
     let digest = SHA256.hash(data: Data(combined.utf8))
     return digest.map { String(format: "%02x", $0) }.joined()
   }
@@ -254,7 +277,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Returns the legacy `<oldId>` for the currently selected folder, or `nil` if no bookmark
   /// is stored. Used by `ExportRecordsDirectoryCoordinator` during destination configure to
   /// decide whether a legacy `ExportRecords/<oldId>/` directory needs renaming.
+  ///
+  /// Prefers the `stashedLegacyDestinationId` snapshot captured during
+  /// `restoreBookmarkIfAvailable()` — that's the hash of the *original* bookmark bytes, which
+  /// is what the upgraded user's existing `ExportRecords/<oldId>/` directory was named under.
+  /// Falls back to hashing the current bookmark bytes only when no snapshot exists (e.g. a
+  /// brand-new selection via `setSelectedFolder`, where there is no legacy directory anyway).
   func currentLegacyDestinationId() -> String? {
+    if let stashed = stashedLegacyDestinationId { return stashed }
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else { return nil }
     return Self.legacyDestinationId(from: data)
   }
@@ -281,6 +311,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       destinationId = nil
       return
     }
+    // Capture the legacy hash from the *original* bytes before any stale-bookmark refresh.
+    // The coordinator relies on this to find existing `ExportRecords/<oldId>/` directories
+    // written by previous app versions; refreshing the bookmark would otherwise change the
+    // hash and silently orphan those records.
+    stashedLegacyDestinationId = Self.legacyDestinationId(from: data)
     do {
       var isStale = false
       let url = try URL(
@@ -303,6 +338,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       isAvailable = false
       isWritable = false
       destinationId = nil
+      stashedLegacyDestinationId = nil
     }
   }
 

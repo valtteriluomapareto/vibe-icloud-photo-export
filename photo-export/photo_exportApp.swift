@@ -75,12 +75,23 @@ struct PhotoExportApp: App {
       for: newId,
       legacyId: exportDestinationManager.currentLegacyDestinationId()
     )
-    if case .failure(let error) = result {
-      // Coordinator already logged the specifics; the record store still configures so
-      // export controls reflect whatever state is on disk.
-      _ = error
+    switch result {
+    case .success:
+      exportRecordStore.configure(for: newId)
+    case .failure(.conflict):
+      // `<newId>/` already exists on disk; the legacy directory is left for inspection.
+      // Configuring is safe — we adopt whatever's at `<newId>/`. Coordinator already logged.
+      exportRecordStore.configure(for: newId)
+    case .failure(.migrationFailed):
+      // Transient I/O error during the legacy → new rename. `<legacyId>/` still has the
+      // user's records; `<newId>/` does not exist yet. Configuring `for: newId` would
+      // create `<newId>/` and trip the conflict-detection branch on every subsequent
+      // launch, permanently stranding the legacy records. Leave the store unconfigured;
+      // next launch (or the next destinationId change) retries the rename. UI will show
+      // an empty record set, which the user can recover from by relaunching once the
+      // transient condition clears.
+      exportRecordStore.configure(for: nil)
     }
-    exportRecordStore.configure(for: newId)
   }
 }
 

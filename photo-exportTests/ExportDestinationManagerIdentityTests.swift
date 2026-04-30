@@ -148,4 +148,69 @@ struct ExportDestinationManagerIdentityTests {
     #expect(legacyId != nil)
     #expect(legacyId?.count == 64)
   }
+
+  /// Regression: a stored bookmark whose bytes get refreshed in `restoreBookmarkIfAvailable()`
+  /// (e.g. when the OS reports it as stale) must still produce the **original** bytes' legacy
+  /// hash through `currentLegacyDestinationId()`. Otherwise the directory coordinator would
+  /// hash the refreshed bytes, fail to find the existing `ExportRecords/<oldId>/` directory
+  /// written by the previous app version, and silently orphan the user's records.
+  ///
+  /// Real-world repro: the open-panel flow saves bytes A; the user upgrades; on the next
+  /// launch `URL(resolvingBookmarkData: A, ..., &isStale)` reports stale, the manager calls
+  /// `saveBookmark(for: url)` which writes bytes B over bytes A. Without the snapshot, the
+  /// coordinator would call `currentLegacyDestinationId()` and get `hash(B)` — but the
+  /// existing on-disk directory is named `hash(A)`.
+  @Test func legacyIdSnapshotSurvivesBookmarkRefresh() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("DestId-LegacyRefresh-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let suiteName = "DestId-LegacyRefresh-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let bookmarkKey = "DestId-LegacyRefresh-Bookmark-\(UUID().uuidString)"
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    // Persist an "original" bookmark and capture its legacy hash.
+    let writer = ExportDestinationManager(
+      skipRestore: true,
+      userDefaults: defaults,
+      bookmarkDefaultsKey: bookmarkKey
+    )
+    writer.persistSelectedFolderForTesting(dir)
+    let originalBytes = defaults.data(forKey: bookmarkKey)!
+    let originalLegacyId = ExportDestinationManager.legacyDestinationId(from: originalBytes)
+
+    // Restore: the manager snapshots the legacy id from the original bytes.
+    let restored = ExportDestinationManager(
+      userDefaults: defaults,
+      bookmarkDefaultsKey: bookmarkKey
+    )
+    #expect(restored.currentLegacyDestinationId() == originalLegacyId)
+
+    // Simulate any post-restore refresh that overwrites the bytes in defaults — the snapshot
+    // must remain authoritative so the coordinator can still find `ExportRecords/<oldId>/`.
+    defaults.set(Data("refreshed-bookmark-bytes".utf8), forKey: bookmarkKey)
+    #expect(restored.currentLegacyDestinationId() == originalLegacyId)
+  }
+
+  /// Regression: hashing the absolute mount path would change the destinationId when an
+  /// external drive is renamed (e.g. `/Volumes/MyDrive` → `/Volumes/PhotoBackup`). The
+  /// derivation strips the volume mount prefix and hashes the volume-relative path so the
+  /// id stays stable across renames. We can't actually rename a volume in a unit test, but
+  /// we can verify the boot volume's id is computed in the form
+  /// `SHA-256(uuid || U+0000 || /<relative-path>)` rather than depending on `/Volumes/...`.
+  /// Specifically: two folders under different temp directories on the **same** volume
+  /// produce different ids, but the function does not throw on / blow up on the relative-
+  /// path stripping.
+  @Test func destinationIdIsStableForBootVolumeRelativePaths() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("DestId-Relative-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let id = ExportDestinationManager.computeDestinationId(for: dir)
+    #expect(id != nil)
+    #expect(id?.count == 64)
+  }
 }

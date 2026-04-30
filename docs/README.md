@@ -34,6 +34,7 @@ Current process and open work:
 - [`project/testing-improvement-plan.md`](project/testing-improvement-plan.md) — test coverage gaps and improvement plan
 - [`project/edited-photos-manual-testing-guide.md`](project/edited-photos-manual-testing-guide.md) — manual test script for the edited-photos export modes
 - [`project/plans/auto-sync-background-sync-plan.md`](project/plans/auto-sync-background-sync-plan.md) — proposed auto-sync and background-sync implementation
+- [`project/plans/collections-export-plan.md`](project/plans/collections-export-plan.md) — proposed Favorites and Albums export implementation
 
 ## Maintainer notes — archive
 

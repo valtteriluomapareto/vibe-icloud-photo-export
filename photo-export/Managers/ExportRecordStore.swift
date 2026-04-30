@@ -30,6 +30,11 @@ final class ExportRecordStore: ObservableObject {
 
   private(set) var recordsById: [String: ExportRecord] = [:]
 
+  /// Per-store load state. See `RecordStoreState` for semantics. The corruption alert UI
+  /// that drives `resetToEmpty()` lives in Phase 4; before then, a `.failed` state is
+  /// observable in logs and tests but not surfaced to the user.
+  @Published private(set) var state: RecordStoreState = .unconfigured
+
   // Published bump used to notify SwiftUI of logical changes
   @Published private(set) var mutationCounter: Int = 0
   private var notifyWorkItem: DispatchWorkItem?
@@ -74,6 +79,7 @@ final class ExportRecordStore: ObservableObject {
     guard let destinationId else {
       currentStoreDirURL = nil
       jsonl = nil
+      state = .unconfigured
       mutationCounter &+= 1
       return
     }
@@ -81,25 +87,58 @@ final class ExportRecordStore: ObservableObject {
     let dir = storeRootURL.appendingPathComponent(destinationId, isDirectory: true)
     createDirectoryIfNeeded(dir)
     currentStoreDirURL = dir
-    jsonl = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>(
+    let file = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>(
       snapshotURL: dir.appendingPathComponent(Constants.snapshotFileName),
       logURL: dir.appendingPathComponent(Constants.logFileName),
       ioQueue: ioQueue,
       logger: logger
     )
+    jsonl = file
 
-    // Load snapshot and log via the shared component, then apply ops in order.
-    if let jsonl {
-      let loaded = jsonl.load()
+    let loaded = file.load()
+    switch loaded.snapshotStatus {
+    case .corrupt:
+      // Deferred-rename rule: leave the corrupt snapshot at its original path on disk so
+      // a Quit-and-relaunch reproduces this `.failed` state instead of silently
+      // initializing empty. `resetToEmpty()` is the only path that renames the file out
+      // of the way; the alert UI that calls it lands in Phase 4.
+      logger.error(
+        "Timeline records snapshot at \(dir.appendingPathComponent(Constants.snapshotFileName).path, privacy: .public) failed to decode; store transitioning to .failed."
+      )
+      state = .failed
+    case .absent, .loaded:
       if let snapshot = loaded.snapshot {
         recordsById = snapshot
       }
       for op in loaded.ops {
         apply(op)
       }
+      recoverInProgressVariants()
+      state = .ready
     }
-    recoverInProgressVariants()
     mutationCounter &+= 1
+  }
+
+  /// Renames a corrupt snapshot to `<name>.broken-<ISO8601>` and reinitializes the store
+  /// with an empty snapshot + log. Called from the Phase 4 corruption alert UI's "Reset to
+  /// empty" action; in Phase 1 there is no UI for it and tests are the only caller.
+  ///
+  /// Transitions `state` from `.failed` back to `.ready` on success. Only valid to call
+  /// when `state == .failed` (otherwise it is a no-op so callers can wire it through a
+  /// generic alert handler without first checking).
+  func resetToEmpty() {
+    guard state == .failed else { return }
+    guard let jsonl else { return }
+    do {
+      try jsonl.resetToEmpty(emptySnapshot: [:])
+      recordsById = [:]
+      state = .ready
+      mutationCounter &+= 1
+    } catch {
+      logger.error(
+        "resetToEmpty failed: \(String(describing: error), privacy: .public). Store remains .failed."
+      )
+    }
   }
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the interrupted
@@ -424,7 +463,13 @@ final class ExportRecordStore: ObservableObject {
   /// Imports a batch of records from the backup-scan flow, merging per variant. An existing
   /// `.done` for a given asset+variant is preserved; weaker statuses may be replaced by an imported
   /// `.done` variant.
+  ///
+  /// Bails early when the store isn't `.ready` — otherwise the per-record `append` would
+  /// trip a debug assertion on every iteration. The caller (Import Existing Backup flow)
+  /// should only invoke this when the store has loaded successfully; the early return is a
+  /// belt-and-braces no-op for unexpected states.
   func bulkImportRecords(_ records: [ExportRecord]) {
+    guard state == .ready else { return }
     var importedVariants = 0
     var skippedVariants = 0
     for incoming in records {
@@ -456,6 +501,18 @@ final class ExportRecordStore: ObservableObject {
 
   // MARK: - Internals
   private func append(_ mutation: ExportRecordMutation) {
+    // RecordStoreState guard: writes only land when `.ready`. `.failed` means the snapshot
+    // is corrupt (deferred-rename rule); `.unconfigured` means no destination is selected.
+    // Either case: no-op. Debug builds trip an `assertionFailure` so a routing bug shows up
+    // in tests; release silently drops to avoid crashing on a benign race during state
+    // transitions.
+    guard state == .ready else {
+      assertionFailure(
+        "ExportRecordStore.append called while state == \(state); ExportManager should have routed via canExport."
+      )
+      return
+    }
+
     apply(mutation)
     // Coalesce notifications to avoid excessive UI churn during exports
     scheduleCoalescedNotify()

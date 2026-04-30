@@ -58,18 +58,46 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   // MARK: - Load
 
+  /// Outcome of reading the snapshot file. The composing store branches its load path on
+  /// this — a corrupt snapshot transitions the store to `.failed` per *Recovery on
+  /// Corruption*, while an absent snapshot is normal (legitimate before the first
+  /// compaction).
+  enum SnapshotStatus: Equatable {
+    /// No snapshot file on disk. Normal first-launch / pre-first-compaction state.
+    case absent
+    /// Snapshot file present and decoded. The decoded value is in `LoadResult.snapshot`.
+    case loaded
+    /// Snapshot file present but failed to decode. **The file is left in place** —
+    /// composing-store code transitions the store to `.failed` and only `resetToEmpty()`
+    /// renames the file out of the way. This is the load-bearing detail that makes
+    /// "Quit" non-destructive: a quit-and-relaunch finds the same corrupt file and
+    /// re-fails, never silently resetting to an empty store.
+    case corrupt
+  }
+
+  struct LoadResult: Sendable {
+    let snapshot: Snapshot?
+    let snapshotStatus: SnapshotStatus
+    let ops: [LogOp]
+    let malformedLineCount: Int
+  }
+
   /// Reads the snapshot (if any) and the log file (if any). The composing store applies
   /// `ops` in order via its own dispatch logic. Malformed lines are skipped and logged but
-  /// do not abort the load. A missing snapshot is not an error (returns `nil` snapshot).
-  func load() -> (snapshot: Snapshot?, ops: [LogOp], malformedLineCount: Int) {
+  /// do not abort the load. A missing snapshot is not an error (returns `.absent`); a
+  /// present-but-undecodable snapshot is reported as `.corrupt` with the file untouched.
+  func load() -> LoadResult {
     var snapshot: Snapshot?
+    var snapshotStatus: SnapshotStatus = .absent
     if fileManager.fileExists(atPath: snapshotURL.path) {
       do {
         let data = try Data(contentsOf: snapshotURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = dateDecodingStrategy
         snapshot = try decoder.decode(Snapshot.self, from: data)
+        snapshotStatus = .loaded
       } catch {
+        snapshotStatus = .corrupt
         logger.error(
           "Failed to read snapshot at \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
         )
@@ -102,7 +130,39 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       }
     }
 
-    return (snapshot, ops, malformedLineCount)
+    return LoadResult(
+      snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops,
+      malformedLineCount: malformedLineCount)
+  }
+
+  /// Renames the corrupt snapshot to `<name>.broken-<ISO8601>` and writes a fresh empty
+  /// snapshot + log. Used by composing stores' `resetToEmpty()` paths after the user picks
+  /// the destructive Reset action in the corruption alert (the alert UI lives in Phase 4;
+  /// in Phase 1 there is no UI for this and the store remains `.failed` with the corrupt
+  /// file intact until `resetToEmpty()` is called from a test).
+  func resetToEmpty(emptySnapshot: Snapshot) throws {
+    let isoFormatter = ISO8601DateFormatter()
+    isoFormatter.formatOptions = [.withInternetDateTime]
+    let timestamp = isoFormatter.string(from: Date())
+    if fileManager.fileExists(atPath: snapshotURL.path) {
+      let brokenURL =
+        snapshotURL
+        .deletingPathExtension()
+        .appendingPathExtension("broken-\(timestamp)")
+      do {
+        try fileManager.moveItem(at: snapshotURL, to: brokenURL)
+        logger.info(
+          "Reset corrupt snapshot to \(brokenURL.lastPathComponent, privacy: .public)")
+      } catch {
+        logger.error(
+          "Failed to rename corrupt snapshot \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+        )
+        // Fall through and try to write the empty snapshot anyway; if the rename failed
+        // because of permissions, the empty write probably will too, and the throw below
+        // surfaces it.
+      }
+    }
+    try writeSnapshot(emptySnapshot)
   }
 
   // MARK: - Append + compaction

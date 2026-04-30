@@ -121,6 +121,9 @@ final class CollectionExportRecordStore: ObservableObject {
   /// Per-placement record bodies, keyed by `[placementId][assetId]`.
   private(set) var recordBodies: [String: [String: RecordBody]] = [:]
 
+  /// Per-store load state. See `RecordStoreState` for semantics.
+  @Published private(set) var state: RecordStoreState = .unconfigured
+
   @Published private(set) var mutationCounter: Int = 0
   private var notifyWorkItem: DispatchWorkItem?
 
@@ -162,6 +165,7 @@ final class CollectionExportRecordStore: ObservableObject {
     guard let destinationId else {
       currentStoreDirURL = nil
       jsonl = nil
+      state = .unconfigured
       mutationCounter &+= 1
       return
     }
@@ -177,17 +181,44 @@ final class CollectionExportRecordStore: ObservableObject {
     )
     jsonl = file
 
-    // Empty on first launch: load() returns nil snapshot + empty ops.
     let loaded = file.load()
-    if let snapshot = loaded.snapshot {
-      placements = snapshot.placements
-      recordBodies = snapshot.records
+    switch loaded.snapshotStatus {
+    case .corrupt:
+      logger.error(
+        "Collection records snapshot at \(dir.appendingPathComponent(Constants.snapshotFileName).path, privacy: .public) failed to decode; store transitioning to .failed."
+      )
+      state = .failed
+    case .absent, .loaded:
+      if let snapshot = loaded.snapshot {
+        placements = snapshot.placements
+        recordBodies = snapshot.records
+      }
+      for op in loaded.ops {
+        apply(op)
+      }
+      recoverInProgressVariants()
+      state = .ready
     }
-    for op in loaded.ops {
-      apply(op)
-    }
-    recoverInProgressVariants()
     mutationCounter &+= 1
+  }
+
+  /// Renames a corrupt snapshot to `<name>.broken-<ISO8601>` and reinitializes the store
+  /// with an empty snapshot + log. See `ExportRecordStore.resetToEmpty` for the same
+  /// pattern; the timeline and collection stores recover identically.
+  func resetToEmpty() {
+    guard state == .failed else { return }
+    guard let jsonl else { return }
+    do {
+      try jsonl.resetToEmpty(emptySnapshot: Snapshot.empty)
+      placements = [:]
+      recordBodies = [:]
+      state = .ready
+      mutationCounter &+= 1
+    } catch {
+      logger.error(
+        "resetToEmpty failed: \(String(describing: error), privacy: .public). Store remains .failed."
+      )
+    }
   }
 
   // MARK: - Placement metadata API
@@ -387,6 +418,15 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   private func append(_ op: LogOp) {
+    // RecordStoreState guard — see `ExportRecordStore.append` for the rationale.
+    // .failed = corrupt snapshot, deferred-rename rule; .unconfigured = no destination.
+    // Either way: silent no-op (assertionFailure in debug to surface routing bugs).
+    guard state == .ready else {
+      assertionFailure(
+        "CollectionExportRecordStore.append called while state == \(state); ExportManager should have routed via canExport."
+      )
+      return
+    }
     apply(op)
     scheduleCoalescedNotify()
     guard let jsonl else { return }

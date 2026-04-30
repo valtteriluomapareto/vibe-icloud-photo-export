@@ -295,6 +295,83 @@ struct CollectionExportRecordStoreTests {
     #expect(albInfo?.variants[.original]?.lastError == "boom")
   }
 
+  // MARK: - Corruption recovery
+
+  /// Plan §"Recovery on Corruption": a corrupt snapshot transitions the store to `.failed`
+  /// and leaves the corrupt file in place on disk so Quit-and-relaunch reproduces `.failed`.
+  /// Only `resetToEmpty()` renames the file out of the way.
+  @Test func corruptSnapshotEntersFailedStateWithFilePreserved() throws {
+    let (dir, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // Write a corrupt snapshot under dest-corrupt before the store ever sees it.
+    let destDir = dir.appendingPathComponent("dest-corrupt")
+    try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+    let snapshotURL = destDir.appendingPathComponent(
+      CollectionExportRecordStore.Constants.snapshotFileName)
+    try Data("not valid json".utf8).write(to: snapshotURL)
+
+    let store = CollectionExportRecordStore(baseDirectoryURL: dir)
+    store.configure(for: "dest-corrupt")
+    #expect(store.state == .failed)
+    #expect(store.placements.isEmpty)
+    #expect(store.recordBodies.isEmpty)
+    #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
+
+    // resetToEmpty renames the corrupt file out of the way and writes a fresh empty
+    // snapshot at the canonical path. Both files exist after the call.
+    store.resetToEmpty()
+    #expect(store.state == .ready)
+    let contents = try FileManager.default.contentsOfDirectory(atPath: destDir.path)
+    let brokenFiles = contents.filter { $0.contains(".broken-") }
+    #expect(brokenFiles.count == 1)
+    let newSnapshot = try Data(contentsOf: snapshotURL)
+    let decoded = try JSONDecoder().decode(CollectionExportRecordStore.Snapshot.self, from: newSnapshot)
+    #expect(decoded.placements.isEmpty)
+    #expect(decoded.records.isEmpty)
+  }
+
+  /// `resetToEmpty()` on a `.ready` store is a no-op (defensive — a generic alert handler
+  /// can call it without first checking state).
+  @Test func resetToEmptyOnReadyStoreIsNoop() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    store.configure(for: "dest-noop")
+    #expect(store.state == .ready)
+    let p = albumPlacement()
+    store.upsertPlacement(p)
+    #expect(store.placement(id: p.id) != nil)
+
+    store.resetToEmpty()
+    // State unchanged; in-memory state preserved.
+    #expect(store.state == .ready)
+    #expect(store.placement(id: p.id) != nil)
+  }
+
+  /// Quit-and-relaunch path: a `.failed` store re-loads the same corrupt file on the next
+  /// configure and stays `.failed`. There is no silent reset.
+  @Test func relaunchOnCorruptSnapshotStaysFailed() throws {
+    let (dir, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let destDir = dir.appendingPathComponent("dest-relaunch")
+    try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+    let snapshotURL = destDir.appendingPathComponent(
+      CollectionExportRecordStore.Constants.snapshotFileName)
+    try Data("garbage".utf8).write(to: snapshotURL)
+
+    let store1 = CollectionExportRecordStore(baseDirectoryURL: dir)
+    store1.configure(for: "dest-relaunch")
+    #expect(store1.state == .failed)
+
+    // "Relaunch" by constructing a fresh store against the same dir.
+    let store2 = CollectionExportRecordStore(baseDirectoryURL: dir)
+    store2.configure(for: "dest-relaunch")
+    #expect(store2.state == .failed)
+    #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
+  }
+
   // MARK: - ExportPlacement Codable round-trip
 
   @Test func exportPlacementCodableRoundTrip() throws {

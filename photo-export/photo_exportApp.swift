@@ -36,12 +36,12 @@ struct PhotoExportApp: App {
         .environmentObject(exportRecordStore)
         .task {
           // Configure store for current destination (if any) at launch
-          exportRecordStore.configure(for: exportDestinationManager.destinationId)
+          configureRecordStore(for: exportDestinationManager.destinationId)
         }
         .onChange(of: exportDestinationManager.destinationId) { _, newId in
           // Cancel any in-flight exports and reconfigure the per-destination store
           exportManager.cancelAndClear()
-          exportRecordStore.configure(for: newId)
+          configureRecordStore(for: newId)
         }
     }
     .commands {
@@ -58,6 +58,29 @@ struct PhotoExportApp: App {
     }
     .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
+  }
+
+  /// Runs the per-destination directory coordinator (Phase 0 lazy migration) and then
+  /// reconfigures the record store. This single hop keeps the legacy `<oldId>` → `<newId>`
+  /// rename centralized so future stores (Phase 1's collection store) can configure in any
+  /// order without orphaning the legacy directory.
+  private func configureRecordStore(for newId: String?) {
+    guard let newId else {
+      exportRecordStore.configure(for: nil)
+      return
+    }
+    let coordinator = ExportRecordsDirectoryCoordinator(
+      storeRootURL: exportRecordStore.storeRootURL)
+    let result = coordinator.prepareDirectory(
+      for: newId,
+      legacyId: exportDestinationManager.currentLegacyDestinationId()
+    )
+    if case .failure(let error) = result {
+      // Coordinator already logged the specifics; the record store still configures so
+      // export controls reflect whatever state is on disk.
+      _ = error
+    }
+    exportRecordStore.configure(for: newId)
   }
 }
 

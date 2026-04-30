@@ -1,7 +1,22 @@
 # Collections Export Plan
 
 Date: 2026-04-30
-Status: Proposed (sibling collection-records store; no migration; album rename and album sidecar deferred)
+Status: In progress (sibling collection-records store; no migration; album rename and album sidecar deferred)
+
+## Implementation Status
+
+Tracked per phase. Each phase lands as one or more commits on the `collections-export` branch.
+
+| Phase | Status | Notes |
+|---|---|---|
+| 0. Stable destination identity | ✅ Done | volume-UUID-based id; `ExportRecordsDirectoryCoordinator` handles legacy migration |
+| 1. Type/queue plumbing + new collection store | ⬜ Not started | Behind `enableCollections == false` |
+| 2. PhotoKit collection discovery | ⬜ Not started | — |
+| 3. ExportManager and destination collection-aware | ⬜ Not started | — |
+| 4. UI + docs | ⬜ Not started | Flips `enableCollections` to `true` |
+
+The whole feature ships to the App Store only when Phase 4 is ready; phases 1–3 stay behind the feature flag for
+internal/dev testers in the meantime (see *Release strategy* in the Summary).
 
 ## Summary
 

@@ -215,9 +215,48 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     validate(url: url)
   }
 
-  private func computeDestinationId(from bookmarkData: Data) -> String {
+  /// Derives a stable `destinationId` for a folder URL.
+  ///
+  /// The id is `SHA-256(volumeUUID || U+0000 || canonicalPath)`. Survives bookmark refresh on
+  /// the same drive. Changes only when the volume is reformatted, the folder is moved to a
+  /// different volume, or the user duplicates the folder via Finder.
+  ///
+  /// Returns `nil` when the volume identifier cannot be read (typically because the drive is
+  /// unmounted). Callers treat this as "destination not yet available" and wait for the volume
+  /// to mount.
+  static func computeDestinationId(for url: URL) -> String? {
+    let resolved = url.resolvingSymlinksInPath()
+    let keys: Set<URLResourceKey> = [.volumeUUIDStringKey, .volumeIdentifierKey]
+    guard let values = try? resolved.resourceValues(forKeys: keys) else { return nil }
+    let volumeId: String
+    if let uuid = values.volumeUUIDString {
+      volumeId = uuid
+    } else if let identifier = values.volumeIdentifier {
+      // `volumeIdentifier` is `(NSCopying & NSSecureCoding & NSObjectProtocol)?`; its description is
+      // the platform's stable token for the volume.
+      volumeId = String(describing: identifier)
+    } else {
+      return nil
+    }
+    let combined = volumeId + "\u{0000}" + resolved.path
+    let digest = SHA256.hash(data: Data(combined.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Pre-Phase-0 destination-id derivation: SHA-256 of the security-scoped bookmark bytes.
+  /// Kept around exclusively so `ExportRecordsDirectoryCoordinator` can locate legacy
+  /// `ExportRecords/<oldId>/` directories during the lazy migration.
+  static func legacyDestinationId(from bookmarkData: Data) -> String {
     let digest = SHA256.hash(data: bookmarkData)
     return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Returns the legacy `<oldId>` for the currently selected folder, or `nil` if no bookmark
+  /// is stored. Used by `ExportRecordsDirectoryCoordinator` during destination configure to
+  /// decide whether a legacy `ExportRecords/<oldId>/` directory needs renaming.
+  func currentLegacyDestinationId() -> String? {
+    guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else { return nil }
+    return Self.legacyDestinationId(from: data)
   }
 
   private func saveBookmark(for url: URL) -> Bool {
@@ -228,7 +267,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         relativeTo: nil
       )
       userDefaults.set(data, forKey: bookmarkDefaultsKey)
-      destinationId = computeDestinationId(from: data)
       return true
     } catch {
       logger.error(
@@ -254,8 +292,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       if isStale {
         logger.info("Bookmark data is stale; attempting to re-save")
         _ = saveBookmark(for: url)
-      } else {
-        destinationId = computeDestinationId(from: data)
       }
       selectedFolderURL = url
       validate(url: url)
@@ -301,6 +337,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       statusMessage = "Export folder is read-only"
     } else {
       statusMessage = nil
+    }
+
+    // Derive the stable destinationId once the volume is reachable. When the drive is
+    // unmounted, volume-resource keys are unreadable; clear the id so the rest of the app
+    // treats the destination as unavailable until the drive comes back.
+    if isAvailable {
+      destinationId = Self.computeDestinationId(for: url)
+    } else {
+      destinationId = nil
     }
   }
 

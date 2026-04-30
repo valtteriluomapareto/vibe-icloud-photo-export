@@ -36,7 +36,11 @@ final class ExportRecordStore: ObservableObject {
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
-  private let storeRootURL: URL
+  /// Base directory containing per-destination subdirectories
+  /// (`<App Support>/<bundleId>/ExportRecords/`). Exposed for
+  /// `ExportRecordsDirectoryCoordinator`, which needs to manage
+  /// the per-destination subdirectory before this store configures.
+  let storeRootURL: URL
   private var currentStoreDirURL: URL?
 
   private var logFileURL: URL? {

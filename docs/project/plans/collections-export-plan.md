@@ -1,7 +1,7 @@
 # Collections Export Plan
 
 Date: 2026-04-30
-Status: Proposed (simplified after triple-review)
+Status: Proposed (sibling collection-records store; no migration; album rename and album sidecar deferred)
 
 ## Summary
 
@@ -28,17 +28,32 @@ Timeline and collection exports must be independent. Exporting an asset to `2026
 `Collections/Favorites/` or `Collections/Albums/<album>/`, and exporting from a collection must not affect timeline
 progress. Duplicate physical files are intentional when the same Photos asset appears in multiple export placements.
 
-The architectural change is a v2 record store: state moves from asset-scoped to placement-scoped. v1 records are keyed
-by `PHAsset.localIdentifier`; v2 records are keyed by a `(placementId, assetId)` tuple, with variants nested inside the
-record. A one-time, crash-safe migration converts existing v1 timeline records to v2 timeline records; v1 files remain
-on disk as a frozen backup.
+The architectural change is **a second, sibling record store for collections**, not a rewrite of the existing one.
+Independence is a property of disjoint key spaces: timeline records continue to live in the existing
+`export-records.json`/`.jsonl` (asset-keyed, unchanged on disk and in API), and a new
+`collection-records.json`/`.jsonl` holds collection records keyed by `(placementId, assetId)`. The two stores
+never share keys, so a failed favorites export is physically incapable of touching a timeline record for the
+same asset. The existing timeline store is untouched on upgrade; the collection store starts empty.
 
-This plan is bigger than it first appears. Phase 1 alone touches `ExportManager`, `ExportRecordStore`,
-`BackupScanner`, and most of the test suite, because every place that currently keys by asset id has to gain a
-placement parameter. Phase 0 (stable destination identity) is a prerequisite: today's bookmark-hash-based
-`destinationId` can change on bookmark refresh and silently orphan the record store, which is acceptable
-pre-collections (recoverable via `Import Existing Backup`) but not after (collection state is not on-disk-
-recoverable). Realistic effort: 6–9 weeks across all phases.
+The shared JSONL+snapshot machinery in `ExportRecordStore` is extracted into a reusable component (parameterized
+over filenames and codable types) that both stores compose. `ExportManager` queues placement-aware jobs and
+routes reads and writes to the right store based on `placement.kind`. The reuse-source copy path queries both
+stores in deterministic order (timeline first, then collection) when looking up a prior `.done` record.
+
+Phase 0 (stable destination identity) is a prerequisite: today's bookmark-hash-based `destinationId` can change
+on bookmark refresh and silently orphan the record store, which is acceptable pre-collections (recoverable via
+`Import Existing Backup`) but not after (collection state is not on-disk-recoverable).
+
+The plan defers two pieces of work to follow-up plans: an interactive album-rename UX (MVP behavior is "rename
+in Photos = new placement at the new path; old folder stays") and the `_album.json` membership sidecar
+(speculative metadata; nothing in the app reads it). Both can land later without changing the schema.
+
+**Release strategy.** No App Store release until **all four phases are ready**. Phases 1–3 land in `main` but
+stay behind `AppFlags.enableCollections == false` for the duration; only internal/dev testers see the new code
+paths during the ramp. Phase 4 is the gate: when its UI, the corruption alert presenter, and the docs are all
+ready, `enableCollections` flips to `true` and the next App Store build ships collections to all users. This
+avoids the Phase 1 → Phase 4 user-visible window where a `.failed` collection store could otherwise produce
+silent false-success exports for real users.
 
 ## Goals
 
@@ -46,31 +61,32 @@ recoverable). Realistic effort: 6–9 weeks across all phases.
 - Keep the current year/month sidebar under `Timeline`.
 - Under `Collections`, show:
   - `Favorites`
-  - `Recent` (the Photos "Recently Added" smart album)
   - `Albums`
   - one row per user album, preserving folder nesting when available.
-- Allow queueing exports from months, years, favorites, recent, and individual albums in one session.
-- Write collections under `Collections/Favorites/`, `Collections/Recent/`, and `Collections/Albums/...`.
+- Allow queueing exports from months, years, favorites, and individual albums in one session.
+- Write collections under `Collections/Favorites/` and `Collections/Albums/...`.
 - Keep timeline and collection export completion state completely independent.
 - Preserve the existing edited/originals export-version behavior for every export placement.
 - Use APFS file clones to avoid disk-doubling when both timeline and a collection contain the same asset and the
   destination is on APFS; copy on non-APFS filesystems.
-- Write a JSON sidecar (`_album.json`) inside each collection placement folder (Favorites, Recent, every album)
-  so collection membership is preserved alongside the photos themselves.
-- Migrate existing users' export state through a one-time v1 → v2 conversion.
+- Leave existing timeline export state untouched on upgrade — no migration, no schema rewrite, no re-export.
 - Keep PhotoKit types behind protocol/model boundaries so views and the export pipeline remain testable.
 
 ## Non-Goals
 
-- Restoring album membership back into Photos automatically (the JSON sidecar is enough metadata for a future
-  "restore to Photos" tool, but writing such a tool is out of scope).
-- Exporting smart albums beyond `Favorites` and `Recently Added` in the first pass.
+- Restoring album membership back into Photos automatically. A future "restore to Photos" tool would consult
+  the collection store's records on disk, but writing such a tool is out of scope.
+- Exporting smart albums beyond `Favorites` in the first pass. ("Recently Added" was considered and dropped:
+  Timeline → most-recent-month already serves "back up new stuff" with cleaner semantics — sliding-window smart
+  albums force UI compromises like suppressed completion badges and folder names that drift from contents over
+  time.)
 - Automatically deleting files when an album is removed in Photos.
 - Adding a new closed-app background export process.
 - Changing the existing timeline folder layout.
 - Auto-sync of collections. Auto-sync (per `auto-sync-background-sync-plan.md`) remains timeline-only.
-- Supporting downgrade from a v2 build back to a pre-collections build (v2 is one-way; v1 files are frozen post-
-  migration as a passive backup but no compatibility is claimed).
+- Unifying the timeline and collection records into a single store. Two sibling stores are intentional: the
+  timeline store keeps its current asset-keyed shape and API; the collection store is placement-keyed. A future
+  unification, if ever needed, would be a fresh plan with its own migration.
 - `Export All` covering collections. `Export All` remains timeline-scoped. A future `Export All Collections` action,
   if added, will be explicit.
 - Backfilling collection placement records from existing files via `Import Existing Backup`. Import remains
@@ -80,15 +96,17 @@ recoverable). Realistic effort: 6–9 weeks across all phases.
 
 This plan's value lives in this section. Each item below changed the design.
 
-- **Migration is the highest-risk step.** v2 is written atomically (`.tmp` + rename + fsync). v1 files are preserved
-  untouched and become read-only post-migration; the v2 store never writes to v1. If v2 fails to decode at startup,
-  the loader surfaces an error alert with the file path and disables exports until the user removes the corrupted
-  file (whereupon the migration re-runs from v1, which is still intact). (See *Migration*.)
-- **Album rename moves the folder, by default.** Renaming an album in Photos is a user-initiated rename; the
-  expected behavior is for the corresponding folder on disk to follow. The rename dialog defaults to "Rename
-  existing folder," which moves `Collections/Albums/<old>/` to `Collections/Albums/<new>/` and rewrites placement
-  records to point at the new path. The secondary action ("Create new folder, leave old") is the previous behavior
-  for users who want it. Records and on-disk layout stay in sync. (See *Product Behavior → Album Rename UX*.)
+- **No migration; two stores side by side.** The existing `ExportRecordStore` keeps its asset-keyed shape, files,
+  and API for timeline records. A new `CollectionExportRecordStore` holds favorites + album records keyed by
+  `(placementId, assetId)`. Independence is a property of disjoint key spaces, not of a unified schema, so two
+  stores satisfy the guarantee with no migration risk. If the collection store's snapshot fails to decode at
+  startup, the alert in the Phase 4 UI surfaces it and disables collection export controls; timeline export is
+  unaffected. (See *Storage Files* and *Collection Store Format*.)
+- **Album rename creates a new placement; the old folder stays.** Renaming an album in Photos changes the
+  resolver's `displayPathHash8`, so the next export of that album writes to a fresh placement at the new path.
+  The previous placement and its on-disk folder remain. A "merge old folder into new" UX is deferred to a
+  follow-up plan; the placement-id format already detects renames and the future plan adds the dialog and file
+  move without changing the schema. (See *Album Rename Behavior*.)
 - **Manual filesystem edits are not detected.** Records are the source of truth for "what is exported where." If a
   user moves, renames, or deletes folders or files in the destination through Finder, the next export will write to
   the path the records remember, which may surprise the user. `Import Existing Backup` is the only recovery path,
@@ -99,9 +117,12 @@ This plan's value lives in this section. Each item below changed the design.
   a real copy and a 50k-asset / 100-album library can grow disk use 3–5×. The plan does not depend on cloning
   succeeding — if a macOS regression ever made `copyItem` always copy, exports still work; they just use more
   disk on APFS than expected. Verified at test time via volume free-space delta.
-- **`ExportManager` refactor is invasive.** ~981 lines today, queue keyed by year/month strings, jobs carry year/month
-  inline. Phase 1 rewires the queue and persistence to placement-keyed even though only timeline placements exist
-  yet. This is unavoidable — bolting collections on top of an asset-scoped store creates cross-scope corruption.
+- **`ExportManager` refactor is moderate, not invasive.** ~981 lines today, queue keyed by year/month strings, jobs
+  carry year/month inline. The queue and `ExportJob` gain a `placement` field so collection jobs can be enqueued
+  alongside timeline jobs, and reads/writes route to the right store based on `placement.kind`. Existing timeline
+  call sites that key by `(year, month)` keep their signatures — they are wrapped to construct the synthetic
+  timeline placement internally and route to the unchanged timeline store. No persistence-side rewrite of the
+  timeline store is required.
 - **Album titles can produce path collisions.** Sibling collisions (two albums named the same in the same parent
   folder) are detected and disambiguated with a `_2` / `_3` numeric suffix. We do not detect cross-tree case-fold
   collisions in the MVP — they are vanishingly rare in personal libraries and the cost of building reliable
@@ -111,10 +132,11 @@ This plan's value lives in this section. Each item below changed the design.
   (the rename action moves files and rewrites records). Deleting an album in Photos still leaves the placement
   record behind; disk cost is negligible (a few KB) and the descriptor tree drives sidebar display. Cleanup of
   deleted-album placements is out of scope for the MVP.
-- **Storage scaling.** With normalized placements (placement metadata stored once, records reference by id),
-  snapshot size is dominated by `Σ placements records`, not `placements × assets`. Compaction threshold (currently
-  1000 mutations) stays unchanged; profile during Phase 1 and tune if snapshot writes on slow USB targets become
-  noticeable. Worst-case a 50k-asset / 100-album library is on the order of single-digit MB.
+- **Storage scaling.** The timeline store's size profile is unchanged from today. The new collection store
+  normalizes placements (placement metadata stored once, records reference by id), so its snapshot size is
+  dominated by `Σ placements records`, not `placements × assets`. Compaction threshold (currently 1000 mutations)
+  is reused per store; profile during Phase 1 and tune if snapshot writes on slow USB targets become noticeable.
+  Worst-case a 50k-asset / 100-album library is single-digit MB across both stores.
 - **Auto-sync interaction.** When auto-sync ships, it enumerates timeline placements only. Collection exports —
   which can prompt for rename confirmation and write large numbers of files — stay user-triggered.
 - **Destination identity must be stable before this ships.** Today `destinationId` is a SHA-256 of the bookmark
@@ -123,7 +145,7 @@ This plan's value lives in this section. Each item below changed the design.
   user could re-run `Import Existing Backup` to recover. Post-collections, that path is timeline-only — collection
   state cannot be reconstructed from disk. A bookmark refresh would silently orphan the user's collection
   records. The `auto-sync-background-sync-plan.md` already calls this out as a prerequisite for that feature; it
-  is now a prerequisite for this one too. **Phase 0 (below) addresses it before any v2 work begins.**
+  is now a prerequisite for this one too. **Phase 0 (below) addresses it before the collection store ships.**
 - **`ContentView` is too coupled to do this in place.** Sidebar logic moves out before adding the Collections branch.
 
 ## PhotoKit API Shape
@@ -136,14 +158,6 @@ Relevant PhotoKit routes:
 - Favorites can be fetched either with a `PHFetchOptions` predicate (`favorite == YES`) or through the smart album
   (`PHAssetCollectionSubtype.smartAlbumFavorites`). Use the predicate for the MVP — the desired output placement is
   fixed and we do not need smart-album metadata.
-- Recently Added is the smart album `PHAssetCollectionSubtype.smartAlbumRecentlyAdded`. Fetch via the smart-album
-  API (no predicate equivalent). Photos defines the lookback window (~30 days) and may shift it; the export simply
-  writes whatever Photos currently returns at the time of each run. The placement is `Collections/Recent/`. **The
-  folder accumulates over time:** each export run adds whatever Photos currently considers Recently Added; files
-  are not removed when an asset falls out of the window. After a year of monthly Recent exports, the folder
-  reflects "all assets that were ever Recently Added at the times you exported," not "currently Recently Added."
-  The `_album.json` sidecar makes this transparent — it lists what is on disk now, derived from the placement's
-  `.done` records. This is documented behavior, not auto-cleaned.
 - User albums are `PHAssetCollection` values with `assetCollectionType == .album`.
 - Fetch album contents with `PHAsset.fetchAssets(in:options:)`.
 - Fetch top-level folders/albums with `PHCollection.fetchTopLevelUserCollections(with:)`.
@@ -187,74 +201,38 @@ Add a segmented control at the top of the main UI:
 
 - Render a `Collections` sidebar:
   - `Favorites`
-  - `Recent`
   - `Albums`
     - `<album rows, nested by folder path where possible>`
-- Selecting `Favorites` / `Recent` shows the corresponding asset grid and an `Export Favorites` / `Export Recent`
-  action.
+- Selecting `Favorites` shows its asset grid and an `Export Favorites` action.
 - Selecting an album shows its asset grid and an `Export Album` action.
 - Albums that resolve to the same display title under different folders remain distinct in state and on disk.
 
-### Album Rename UX
+### Album Rename Behavior
 
-When the user renames an album in Photos.app, the user-expected behavior is for the corresponding folder on disk to
-follow. The dialog reflects that.
+MVP behavior is "rename in Photos = new placement at the new path; the old folder stays on disk." When a user
+renames an album in Photos.app, the resolver's `displayPathHash8` segment changes, so the next export of that
+album resolves to a fresh placement (different placement id, different `relativePath`). The previous placement
+remains in the collection store and its files remain on disk; nothing is moved.
 
-**When to show.** A prior placement record exists for the same `collectionLocalIdentifier` with a different
-`relativePath`, **and** that prior placement has at least one variant in `.done` status. (Suppress the dialog when
-the prior placement has no `.done` variants — there are no files in the old folder to worry about.) If multiple
-prior placements exist (multi-rename chain), show only the most recent.
+**Rationale.** Users in the field who rename albums get a working export to the new folder without an interactive
+prompt. They can move or delete the old folder in Finder if they want; the app does not auto-clean. Building a
+rename dialog with pre-flight checks, multi-state copy variants, atomic file move, and a `renamePlacement` log op
+is multi-day work that can land in a follow-up plan if user feedback asks for it. The MVP rule is the simplest
+correct behavior — no data loss, no surprising file moves, recoverable by the user.
 
-**Pre-flight checks** (run before the dialog opens; gate the primary action):
+**Cost users will see.** If a user renames an album they have already exported, they end up with two folders on
+disk: the old one (frozen at the rename moment) and the new one (continuing to receive exports). The
+*Collections > Albums* sidebar is **driven by the PhotoKit descriptor tree**, so it shows only the renamed
+album (one row, at the new name). The stale placement record stays in the collection store and the old folder
+stays on disk, but neither has a sidebar row — there is no live PhotoKit collection to anchor one. Users
+discover the old folder when they next browse the destination in Finder. The release notes for the collections
+launch must call this out explicitly so users aren't surprised. Cleanup of stale placements after album
+deletion or rename is out of scope for this plan; a future "manage exported folders" UI could surface them.
 
-- **Any export work active (any placement)** → primary action is disabled with a tooltip "Wait for exports to
-  finish or cancel them, then rename." The current `ExportManager` has a single global queue and a single
-  `currentTask`/generation counter, so cancelling work for "just this placement" isn't possible without a
-  placement-scoped cancellation mechanism that this plan does not introduce. Disabling rename while any work is
-  in flight is the simplest correct rule for the MVP. (Per-placement cancel is a future enhancement.)
-- Anything already exists at the new path on disk:
-  - If it's another placement's recorded folder → primary action disabled, tooltip "<other album> already lives at
-    that path."
-  - If it's an unknown directory or file (e.g. user pre-created in Finder) → primary action disabled, tooltip
-    "A folder/file at the new path already exists. Move or rename it in Finder before continuing."
-- Old folder is missing from disk → see "States" below.
-
-**States the dialog presents copy for:**
-
-| Old folder on disk | Dialog primary copy |
-|---|---|
-| Present (normal case) | "Move <N> files from `<old>/` to `<new>/` and update records. *(Recommended)*" |
-| Missing (user deleted it manually, or a prior partial rewrite already moved it) | "Update records to match the folder that already exists at `<new>/`. No files will be moved." |
-
-**Dialog actions** (in display order; "Rename existing folder" / "Update records" is the default):
-
-1. **Rename existing folder** *(default; primary copy varies as above)*.
-   - If old folder present: `FileManager.moveItem(at: <old>, to: <new>)`, then issue a `renamePlacement` log op.
-   - If old folder missing but new folder present: skip the move, issue `renamePlacement` only. Records now point
-     at the on-disk reality.
-   - If both old and new folders are missing: issue `renamePlacement` only; the next export will materialize the
-     new folder.
-2. **Create new folder, leave old**. The previous behavior. A new placement is created at the new path; the old
-   placement remains; future exports go to the new folder; the old folder remains untouched on disk. Use this when
-   the user wants to keep both for some reason.
-3. **Cancel**. No change to records or disk.
-
-**Atomicity.** Because the pre-flight check requires the queue to be idle for the entire app, no concurrent job
-can touch the old placement during the action. The rename simply does:
-
-1. `FileManager.moveItem(at: oldURL, to: newURL)` (or skip if old is missing on disk).
-2. Append a single `renamePlacement` log line carrying the old id and the new placement metadata.
-3. Rewrite the placement's `_album.json` sidecar at the new path immediately, best-effort. (Otherwise the moved
-   sidecar still names the old title/path until the next export run drains.)
-
-If the move fails, no log line is written and the dialog surfaces the error. If the log write fails after a
-successful move, the next launch finds files at the new path and records still pointing at the old — the rename
-detector fires again, and on re-entry the "old folder missing, new folder present" state is detected and the
-dialog presents the "Update records" copy. The user confirms once more and the rewrite completes.
-
-The detector's input is "prior placement record (`collectionLocalIdentifier` X, `relativePath` Y) and current
-album in Photos with displayed path Z, where `displayPathHash8(Z) ≠ displayPathHash8(Y)`." That fires regardless
-of whether the old folder is on disk; the dialog adapts copy and pre-flight checks to the disk state.
+**What's deferred to a follow-up plan.** A "merge old folder into new" UX with a dialog, file moves, and a
+`renamePlacement` log op. The placement-id format already supports detecting renames (the `displayPathHash8`
+segment), so the follow-up plan does not need to reshape the schema — it adds the dialog, the move logic, and
+the log op without breaking existing records.
 
 ### Queueing
 
@@ -269,82 +247,17 @@ Relative directories:
 ```text
 timeline month:      <YYYY>/<MM>/
 favorites:           Collections/Favorites/
-recent:              Collections/Recent/
 album:               Collections/Albums/<sanitized folder path>/<sanitized album title>/
 ```
-
-Each collection placement folder contains a sidecar metadata file `_album.json` (see *Album Sidecar*). The
-sidecar is rewritten at the end of each export run.
 
 The destination must reject any `relativePath` that escapes the export root after canonicalization (no `..`, no
 absolute paths, no symlink traversal at write time).
 
-### Album Sidecar
-
-Each collection placement writes a small JSON sidecar to its folder root after export completes. This preserves
-album membership alongside the photos themselves, so a backup folder is more than just a pile of files.
-
-Filename: `_album.json`. The leading underscore puts it at the top of an alphabetical Finder listing and signals
-"this is metadata for the folder."
-
-```json
-{
-  "version": 1,
-  "kind": "album",
-  "title": "Trip 2024",
-  "displayPath": "Family/Trip 2024",
-  "folder": "Collections/Albums/Family/Trip 2024/",
-  "phLocalIdentifier": "ABC-123-…",
-  "exportedAt": "2026-04-30T14:00:00Z",
-  "assets": [
-    { "phLocalIdentifier": "X1/L0/001",
-      "variants": { "original": "IMG_0001.HEIC" } },
-    { "phLocalIdentifier": "X1/L0/002",
-      "variants": { "original": "IMG_0002_orig.HEIC", "edited": "IMG_0002.HEIC" } }
-  ]
-}
-```
-
-The `variants` object maps variant name (`"original"` or `"edited"`) to the file's actual filename in the folder.
-This survives partial success: an `editedWithOriginals` run that exports `_orig` first and then fails the edited
-variant produces `{ "original": "IMG_0002_orig.HEIC" }` only, accurately. There is no `filename` /
-`originalCompanion` ambiguity to resolve. The `variants` keys mirror `ExportVariant.rawValue`.
-
-For unedited assets, the natural-stem file is the original (e.g. `IMG_0001.HEIC`), so the typical entry has
-`variants.original` only. For edited assets in `editedWithOriginals` mode, the user-visible natural-stem file is
-the edited rendering and the `_orig` companion (per `ExportFilenamePolicy.originalSuffix`) carries the original
-bytes, so `variants.original` is the `_orig` filename and `variants.edited` is the natural-stem filename. There
-is no `_edited` filename pattern in this codebase.
-
-`kind` is one of `"album"`, `"favorites"`, `"recent"`. For `favorites` and `recent`, `phLocalIdentifier` and
-`displayPath` are omitted; `title` is `"Favorites"` or `"Recent"`. The `folder` field is the placement's
-on-disk path relative to the destination root and disambiguates two same-titled albums whose folders differ only
-by a `_2`/`_3` collision suffix.
-
-**Source of truth for the sidecar.** Sidecars are written from the **placement's `.done` records as of the end of
-the export run**, *not* from a re-fetched Photos snapshot. Specifically, the writer iterates
-`records[placementId]`, picks records with at least one `.done` variant, and emits one entry per record with the
-filename(s) actually on disk. This avoids the enqueue-versus-write race (Photos can mutate the album mid-run) and
-means the sidecar always describes files that actually exist alongside it.
-
-Consequence: sidecar contents diverge from current Photos album membership over time. If a user removes a photo
-from an album in Photos, the photo's `.done` record under that placement is unchanged (we don't auto-delete files
-on album-membership changes), so the sidecar continues to list it. This is the documented behavior — the sidecar
-is a manifest of "what was exported here," not "what is in this Photos album right now." Tools that want the
-latter can query Photos themselves.
-
-**When the sidecar is written.** The sidecar is rewritten when the export queue *drains* — there are no more
-pending or in-flight jobs targeting the placement. This fires on natural completion, on cancellation (whatever
-reached `.done` before the cancel), and on resume-then-completion. It does **not** fire mid-run, on pause, on
-per-job failure, or on app quit mid-run. A failed run that completes draining still rewrites the sidecar; entries
-reflect whichever assets reached `.done`.
-
-Sidecars are best-effort: a failed sidecar write does not fail the export run, just logs a warning. Sidecars are
-rewritten on every drain from the current placement state, so manual edits to the file are overwritten on the
-next drain.
-
-Sidecars are **not** read by the app. They are output for the user's benefit and for hypothetical future tools
-(restore-to-Photos, audit, etc.). Phase 5 documents the schema.
+Album-membership sidecars (`_album.json`) are **deferred** to a follow-up plan. They were originally proposed
+to preserve album membership alongside the exported photos as forward-looking metadata for a hypothetical
+restore-to-Photos tool, but nothing in the app reads them and no concrete consumer exists today. The collection
+records on disk capture which assets were exported under which placement; that's enough state for any future
+sidecar/manifest writer to materialize without changing the on-disk format.
 
 ## Path Policy
 
@@ -379,11 +292,9 @@ The policy intentionally does **not**:
 - Cap component length. Common filesystems allow 255 bytes; album titles longer than that are not realistic.
 - Detect cross-tree case-fold collisions. Sibling-only collisions (two albums with the same name in the same parent
   folder) are detected (next section); cross-tree case-only collisions are not. The build-up complexity of NFC +
-  case-fold over the whole sanitized tree is not justified by the user-visible value. **Make the failure mode
-  observable:** when a collection export's first write to its placement folder finds an existing `_album.json`
-  whose `phLocalIdentifier` differs from the current placement's `collectionLocalIdentifier`, log a warning and
-  surface a per-placement diagnostic in the UI ("This folder appears to belong to another album"). The export
-  proceeds; the warning is informational.
+  case-fold over the whole sanitized tree is not justified by the user-visible value. The failure mode (two
+  case-only-different albums writing into the same folder on a case-insensitive filesystem) is rare and
+  recoverable by the user manually renaming one album in Photos.
 
 ### Disambiguation
 
@@ -437,14 +348,12 @@ enum LibrarySection: String, Codable, Sendable {
 enum LibrarySelection: Hashable, Sendable {
   case timelineMonth(year: Int, month: Int)
   case favorites
-  case recent
   case album(collectionId: String)
 }
 
 enum PhotoFetchScope: Hashable, Sendable {
   case timeline(year: Int, month: Int?)
   case favorites
-  case recent
   case album(collectionId: String)
 }
 ```
@@ -458,7 +367,6 @@ headers and empty states without implying an exportable query.
 struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
   enum Kind: String, Codable, Hashable, Sendable {
     case favorites
-    case recent
     case album
     case folder
   }
@@ -533,7 +441,6 @@ struct ExportPlacement: Codable, Hashable, Sendable {
   enum Kind: String, Codable, Hashable, Sendable {
     case timeline
     case favorites
-    case recent
     case album
   }
 
@@ -549,8 +456,9 @@ struct ExportPlacement: Codable, Hashable, Sendable {
 }
 ```
 
-All fields are `let`. There is no mutable `lastDoneAt`: "most recent done" is computed lazily by the store from
-record `exportDate`s (see *Mutation API → priorPlacements*). This avoids the cross-mutation atomicity problem (a
+All fields are `let`. There is no mutable `lastDoneAt`: "most recent done" is computed lazily by the collection
+store from record `exportDate`s (see *Two Stores: API Surface → Collection store*). This avoids the cross-mutation
+atomicity problem (a
 `done` write plus a separate `touchPlacementLastDone` log line could land out of sync after a crash) and keeps the
 struct safely usable in `Set` / dictionary keys.
 
@@ -558,12 +466,15 @@ There is no stored `pathPolicyVersion`. The path policy is committed-to and froz
 changes, the change will land in a future plan that explicitly handles existing placements. Today, `relativePath`
 on every record *is* the placement's recorded path — that's all we need.
 
-For belt-and-braces clarity: `ExportPlacement`'s identity is `id`. The synthesized `Hashable` and `Equatable` over
-all `let` fields is consistent because no field can drift after construction; if a future change adds a mutable
-field, switch to manual conformances over `id` only.
+**Identity is `id`; conformances are manual.** `ExportPlacement` defines `Hashable` and `Equatable` manually
+over `id` only — *not* via Swift's synthesized conformance. Two placements with the same `id` but different
+`createdAt` (one freshly constructed, one decoded from disk) must compare equal; synthesized conformance over
+all `let` fields would say they differ. The `createdAt` field is diagnostic, not part of identity. Manual
+conformance from day one avoids the footgun where a placement passed in for lookup is rejected because its
+`createdAt` is `Date()` rather than the persisted timestamp.
 
-**`displayName` rules.** This is the only string the rename dialog and diagnostic logs show to the user;
-`relativePath` is sanitized and `id` is opaque, so neither is suitable.
+**`displayName` rules.** This is the human-readable label used in diagnostic logs (and any future rename
+dialog); `relativePath` is sanitized and `id` is opaque, so neither is suitable.
 
 - Timeline: `"<year>/<MM>"` (e.g. `"2025/02"`).
 - Favorites: `"Favorites"`.
@@ -572,17 +483,16 @@ field, switch to manual conformances over `id` only.
   in `displayName` — the U+0000-separated hash in the placement id is what disambiguates structural nesting from
   an in-title slash.
 
-Albums whose titles contain `/` produce ambiguous `displayName` strings (the rename dialog cannot tell whether
-`A/B` means "nested folder A containing album B" or "single album with `/` in its title"). This is accepted as a
-niche edge case rather than introducing escape syntax — the placement id (which uses U+0000 separators) keeps the
-underlying state correct; only the human-readable display in the rename dialog is ambiguous in this corner.
+Albums whose titles contain `/` produce ambiguous `displayName` strings (a reader cannot tell whether `A/B`
+means "nested folder A containing album B" or "single album with `/` in its title"). This is accepted as a niche
+edge case rather than introducing escape syntax — the placement id (which uses U+0000 separators) keeps the
+underlying state correct; only the human-readable display is ambiguous in this corner.
 
 ### Placement IDs
 
 ```text
 timeline:    timeline:<YYYY>-<MM>
 favorites:   collections:favorites
-recent:      collections:recent
 album:       collections:album:<collectionIdHash16>:<displayPathHash8>
 ```
 
@@ -702,26 +612,16 @@ protocol ExportDestination {
 }
 ```
 
-`urlForMonth(year:month:createIfNeeded:)` becomes a wrapper around `urlForRelativeDirectory` for the duration of the
-migration. The implementation must reject any relative path that escapes the export root.
+`urlForMonth(year:month:createIfNeeded:)` becomes a wrapper around `urlForRelativeDirectory`. The implementation
+must reject any relative path that escapes the export root.
 
-**Path validation timing.** Validation runs in `urlForRelativeDirectory` on every write. It also runs at record
-**load** time: any `ExportPlacement` whose `relativePath` fails validation is logged and the placement (and its
-records) are skipped — treated as if absent. This makes a corrupted record visible immediately at startup rather
-than at the first export attempt.
-
-`ExportRecordStore.configure(for:)` today takes only a `destinationId` for store-directory lookup; load-time
-validation needs the actual destination root URL (held by `ExportDestinationManager`). The configure signature
-gains a closure parameter:
-
-```swift
-func configure(for destinationId: String, validate: (String) -> Bool)
-```
-
-`ExportManager` constructs the closure by capturing the current `ExportDestination` and asking it via
-`urlForRelativeDirectory(_, createIfNeeded: false)` (catching escape errors as `false`). When the destination
-root is unavailable (drive disconnected, scoped access not yet started), validation is permissive — placements
-load with their recorded paths intact, and the next write will fail loudly instead of silently dropping records.
+**Path validation timing.** Validation runs in `urlForRelativeDirectory` on every write — that is the single
+guard. There is no load-time path validation closure on `configure`. A corrupted `relativePath` in a stored
+placement surfaces as a loud failure on the first export attempt against that placement, which is acceptable for
+this app: collection placements are user-triggered, so the failure is observable immediately. (The previous draft
+proposed a `configure(for:validate:)` closure to fail-fast at load; it was dropped because it required threading
+the destination root URL through `configure` and complicated handling of disconnected drives, in exchange for
+catching corruption ~minutes earlier.)
 
 Rejected inputs (tested in `ExportDestinationTests`):
 
@@ -751,7 +651,6 @@ func startExportMonth(year: Int, month: Int)
 func startExportYear(year: Int)             // resolves to N timeline placements internally
 func startExportAll()                        // timeline-only; resolves to M timeline placements
 func startExportFavorites()
-func startExportRecent()
 func startExportAlbum(collectionId: String)
 func startExport(selection: LibrarySelection)
 ```
@@ -768,10 +667,81 @@ This is the correctness fix: the previous draft's signature could not represent 
 Queue counts: `queuedCountsByYearMonth: [String: Int]` → `queuedCountsByPlacementId: [String: Int]`. Timeline row
 helpers ask through a wrapper that resolves the timeline placement id from year/month.
 
-### Mutation API on `ExportRecordStore`
+**Routing record mutations to the right store.** With `ExportJob` carrying `placement`, every `markVariant*` and
+`removeVariant` call site in `ExportManager` switches on `placement.kind` to choose `exportRecordStore` (for
+`.timeline`) or `collectionExportRecordStore` (for `.favorites`/`.album`). Affected call sites today, in
+`ExportManager.swift`: 433, 522, 542, 583, 616/618, 657 (verify line numbers before implementing). The
+cancellation-cleanup paths (`cancelAndClear` at 223-247 and the run-loop catch at 531-536) follow the same
+rule, using the in-flight job's placement.
 
-Every read **and** mutation that currently keys by asset id gains a placement parameter. This is non-negotiable: a
-failed favorites export must not corrupt the timeline record for the same asset.
+**In-flight tracking.** Add a third field to track the placement of the job currently in flight:
+
+```swift
+private(set) var currentJobAssetId: String?
+private(set) var currentJobVariant: ExportVariant?
+private(set) var currentJobPlacement: ExportPlacement?   // new
+```
+
+Three separate fields (not a tuple) preserve the existing `private(set)` test surface. Reset
+`currentJobPlacement` everywhere `currentJobAssetId` is reset (231-232, 375-376, 395-396), and assign it
+*before* `currentJobAssetId` at the start-of-job site (388). Widen the catch-block `inFlight` capture (426)
+from `(assetId, variant)` to `(assetId, variant, placement)`.
+
+Cancellation remains global (one `currentTask`, one generation counter); per-placement cancel is out of scope.
+Cross-store independence is testable: enqueue a timeline job and a collection job, cancel mid-flight, assert
+the timeline teardown does not touch the collection store and vice versa.
+
+### Two Stores: API Surface
+
+Independence is enforced by storing timeline and collection records in two physically separate stores with disjoint
+key spaces. The existing `ExportRecordStore` retains its current API for timeline records; a new
+`CollectionExportRecordStore` carries the placement-keyed API for favorites and albums. `ExportManager` consults
+both — routing writes to the appropriate store by `placement.kind`, and querying both during reuse-source lookup —
+but the stores themselves remain ignorant of each other.
+
+`ScopedExportRecord` is the in-memory shape callers use to read and upsert collection records. It joins the
+on-disk `(placementId, assetId)` key with the variants dictionary and the placement object:
+
+```swift
+struct ScopedExportRecord: Sendable, Equatable {
+  let placement: ExportPlacement
+  let assetId: String
+  var variants: [ExportVariant: ExportVariantRecord]   // existing per-variant status/filename/exportDate
+}
+```
+
+It is not persisted as a single blob — on disk, placement metadata lives in the top-level `placements` map and
+the record body is just the variants dict (see *Collection Store Format*).
+
+#### Timeline store (`ExportRecordStore`) — unchanged API
+
+The current asset-keyed API is preserved. Existing call sites
+(`monthSummary(year:month:totalAssets:)`, `yearExportedCount(year:)`,
+`sidebarSummary(year:month:totalCount:adjustedCount:selection:)`, `recordCount(year:month:variant:status:)`,
+`isExported(assetId:)`, etc.) keep their signatures and storage shape. Any "timeline placement" the queue or UI
+needs is a synthetic `ExportPlacement` constructed at the boundary — not persisted as a separate metadata entry.
+The on-disk files (`export-records.json`, `export-records.jsonl`) and their format are unchanged.
+
+The timeline store has no `placement` parameter on its API and therefore does not assert against non-`.timeline`
+placements at the store boundary. Placement-kind policing lives in `ExportManager`'s routing layer (the
+`switch placement.kind` at every record-mutation call site) — a `.favorites` placement reaching the timeline
+store would only happen via a routing bug in `ExportManager`, not via direct caller error. This is asymmetric
+with the collection store (which does assert) but acceptable: the timeline store's API surface is the existing
+asset-keyed one and adding a parameter solely to assert against it would force every existing call site to
+change.
+
+One small tidiness fix while we're touching the queue layer: **`monthSummary(assets:selection:)`** today derives
+`(year, month)` from `assets.first?` and falls back to `Date()` when the array is empty — a latent bug that
+hasn't surfaced because the single call site always passes a non-empty array. The signature gains explicit
+parameters:
+
+```swift
+func monthSummary(year: Int, month: Int, assets: [AssetDescriptor], selection: ExportVersionSelection) -> MonthStatusSummary
+```
+
+The single call site (`MonthContentView`) already owns both values.
+
+#### Collection store (`CollectionExportRecordStore`) — new, placement-keyed
 
 ```swift
 // Placement metadata
@@ -779,8 +749,6 @@ func upsertPlacement(_ placement: ExportPlacement)
 func deletePlacement(id: String)
 func placement(id: String) -> ExportPlacement?
 func placements(matching kind: ExportPlacement.Kind) -> [ExportPlacement]
-func priorPlacements(for collectionLocalIdentifier: String) -> [ExportPlacement]
-func lastDoneAt(for placementId: String) -> Date?
 
 // Record writes (placement must exist)
 func upsert(_ record: ScopedExportRecord)
@@ -791,26 +759,29 @@ func markVariantFailed(assetId: String, placement: ExportPlacement, variant: Exp
                        error: String, at: Date)
 func removeVariant(assetId: String, placement: ExportPlacement, variant: ExportVariant)
 func remove(assetId: String, placement: ExportPlacement)
-func bulkImport(placements: [ExportPlacement], records: [ScopedExportRecord])
 
 // Reads
 func exportInfo(assetId: String, placement: ExportPlacement) -> ScopedExportRecord?
 func isExported(asset: AssetDescriptor, placement: ExportPlacement, selection: ExportVersionSelection) -> Bool
 
 // Scoped queries
-enum PlacementScope {
-  case timeline                     // all timeline:*
+enum CollectionPlacementScope {
   case favorites
-  case recent
   case album(collectionLocalId: String)
-  case anyCollection                // favorites + recent + albums
+  case any                          // favorites + albums
 }
-func recordCount(in scope: PlacementScope) -> Int
+func recordCount(in scope: CollectionPlacementScope) -> Int
 func summary(for placement: ExportPlacement) -> PlacementSummary
-
-// Atomic rename — moves all records from old placement id to new, replaces metadata
-func renamePlacement(from oldId: String, to newPlacement: ExportPlacement)
 ```
+
+The collection store accepts only `.favorites` and `.album` placements; passing a `.timeline` placement is a
+programming error and trips an `assertionFailure` (release: silent drop). An invariant test asserts every record's
+referenced placement has a non-`.timeline` kind. Symmetrically, `ExportManager` never asks the collection store
+about a timeline placement.
+
+`bulkImport` is intentionally **not** part of the collection store. `Import Existing Backup` is timeline-only and
+calls into the timeline store's existing import path; the collection store has no equivalent flow because
+collection placements are not on-disk-recoverable.
 
 `PlacementSummary` reuses the existing `MonthExportStatus` enum (`notExported` / `partial` / `complete`):
 
@@ -820,34 +791,11 @@ struct PlacementSummary: Sendable, Equatable {
   let exportedCount: Int          // assets with at least one .done variant for this placement
   let totalCount: Int             // distinct assets with any record under this placement
   let status: MonthExportStatus
-  let lastDoneAt: Date?           // computed via lastDoneAt(for:)
 }
 ```
 
-**Naming.** `markVariantExported` matches the existing method name (`ExportRecordStore.markVariantExported`). The
-plan keeps it instead of renaming to `markVariantDone` — the rename would touch six test files and a production
-call site for no real gain.
-
-**`lastDoneAt(for:)`** is computed on demand: the maximum `exportDate` across `.done` variants of every record under
-the placement. Cost is O(records under that placement); for a typical album with hundreds of records this is
-microseconds. There is no stored `lastDoneAt` field; no `touchPlacementLastDone` log op; nothing to keep in sync
-across log lines. This eliminates the cross-mutation atomicity hazard a stored field would create.
-
-**`priorPlacements(for:)`** returns every distinct `ExportPlacement` whose `kind == .album` and
-`collectionLocalIdentifier` matches, ordered by `lastDoneAt(for:)` descending (`nil` last). The album-rename UX
-consumes the first entry that has a non-nil `lastDoneAt` (i.e., at least one `.done` record) as the "most recent
-prior placement." If no prior placement has `lastDoneAt`, the dialog is suppressed.
-
-The function is `.album`-only by construction. Favorites and Recent placements have no `collectionLocalIdentifier`
-and use fixed placement ids (`collections:favorites`, `collections:recent`); they cannot be "renamed" in any sense
-visible to the app. The rename-detection codepath is wired to consult `priorPlacements` only for `.album`
-selections; an assertion in the resolver guards against a future refactor accidentally invoking rename detection
-on synthetic kinds.
-
-To keep `priorPlacements` lookup O(1) over the placement set, the store maintains a secondary index
-`placementsByCollectionLocalId: [String: Set<String>]` (values are placement ids). The index is built during load
-and updated on every `upsertPlacement` / `deletePlacement`. The `lastDoneAt(for:)` sort scans records under each
-candidate placement, but candidates per album are small (usually 1, occasionally 2–3 after renames).
+**Naming.** `markVariantExported` matches the existing timeline-store method name. The collection store reuses
+the same name for symmetry and to match the existing test vocabulary.
 
 **`removeVariant`** (variant-level) is distinct from **`remove`** (whole `(assetId, placement)` record). Cancellation
 today removes the in-flight variant only — other variants on the same asset record may still be `.done` and must
@@ -856,82 +804,75 @@ survive.
 **`markVariantPending`** is intentionally absent: the existing pipeline transitions directly
 `inProgress → done | failed` without a persisted `pending` write.
 
-**`bulkImport(placements:records:)`** writes a single `bulkImport` log op (see *v2 Record Store: On-Disk Format →
-Log format*) carrying both arrays. The single-line encoding makes the operation atomic from the recovery
-perspective: either the line is fully written and replayed, or it is truncated mid-line and discarded by the
-malformed-line skip. There is no partial-bulk-import state. Import flow constructs the timeline placements per
-`(year, month)` it encounters and passes both arrays in one call. A record whose `placementId` is not present in
-the supplied `placements` is rejected and logged.
+**Load state and mutation guard.** Each store carries a minimal `RecordStoreState` enum
+(`.unconfigured | .ready | .failed`). All write entry points check `state == .ready` and no-op
+otherwise (with `assertionFailure` in debug; release silently drops the call to avoid crashing on a benign race
+during state transitions). Reads return empty results when not `.ready`. UI disables the corresponding export
+controls based on each store's state — a failure to load the collection store does **not** disable timeline
+export, and vice versa.
 
-**`renamePlacement(from:to:)`** is the atomic rewrite used by the album-rename UX. It records the change as a
-single log line; on replay, the loader moves `records[oldId]` to `records[newPlacement.id]`, deletes the old
-placement entry, and writes the new one. The corresponding on-disk file move is performed by `ExportManager`
-*before* `renamePlacement` is called; if the file move fails, no `renamePlacement` is issued. (See *Album Rename
-UX* for atomicity discussion.)
+**No cross-scope query.** There is intentionally no "is this asset exported anywhere?" API. It invites cross-scope
+coupling and makes the independence guarantee leak. The reuse-source copy path consults both stores explicitly,
+not via a unified accessor.
 
-**Load state and mutation guard.** The store carries a minimal `ExportRecordStoreState` enum
-(`.unconfigured | .ready | .failed(LoadError)`). All write entry points (`upsert`, `upsertPlacement`,
-`markVariant…`, `removeVariant`, `remove`, `bulkImport`, `renamePlacement`, `deletePlacement`) check
-`state == .ready` and no-op otherwise (with `assertionFailure` in debug; release silently drops the call to avoid
-crashing the app on a benign race during state transitions). Reads return empty results when not `.ready`. UI
-disables export controls based on `state`. See *Migration → Loader* for how state transitions on corruption.
+### Storage Files
 
-**Surviving timeline read APIs.** The current store has ~10 year/month-shaped read methods
-(`monthSummary(year:month:totalAssets:)`, `monthSummary(assets:selection:)`, `yearExportedCount(year:)`,
-`sidebarSummary(year:month:totalCount:adjustedCount:selection:)`,
-`sidebarYearExportedCount(year:totalCountsByMonth:adjustedCountsByMonth:selection:)`,
-`recordCount(year:month:variant:status:)`, `recordCountBothVariantsDone(year:month:)`,
-`recordCountEditedDone(year:month:)`, `recordCountOriginalDoneAtNaturalStem(year:month:)`,
-`isExported(assetId:)`). Almost all of these are preserved with **unchanged signatures** as wrappers that resolve
-the timeline placement id from `(year, month)` and route through the placement-scoped store internally. This is
-what makes Phase 1's "all existing timeline behavior preserved" exit criterion achievable without an N-call-site
-rewrite.
-
-One exception: **`monthSummary(assets:selection:)`** today derives `(year, month)` from `assets.first?` or falls
-back to `Date()`. That fallback worked in v1 (where records were keyed by asset id, not placement) but is invalid
-under v2 — there is no general "is this asset exported under any timeline month?" mapping that doesn't leak across
-scopes. The signature gains explicit `year` and `month` parameters:
-
-```swift
-func monthSummary(year: Int, month: Int, assets: [AssetDescriptor], selection: ExportVersionSelection) -> MonthStatusSummary
-```
-
-The single call site (`MonthContentView`) already owns both values and updates trivially. This is the only timeline
-read-API signature change in Phase 1.
-
-There is intentionally no "is this asset exported anywhere?" API. It invites cross-scope coupling and makes the
-independence guarantee leak.
-
-### v2 Record Store: On-Disk Format
-
-The v2 format **normalizes** placement metadata out of records. Placements live once in a top-level dictionary;
-records reference placements by id. This avoids per-record placement duplication (~200 bytes/record), gives stale
-placements a first-class home (rename detection, collision checking), and replaces delimiter-parsed string keys
-with a nested dictionary structure (no `<placementId>::<assetId>` join-and-split, no asset-id encoding gymnastics).
-
-Files (alongside the legacy v1 files, which remain as a frozen backup):
+Both stores live under the destination-specific store directory:
 
 ```text
 ExportRecords/<destinationId>/
-  export-records.json            # v1 snapshot — frozen post-migration
-  export-records.jsonl           # v1 log — frozen post-migration
-  export-records-v2.json         # v2 snapshot
-  export-records-v2.jsonl        # v2 append-only log
-  export-records-v2.complete     # marker file; presence means migration finished cleanly
+  export-records.json            # timeline snapshot (existing format, unchanged)
+  export-records.jsonl           # timeline append-only log (existing format, unchanged)
+  collection-records.json        # collection snapshot (new)
+  collection-records.jsonl       # collection append-only log (new)
 ```
 
-**Snapshot format** (`export-records-v2.json`):
+The two stores are loaded and persisted independently. There is no marker file — neither store needs one because
+nothing migrates: timeline files keep their existing format and the collection files start empty on first launch
+under the new build.
+
+### Shared `JSONLRecordFile` Component
+
+The current `ExportRecordStore` mixes JSONL+snapshot machinery (atomic writes, log replay, compaction, recovery)
+with timeline-specific record shape. Phase 1 extracts the machinery into a small, generic component:
+
+```swift
+final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Sendable> {
+  // .tmp + atomic rename + fsync(parent) snapshot writes
+  // append-only log with malformed-line skip
+  // compaction at N mutations rotating snapshot and log together
+}
+```
+
+`ExportRecordStore` (timeline) and `CollectionExportRecordStore` (new) each compose one. The timeline store binds
+the generic to its existing snapshot type and log op enum; the collection store binds it to the placement-keyed
+shape below. The extraction is internal — no public API of either store changes for callers.
+
+The generic owns persistence mechanics (atomic write, append, log iteration, compaction trigger). The composing
+store owns record shape, the apply-log-op dispatch, the in-flight recovery pass, the `@Published`
+`mutationCounter`, and the `RecordStoreState` machine. `JSONLRecordFile` exposes `append(_ op: LogOp)`,
+`writeSnapshot(_ snapshot: Snapshot)`, and a load API returning `(snapshot, [LogOp])`; the composing store
+calls `apply(_:)` on each op itself. Each store has its own 200ms `objectWillChange` coalescing timer
+(matching today's behavior); the two stores' UI updates can fire ~200ms apart, which is acceptable.
+
+### Collection Store Format
+
+The collection store **normalizes** placement metadata out of records. Placements live once in a top-level
+dictionary; records reference placements by id. This gives stale placements a first-class home (rename detection,
+collision checking) and avoids delimiter-parsed string keys.
+
+**Snapshot format** (`collection-records.json`):
 
 ```json
 {
-  "version": 2,
+  "version": 1,
   "placements": {
-    "timeline:2025-02": {
-      "kind": "timeline",
-      "displayName": "2025/02",
+    "collections:favorites": {
+      "kind": "favorites",
+      "displayName": "Favorites",
       "collectionLocalIdentifier": null,
-      "relativePath": "2025/02/",
-      "createdAt": "2025-02-01T10:00:00Z"
+      "relativePath": "Collections/Favorites/",
+      "createdAt": "2026-04-01T10:00:00Z"
     },
     "collections:album:abc123def4567890a:9876fedc": {
       "kind": "album",
@@ -942,13 +883,13 @@ ExportRecords/<destinationId>/
     }
   },
   "records": {
-    "timeline:2025-02": {
+    "collections:album:abc123def4567890a:9876fedc": {
       "ABCDE-F-12345/L0/001": {
         "variants": { "original": { "filename": "IMG_0001.HEIC", "status": "done",
-                                    "exportDate": "2025-02-15T12:00:00Z", "lastError": null } }
+                                    "exportDate": "2026-04-15T12:00:00Z", "lastError": null } }
       }
     },
-    "collections:album:abc123def4567890a:9876fedc": {}
+    "collections:favorites": {}
   }
 }
 ```
@@ -961,26 +902,22 @@ Top-level `placements` is the canonical placement metadata. Each record carries 
 inner-key, `placementId` is the outer-key. `ScopedExportRecord` (in-memory) joins these with the placement object
 for callers, but on disk the placement is referenced once.
 
-**Placement Codable.** `ExportPlacement` always encodes `id` inside its JSON body, in both the snapshot's
-`placements` map *and* in `bulkImport` log array elements. The dict key in the snapshot duplicates the value's
-`id` field; the encoder asserts `key == value.id` and the decoder treats the value's `id` as authoritative
-(logging if they differ). This costs ~30 bytes per placement (~3 KB at 100 placements) — much less than the
-complexity of two parallel encodings (one with `id`, one without). Standard Codable synthesis applies; no special
-encoder.
+**Placement Codable.** `ExportPlacement` always encodes `id` inside its JSON body. The dict key in the snapshot
+duplicates the value's `id` field; the encoder asserts `key == value.id` and the decoder treats the value's `id`
+as authoritative (logging if they differ). This costs ~30 bytes per placement (~3 KB at 100 placements) — much
+less than the complexity of two parallel encodings (one with `id`, one without). Standard Codable synthesis
+applies; no special encoder. A round-trip test asserts encode-then-decode produces identical placements.
 
-A round-trip test asserts encode-then-decode produces identical placements.
-
-There is no stored `lastDoneAt`; "most recent done" is computed lazily from record `exportDate`s on demand (see
-*Mutation API → `lastDoneAt(for:)`*).
+There is no stored `lastDoneAt`; "most recent done" is computed lazily from record `exportDate`s on demand.
 
 A placement entry may exist with no records (e.g. cancelled before first export). Stale placement entries from
 deleted albums remain until explicit cleanup; they are intentionally load-bearing for collision detection and
 rename history.
 
-JSON dictionary key ordering is undefined (Swift dictionaries are unordered). Byte-identity is asserted only on v1
-files; v2 snapshots may re-encode equivalent state with different key order.
+JSON dictionary key ordering is undefined (Swift dictionaries are unordered). The collection store's snapshot may
+re-encode equivalent state with different key order.
 
-**Log format** (`export-records-v2.jsonl`), one mutation per line. Placements and records mutate independently:
+**Log format** (`collection-records.jsonl`), one mutation per line. Placements and records mutate independently:
 
 ```json
 { "op": "upsertPlacement", "placementId": "<placementId>", "placement": { ExportPlacementRecord JSON } }
@@ -988,255 +925,177 @@ files; v2 snapshots may re-encode equivalent state with different key order.
 { "op": "upsertRecord",    "placementId": "<placementId>", "assetId": "<assetId>",
                            "record": { "variants": { ... } } }
 { "op": "deleteRecord",    "placementId": "<placementId>", "assetId": "<assetId>" }
-{ "op": "renamePlacement", "fromId": "<oldPlacementId>", "to": { ExportPlacementRecord JSON } }
-{ "op": "bulkImport",      "placements": [ { ExportPlacementRecord JSON, "id": "<placementId>" }, … ],
-                           "records":    [ { "placementId": "...", "assetId": "...", "variants": { … } }, … ] }
 ```
 
-Loader applies log entries in order:
-
-- An `upsertRecord` referencing an unknown `placementId` is logged and skipped (defends against truncated logs).
-- A `renamePlacement` moves `records[fromId]` to `records[to.id]`, deletes the old placement entry, and writes the
-  new one. If `fromId` does not exist (e.g. log truncated), the op is treated as `upsertPlacement(to)`.
-- A `bulkImport` is applied as a single transaction: all placements first, then all records. A record whose
-  `placementId` is not in the supplied placements is logged and skipped. Encoded as one JSON line so it is either
-  fully present (after the line's terminating newline) or fully absent (truncated mid-line on a crash, where the
-  malformed-line skip rule discards it).
-
-There is no `touchPlacementLastDone` op. Variant `exportDate`s are persisted on the record itself (existing
-behavior) and `lastDoneAt(for:)` derives from them lazily; this side-steps the cross-mutation atomicity that a
-separate touch op would have introduced.
+Loader applies log entries in order. An `upsertRecord` referencing an unknown `placementId` is logged and
+skipped (defends against truncated logs). There is no `bulkImport` op (`Import Existing Backup` is timeline-only
+and uses the timeline store's existing path). There is no `renamePlacement` op for the MVP — album rename
+behavior is "new placement at the new path" (see *Album Rename Behavior*); a future "merge old folder" UX would
+add the op then.
 
 `ExportRecordKey` remains as an in-memory ergonomic tuple `(placementId, assetId)`. It is not persisted.
 
 ### Atomic Snapshot Writes
 
-Every snapshot write — including the first one produced by migration — uses a `.tmp` + atomic rename pattern with
-explicit fsyncs:
+Every snapshot write in either store uses a `.tmp` + atomic rename pattern with explicit fsyncs:
 
 1. Write snapshot bytes to `<name>.tmp`.
 2. `fsync(<name>.tmp)`.
 3. Rename `<name>.tmp` → `<name>`.
 4. `fsync(<parent dir>)` so the rename is durable.
 
-The migration additionally writes `export-records-v2.complete` last, with the same `.tmp` + rename + fsync(parent)
-pattern, only after the v2 snapshot and an empty log are durable.
+This discipline is centralized in `JSONLRecordFile` so both stores get it from the same code path. The current
+`writeSnapshotAndTruncate` (`ExportRecordStore.swift:602-613`) has **two unsynced renames** — the snapshot
+rename uses `Data(...).write(to:options: .atomic)` (a `.tmp` + rename without parent-dir fsync) and the log
+truncation at line 612 *also* uses `.atomic` write (a *second* `.tmp` + rename without parent-dir fsync). The
+extraction must cover both: snapshot rename and log truncation each get the four-step discipline above. Without
+the log-truncation fsync, a power loss between the snapshot rename and the log truncation can leave the
+snapshot durable on disk while the log still contains pre-snapshot mutations, replaying mutations already in
+the snapshot on next load.
 
-## Migration
+`JSONLRecordFile`'s `writeSnapshot(_:)` is the single entry point for both renames.
 
-### Storage Files
+The loader ignores `.tmp` files. A half-written `.tmp` from a crash mid-write is incomplete and untrustworthy;
+the next compaction overwrites it.
 
-Keep the destination-specific store directory:
+## Upgrade Behavior
 
-```text
-Application Support/.../ExportRecords/<destinationId>/
-```
+### No data migration
 
-After migration:
+Existing users get the new build with **no schema migration and no on-disk rewrite**. The timeline store
+(`export-records.json` / `.jsonl`) keeps its current asset-keyed shape; its files are untouched. The new collection
+store (`collection-records.json` / `.jsonl`) starts empty on the first launch under the new build.
 
-- v2 files are the source of truth.
-- v1 files are preserved untouched (passive backup). The v2 store **never writes** to v1 files. This is an invariant
-  with a unit test.
+Consequences:
 
-### Loader
+- Existing completed timeline exports continue to show as exported. No re-export. No `Import Existing Backup` re-run.
+- File paths on disk for timeline exports are unchanged.
+- The collection store has no records on day one; the user creates them by exporting favorites or albums.
+- Downgrade to a pre-collections build is **not** safe and is explicitly unsupported. The collection-store files
+  on disk would be ignored — that part is benign — but Phase 0 also renames the destination's record directory
+  from the legacy bookmark-hash `<oldId>` to the stable-identity `<newId>`. A pre-collections build re-derives
+  `<oldId>` from the current bookmark bytes, doesn't find it (it's now under `<newId>`), and presents an empty
+  timeline store. The user could recover with `Import Existing Backup`, but the downgrade is destructive to
+  recorded state until then. Document this in the release notes. Do not attempt to keep a `<oldId>` symlink
+  around — it would silently divide the source of truth across two directories on every subsequent
+  re-upgrade/re-downgrade.
 
-`ExportRecordStore.configure(for:)`. The marker file `export-records-v2.complete` is the source of truth for whether
-v2 is authoritative. v1 fallback is only legal when the marker is missing.
+The existing `ExportRecordLegacyMigrationTests` (v0 → v1, decode-time inside `ExportRecord.init(from:)`) is left
+in place — it is independent of this plan.
 
-**Snapshot rotation.** Compaction rotates *both* the snapshot and the log so a usable prior v2 state is preserved
-without gap:
+### Compaction
 
-1. Write `export-records-v2.json.tmp`, fsync.
-2. If `export-records-v2.json` exists, rename it to `export-records-v2.json.bak` (atomic). The previous `.bak`,
-   if any, is replaced.
-3. If `export-records-v2.jsonl` exists and is non-empty, rename it to `export-records-v2.jsonl.bak` (atomic).
-   Otherwise leave any prior `.jsonl.bak` alone.
-4. Rename `.tmp` to `export-records-v2.json`, fsync parent dir.
-5. Create a fresh empty `export-records-v2.jsonl`, fsync parent dir.
+Both stores compact at ~1000 mutations to bound log size. Compaction is the standard rotate pattern (snapshot
+written via `.tmp` + atomic rename + fsync(parent), then the log is truncated). The timeline store's existing
+`writeSnapshotAndTruncate` (`ExportRecordStore.swift:602`) is updated as part of the `JSONLRecordFile`
+extraction to add the parent-dir fsync it currently lacks; without it, a power loss between the rename and the log
+truncation can leave the snapshot durable but the log un-truncated, replaying mutations already in the snapshot.
+The collection store inherits the corrected discipline from the same shared component.
 
-After rotation: `.json` + `.jsonl` is the current state, `.json.bak` + `.jsonl.bak` is the prior compaction's
-snapshot plus the mutations that happened between it and the current snapshot. Recovering from the `.bak` pair
-yields the same logical state as the corrupted current pair *up to the moment of the last compaction* — no gap.
+There is intentionally no `.bak` rotation, no `.complete` marker, and no multi-state recovery flow. The timeline
+store has operated without these for the life of the project; the collection store starts empty so corruption
+during its first months of life is a "lose at most a few albums' worth of records" event recoverable by re-export.
 
-The disk cost is one extra log file (sized at most by the compaction window, ~1000 mutations × small JSON each)
-for the duration of the next compaction window. Negligible.
+### Recovery on Corruption
 
-### Loader
+Each store loads independently:
 
-`ExportRecordStore.load(...)`. The marker file `export-records-v2.complete` is the source of truth for whether v2
-is authoritative. v1 fallback is only legal when the marker is absent.
+- **Snapshot decodes, log overlays cleanly.** State → `.ready`. Done.
+- **Log has malformed lines.** Skip them with logging. Snapshot + good lines apply. State → `.ready`.
+- **Snapshot fails to decode.** State → `.failed`. The corrupt snapshot is **left in place on disk** — it is not
+  renamed yet. A modal alert names the file and the store and offers two actions:
+  - **Reset to empty** — explicit destructive action. The corrupt snapshot is renamed to
+    `<name>.broken-<ISO8601>` for forensic inspection and an empty snapshot + log are written. State → `.ready`.
+  - **Quit** — leaves the corrupt snapshot in place. On next launch the same `.failed` state and the same alert
+    appear. State persists across relaunches; there is no silent recovery.
 
-The store exposes a minimal load-state enum so callers (mainly `ExportManager`) can distinguish "configured and
-ready" from "configured but unable to load":
+The deferred-rename is the load-bearing detail. If the loader renamed the corrupt snapshot eagerly and the user
+quit, the next launch would find no snapshot and would match the documented "snapshot file absent → empty store,
+state `.ready`" path — i.e. a silent reset behind the user's back. By keeping the corrupt file in place until the
+user picks a destructive action, "Quit" is non-destructive in the literal sense.
 
-```swift
-enum ExportRecordStoreState: Sendable {
-  case unconfigured
-  case ready
-  case failed(LoadError)            // see cases below
-}
-```
+If a Reset action partially succeeds — the rename to `<name>.broken-*` lands but the empty-snapshot write fails
+(rare I/O error) — the next launch finds no `<name>.json` and falls into the empty-store path with state
+`.ready`. The forensic `.broken-*` is left on disk for the user to inspect. The user's previous records are
+gone in this corner case, which matches the user's intent ("Reset to empty"); no further recovery is needed.
 
-All write entry points check `state == .ready` and no-op otherwise (with an `assertionFailure` in debug). UI
-checks `state` to enable/disable export controls. There is no extra "repair mode" UI surface beyond an alert.
+Failure isolation: a corrupted collection store does **not** disable timeline exports, and a corrupted timeline
+store does **not** disable collection exports. UI checks each store's state independently when deciding which
+controls to enable.
 
-**1. Marker present, snapshot decodes.** Overlay `export-records-v2.jsonl`, skipping malformed log lines with
-logging. Run `recoverInProgressVariants()` on the loaded records. State → `.ready`. Done.
+**In-flight recovery on load.** Both stores run an in-flight cleanup pass on successful load:
 
-**2. Marker present, snapshot fails to decode (or is missing).**
+- **Timeline store** retains the existing `recoverInProgressVariants()` pass at
+  `ExportRecordStore.swift:135-150`. The implementation walks `recordsById`, flips `.inProgress` → `.failed` with
+  `ExportVariantRecovery.interruptedMessage`, and mutates the in-memory dictionary only. **It does not persist
+  the rewrite.** Stale `.inProgress` log lines are overwritten lazily — the next mutation that lands for the
+  same `(asset, variant)` rewrites the on-disk state, and the next compaction folds the corrected status into
+  the snapshot. This is existing behavior; the plan does not change it.
+- **Collection store** runs a structurally identical in-memory pass against its placement-keyed records: any
+  variant in `.inProgress` becomes `.failed` with the recoverable-error message. Like the timeline pass, it
+  **does not persist the rewrite eagerly**. The corrected status flows to disk on the next mutation or
+  compaction.
 
-  a. If the snapshot exists, rename `export-records-v2.json` to `export-records-v2.json.broken-<ISO8601>` for
-     inspection. If the rename fails, delete the file directly; the bytes are lost but recovery proceeds.
-  b. If `export-records-v2.json.bak` exists and decodes: promote it (rename `.bak` → `.json`) and overlay
-     `export-records-v2.jsonl.bak` first, then `export-records-v2.jsonl` (in that order — the log files cover
-     contiguous mutation windows). State → `.ready`. Surface a soft notice:
+Why no eager persistence: writing on every launch that finds a stale `.inProgress` costs a write for state that
+the next user action would correct anyway. The lazy model has been correct in production today; the
+collection store inherits it.
 
-  > Recovered the previous version of your export records. Existing files on disk are intact; the next export run
-  > will re-check anything that changed since.
-
-  c. If `.bak` is missing or also fails to decode: state → `.failed(.snapshotsCorrupted)`. **Do not delete the
-     marker; do not auto-rebuild from v1.** Surface an alert with explicit user actions:
-
-  > Couldn't load export records for this destination. The corrupted file is preserved as
-  > `export-records-v2.json.broken-…` for inspection. Pick one:
-  >
-  > • **Rebuild from legacy backup** — discards post-migration state (any collection exports and any timeline
-  >   exports made since the original migration); rebuilds v2 from v1. Files on disk are untouched.
-  > • **Import from folder** — runs `Import Existing Backup` to rebuild timeline placements from files on disk.
-  >   Collection placements are not recoverable from disk and must be re-exported.
-  > • **Quit** — leave everything in place; investigate the broken file manually.
-
-  Choosing "Rebuild from legacy backup" or "Import from folder" deletes the marker as part of the action, then
-  re-runs the loader. "Quit" leaves `state == .failed`; on next launch the same alert appears. There is no silent
-  auto-rebuild.
-
-**3. Marker absent** (cold start, partial migration crash).
-
-  a. Discard any partial v2 files (`export-records-v2.json`, `export-records-v2.jsonl`, both `.bak` files) —
-     except `*.broken-…` files, which stay for the user to inspect.
-  b. Load the legacy v1 snapshot and log via the existing decode path.
-  c. **If v1 also fails to decode:** state → `.failed(.legacyCorrupted)`. Surface an alert:
-
-  > Both the current and legacy export records are unreadable for this destination. Existing files on disk are
-  > untouched. Run **Import Existing Backup** once the destination is reachable to rebuild timeline placements
-  > from disk. Collection placements are not recoverable from disk and must be re-exported.
-
-  If the destination is currently disconnected, the alert additionally says: "Reconnect the drive before running
-  Import Existing Backup."
-
-  Like case 2c, the user must take an explicit action; there is no silent reset. Provided actions: "Import from
-  folder," "Reset to empty" (writes a clean empty v2 + marker; explicit destructive action), "Quit."
-
-  d. (v1 decoded successfully) Run `recoverInProgressVariants()` on the in-memory legacy records.
-  e. Construct v2 placements (one timeline placement per distinct `(year, month)`) and v2 records (one per
-     legacy `ExportRecord`).
-  f. Write `export-records-v2.json.tmp`, fsync, rename to `export-records-v2.json`, fsync parent dir.
-  g. Truncate or create empty `export-records-v2.jsonl`, fsync, fsync parent dir.
-  h. **Last:** write `export-records-v2.complete.tmp`, fsync, rename, fsync parent dir. State → `.ready`.
-
-If the process crashes anywhere between 3a and 3h, the next launch finds no `.complete` marker, discards any
-partial v2 files, and re-runs migration from v1. v1 files were never touched, so the migration is idempotent.
-
-**v1 read-only invariant.** Once `export-records-v2.complete` exists, the v2 store never re-encodes v1, never
-compacts v1, never appends to the v1 log, and (per the migration test) does not even open v1 for reading on
-subsequent launches. The `recoverInProgressVariants()` pass during migration mutates only the in-memory copy used to
-build v2 records; that in-memory copy is discarded once v2 is durable. A unit test reads `export-records.json` and
-`export-records.jsonl` via `Data(contentsOf:)` before and after migration and asserts byte equality.
-
-### Legacy Record Conversion
-
-Migration walks v1 records once and produces:
-
-- a top-level `placements` map with one timeline placement per distinct `(year, month)` seen,
-- a `records` map keyed first by placement id then by asset id.
-
-For each legacy `ExportRecord` where `month` is `1...12` and `year` is reasonable:
-
-```swift
-let placementId = "timeline:\(year)-\(String(format: "%02d", month))"
-
-// Reuse or create the placement (one per distinct (year, month)).
-let placement = placements[placementId] ?? ExportPlacement(
-  kind: .timeline,
-  id: placementId,
-  displayName: "\(year)/\(String(format: "%02d", month))",
-  collectionLocalIdentifier: nil,
-  relativePath: String(format: "%04d/%02d/", year, month),
-  createdAt: Date()
-)
-placements[placementId] = placement
-
-records[placementId, default: [:]][record.id] = ScopedRecordBody(variants: record.variants)
-```
-
-There is no `lastDoneAt` to compute or carry forward — record `exportDate`s on the `.done` variants are preserved
-as-is by migration, and the lazy `lastDoneAt(for:)` accessor reads them on demand.
-
-Records with invalid timeline placement are skipped and the count is logged. Migration does not fail because of one
-bad record.
-
-### Backward-Compatibility Invariants
-
-Tested as exit criteria for Phase 1:
-
-- Existing completed timeline exports show as exported after upgrading.
-- Existing partially exported and failed variants preserve their status.
-- Existing in-progress variants recover to failed with the current recoverable message.
-- Existing timeline file paths on disk are unchanged.
-- Users do not need to re-run `Import Existing Backup` after upgrading.
-- v1 files are byte-identical before and after migration (`sha256(v1.json)` and `sha256(v1.jsonl)` unchanged).
-- New collection exports never mutate or delete v1 files.
+Tests live in each store's test file.
 
 ### `Import Existing Backup`
 
-`BackupScanner` continues to scan only `<YYYY>/<MM>/` and ignores `Collections/`.
-`ExportRecordStore.bulkImport(placements:records:)` accepts both arrays and writes placements before records
-atomically. The Import flow constructs one timeline placement per `(year, month)` it encounters, builds records
-referencing those placement ids, and passes both into a single call. A record whose `placementId` is not in the
-supplied placements is rejected and logged. Import only ever produces `.timeline` placements; collection-folder
-backfill is out of scope. UI copy states explicitly: "Import scans timeline backups (`YYYY/MM/`) only."
+Unchanged. `BackupScanner` continues to scan `<YYYY>/<MM>/` and writes results into the timeline store via the
+existing import path; no signature change is required. `Collections/` directories are ignored. UI copy states
+explicitly: "Import scans timeline backups (`YYYY/MM/`) only."
 
-### Migration Tests
+There is no equivalent flow for the collection store — collection placements are not on-disk-recoverable (folder
+names are sanitized, not reversibly mapped to PhotoKit collection ids). Users re-export favorites or albums to
+rebuild collection state if needed.
 
-A new file `ExportRecordV1ToV2MigrationTests` covers:
+### Tests
 
-- legacy snapshot only → v2 timeline records,
-- legacy log only → v2 timeline records,
-- legacy snapshot plus log overlay → v2 timeline records with latest mutations,
-- legacy flat records → v2 records with synthesized `.original` variant,
-- legacy `.inProgress` → v2 `.failed` with recovery message,
-- invalid legacy placement skipped and logged,
-- v2 marker present and decode succeeds → v2 used; v1 untouched,
-- v2 marker missing but v2 files present → v2 discarded; v1 re-migrated,
-- v2 marker missing and v2 files corrupt → v2 discarded; v1 re-migrated,
-- v2 marker present but v2 snapshot malformed, `.bak` exists and decodes → `.bak` snapshot promoted to `.json`,
-  `.jsonl.bak` overlay applied first then current `.jsonl`; soft notice surfaced; state ends `.ready`. **No
-  mutations are dropped between the prior compaction and the corruption** because both log files are present.
-- v2 marker present but v2 snapshot malformed, `.bak` missing or also corrupt → state stays
-  `.failed(.snapshotsCorrupted)`; alert offers Rebuild-from-legacy / Import-from-folder / Quit; marker is **not**
-  deleted automatically; choosing a destructive action triggers the rebuild and explicitly deletes the marker.
-- v2 marker present, snapshot file absent → same as malformed (try `.bak` first; if also missing, alert with
-  explicit user actions).
-- v2 marker present and snapshot decodes but log has malformed lines → bad lines skipped and logged; snapshot+good
-  log lines applied,
-- v2 marker present, snapshot decodes, log file absent → snapshot loads as authoritative, no overlay attempted,
-- v2 marker present, v2 valid, v1 also present → loader reads v2 only; assert via `FakeFileSystem` call counts
-  that v1 paths are never opened on subsequent loads,
-- v1 corrupt + v2 marker absent → state ends `.failed(.legacyCorrupted)`; alert offers Import-from-folder /
-  Reset-to-empty / Quit; v1 file bytes preserved on disk; no silent reset.
-- compaction rotation: 1500 mutations cause one compaction (S1 → S2 with `.bak` files preserved). Add 50 more
-  mutations to the new `.jsonl`. Corrupt S2. Restart. Verify recovery yields S1 from `.bak` + `.jsonl.bak` (the
-  1000-ish mutations between S1 and S2) + the 50 new mutations from the current `.jsonl` = full state, no gap.
-- v2 mutations log replay across simulated restart produces correct state,
-- `renamePlacement` log op replays as: records moved from old id to new, old placement deleted, new placement
-  written; partial-replay (interrupted mid-rename) is handled via the `fromId-not-found → upsertPlacement(to)`
-  fallback,
+Storage and recovery tests for the new collection store live in `CollectionExportRecordStoreTests`:
+
+- snapshot + log replay across simulated restart produces correct state,
+- malformed log lines are skipped and logged,
+- snapshot file absent on first launch → empty store, state `.ready`,
+- **snapshot corrupt** → state `.failed`, the corrupt file remains at its original path on disk (no `.broken-*`
+  exists yet), timeline store unaffected,
+- **Quit-and-relaunch after `.failed`** → store re-loads the same corrupt file, state remains `.failed` (no
+  silent recovery),
+- **`resetToEmpty()`** → corrupt file is renamed to `<name>.broken-<ISO8601>`, an empty snapshot+log are
+  written, state → `.ready`,
+- **lazy in-flight cleanup**: pre-stage a record with one variant `.inProgress`; load the store; assert
+  in-memory state shows the variant as `.failed` with the recoverable-error message and the on-disk log
+  retains the original `.inProgress` line until the next mutation rewrites it,
 - store mutations on `.failed` no-op (with `assertionFailure` in debug; release silently drops),
-- timeline completion after migration does not mark favorites or albums exported,
-- v1 files byte-identical before and after migration.
+- collection store rejects a `.timeline` placement at the API boundary (assertion in debug, drop in release),
+- invariant: every record's referenced placement has `kind ∈ {.favorites, .album}`.
 
-The existing `ExportRecordLegacyMigrationTests` is left in place — it covers v0 → v1 (decode-time legacy flat-record
-migration inside `ExportRecord.init(from:)`), which is a different migration. The names are intentionally distinct.
+Tests for the timeline store's recovery behavior follow the same shape (`ExportRecordStoreCorruptionTests`),
+with deferred-rename / Quit-doesn't-reset / `resetToEmpty` / lazy in-flight cleanup cases.
+
+A new file `CrossStoreIndependenceTests` covers boundary behavior between the two stores:
+
+- a `.failed` collection store does not disable timeline export controls,
+- a `.failed` timeline store does not disable collection export controls,
+- writes to one store never produce log lines in the other (file-watch assertion),
+- cancellation mid-flight on a timeline job does not write to the collection store, and vice versa,
+- reuse-source lookup with one store `.failed` falls through cleanly (treated as "no record"; PhotoKit re-export).
+
+`JSONLRecordFileTests` covers the shared persistence behavior:
+
+- atomic snapshot write succeeds; subsequent load returns equivalent state,
+- compaction at threshold truncates the log; snapshot reflects all mutations,
+- crash mid-compaction (snapshot written, log not yet truncated) produces correct state on next load — no
+  duplicate mutations.
+
+Backward-compatibility invariants for timeline (trivially satisfied because nothing migrates):
+
+- existing completed timeline exports show as exported after upgrade,
+- existing timeline file paths on disk are unchanged,
+- no `Import Existing Backup` prompt appears on upgrade,
+- a failure marking on favorites does not mutate timeline store contents (cross-store independence).
 
 ## UI Plan
 
@@ -1289,11 +1148,8 @@ Timeline:
 
 Collections:
 
-- Show asset counts and adjusted counts per row for `Favorites`, `Recent`, and `Albums`.
-- Show completion badges for **Favorites and Albums only**. Recent does **not** get a completion badge: Photos
-  defines its asset set on a sliding window (~30 days) so today's "all exported" badge would be misleading next
-  week when the asset set has shifted. Instead, the Recent row shows a subtitle "Last exported <relative date>"
-  derived from `lastDoneAt(for: "collections:recent")`, or "Not yet exported" when there is no `.done` variant.
+- Show asset counts and adjusted counts per row for `Favorites` and `Albums`.
+- Show completion badges using placement-scoped queries.
 - Compute counts off the main actor; cache by placement id; invalidate on `PHPhotoLibraryChangeObserver` ticks.
 - Cancel in-flight count work for rows that scroll out of view (or for the whole sidebar if the user switches to
   Timeline).
@@ -1319,7 +1175,7 @@ Phase 1 ships persistence changes for *every* user — see *Feature flag scope*)
 `destinationId` is a SHA-256 hash of the security-scoped bookmark data today, and bookmark data changes when the
 OS regenerates a stale bookmark or when the user re-grants access via the open panel. Each change orphans the
 record store. Pre-collections, `Import Existing Backup` is a recovery path; post-collections, it isn't (collection
-state is not on-disk-recoverable). This phase makes destination identity stable before v2 ships.
+state is not on-disk-recoverable). This phase makes destination identity stable before the collection store ships.
 
 **Identity derivation.** `destinationId = SHA-256(volume UUID || U+0000 || canonical-folder-path)` where:
 
@@ -1337,21 +1193,42 @@ This survives bookmark refresh on the same drive. It changes when:
 All three are user-initiated actions that arguably should produce a new logical destination. The records under the
 old id remain on disk; selecting the original folder again finds them via the lazy migration below.
 
-**Lazy per-destination migration.** Migration runs in `ExportRecordStore.configure(for: <newId>)`, not at app
-launch:
+**Lazy per-destination migration.** Migration runs **once before either store configures**, in a new
+coordinator (`ExportRecordsDirectoryCoordinator`, lives at `Managers/ExportRecordsDirectoryCoordinator.swift`)
+that owns the `ExportRecords/<newId>/` directory lifecycle. Its public surface is a single synchronous method:
+
+```swift
+func prepareDirectory(for newId: String) -> Result<Void, DirectoryPrepareError>
+```
+
+`ExportManager` (or `photo_exportApp`'s `.task` / `.onChange` blocks directly) calls `prepareDirectory(for:)`
+before either store's `configure(for: newId)`. The two stores then `configure` against the already-resolved
+directory in either order; neither store's `configure` performs the legacy rename itself.
+
+This ordering is load-bearing: with two stores both calling `configure(for: newId)`, whichever runs first
+would create `ExportRecords/<newId>/` and cause the other store's lazy-migration check to see `<newId>` already
+present, leaving the legacy `<oldId>` directory orphaned. Centralizing the migration in a coordinator that runs
+exactly once before any store touches the destination directory prevents this.
+
+Coordinator algorithm:
 
 1. If `ExportRecords/<newId>/` already exists, use it. Done.
 2. Otherwise, re-derive `<oldId>` from the destination's *current* bookmark bytes using the legacy SHA-256 scheme
    (the pre-Phase-0 derivation, kept around as a one-shot helper).
-3. If `ExportRecords/<oldId>/` exists, rename it to `ExportRecords/<newId>/`. Log the migration. Done.
+3. If `ExportRecords/<oldId>/` exists, rename the entire directory to `ExportRecords/<newId>/`. Both
+   `export-records.{json,jsonl}` and (if present) `collection-records.{json,jsonl}` ride along inside it. Log
+   the migration. Done.
 4. If `<newId>` already exists *and* `<oldId>` also exists (which shouldn't happen but defends against bugs), log
    both directories as a conflict and use `<newId>` as-is. The `<oldId>` directory is left untouched for manual
    inspection.
 5. If `<oldId>` does not exist, treat the destination as fresh.
 
-The migration only touches the *active* destination (the one being configured). Historical destinations that the
-user never reconnects under the new build are left at their `<oldId>` directory; reconnecting them later runs the
-same lazy migration at that point. There is no app-launch sweep across all `ExportRecords/*` directories.
+After the coordinator returns, `ExportManager` calls `exportRecordStore.configure(for: newId)` and
+`collectionExportRecordStore.configure(for: newId)` in either order; both find the directory ready.
+
+The coordinator only touches the *active* destination. Historical destinations that the user never reconnects
+under the new build are left at their `<oldId>` directory; reconnecting them later runs the same lazy migration
+at that point. There is no app-launch sweep across all `ExportRecords/*` directories.
 
 Tests:
 
@@ -1378,56 +1255,147 @@ Exit criteria:
 ### Feature flag scope
 
 `AppFlags.enableCollections` gates **UI surface** (the `Timeline` / `Collections` segmented control, the
-`Collections` sidebar, the new export actions). It does **not** gate the persistence change. Phase 1 runs the v1 →
-v2 migration on every launch for every user, and it is a one-way migration (v1 files become read-only after,
-preserved as backup). There is no downgrade path. The feature flag exists to keep the user-visible surface stable
-while the persistence layer is rewired; it is *not* a kill switch.
+`Collections` sidebar, the new export actions). It is *not* a kill switch for the storage change.
 
-### Phase 1: v2 store, timeline-only end-to-end (highest risk)
+Concrete semantics:
 
-Goal: replace v1 with v2 internally. User-visible surface is unchanged.
+- **`CollectionExportRecordStore` is constructed and loads on every launch, regardless of the flag.** This keeps
+  the persistence layer's lifecycle predictable and lets any future codepath (auto-sync, diagnostics) consult
+  the store without flag-gating.
+- **The corruption alert UI is gated on the flag.** If the collection store loads cleanly, all good. If it fails
+  to decode, the loader sets `state == .failed` as usual but the modal alert is *suppressed when
+  `enableCollections == false`* — see *Corruption Alert Presenter* below for the host-view spec. A diagnostic
+  log line is always emitted regardless of the flag.
+- **Export-side reads guard on store state, not on the flag.** The reuse-source copy lookup queries both stores
+  and treats `state != .ready` as "no record" — independent of the flag. This means a flag-off user with a
+  `.failed` collection store still gets correct timeline behavior, just no reuse from collection records.
+- **Cross-store reads from collection-side code (sidebar counts, etc.) are flag-gated.** They are unreachable
+  while the flag is off because the UI surface that triggers them is hidden.
+
+Phase 4 flips the flag to `true`. The flag is removed in a follow-up cleanup once the feature stabilizes; at
+that point the conditional `.alert(...)` modifier becomes unconditional and the collection-store alert begins
+firing for any user whose collection store is `.failed`.
+
+### Corruption Alert Presenter
+
+The corruption alert is greenfield UI: no existing modal alert system in the app today (`ContentView.swift:121`
+uses `.sheet(...)` for the import flow, not an alert).
+
+**What ships in which phase.**
+
+- **Phase 1 (store side, no UI):** Each store exposes `RecordStoreState` as `@Published`. The store has a
+  `resetToEmpty()` method that performs the deferred `.broken-<ISO8601>` rename + writes an empty snapshot/log.
+  Phase 1 also adds a `canExport: Bool` on `ExportManager` that ANDs both stores' `state == .ready`, and the
+  export-start paths (`startExportMonth/Year/All` and the future `startExportFavorites`/`startExportAlbum`)
+  short-circuit early-return when `canExport == false`. This prevents the silent-false-success case where a
+  `.failed` store would otherwise enqueue work whose `markVariant*` writes silently no-op. Internal/dev
+  testers running Phase 1 see the early-return + log line; the Phase 4 alert presenter is what surfaces it to
+  users. No alert UI yet.
+- **Phase 4 (UI):** Add a top-level `RecordStoreAlertHost` view that watches both stores' states. When either
+  transitions to `.failed`, the host presents an alert with two buttons: "Reset to empty" (invokes the store's
+  `resetToEmpty()`) and "Quit" (`NSApplication.shared.terminate(nil)`). Title and body name the failed store
+  and file path. Both stores' alerts are gated on `AppFlags.enableCollections` for the duration of the flag's
+  lifetime — collection users see both, pre-flag users see neither (preserving today's silent-failure behavior).
+  When the flag is removed in the follow-up cleanup, both alerts become unconditional.
+
+Phase 4 also rebuilds the `.failed` → `resetToEmpty()` → `.ready` flow for the timeline store. Two stores in
+`.failed` simultaneously surface as a single alert listing both with separate Reset buttons; Quit terminates
+regardless. SwiftUI's native `.alert(...)` does not handle three buttons cleanly, so the implementation will
+use a small custom modal view.
+
+Estimate: ~1 day of UI work in Phase 4. Phase 1 contains only the `@Published` state + `resetToEmpty()` method
+on each store — that's part of the per-store recovery work and not a separate line item.
+
+### Phase 1: type/queue plumbing + new collection store (no migration)
+
+Goal: introduce placement-aware queueing and the second store without changing the user-visible surface or
+disturbing the timeline store's on-disk format.
 
 - Add `LibrarySelection`, `PhotoFetchScope`, `ExportPlacement`, `ExportRecordKey`, `ScopedExportRecord`,
-  `PlacementScope`.
-- Add `ExportPathPolicy` and `ExportPlacementResolver` (timeline-only resolver paths in this phase; collection paths
-  defined but unreachable until Phase 2).
-- Add v2 snapshot/log atomic write + `export-records-v2.complete` marker.
-- Implement v1 → v2 migration with crash-safe ordering.
-- Make every `ExportRecordStore` mutation and read placement-scoped.
-- Update `ExportManager`: `ExportJob` carries placement, queued counts keyed by placement id, year/all enumerate
-  placements.
-- Update `ExportRecordStore.bulkImport(placements:records:)` to accept both arrays. Update the Import flow in
-  `ExportManager` to build per-`(year, month)` timeline placements and matching records before calling.
-- Update `ExportRecordStore.configure(for:)` to take a `validate: (String) -> Bool` closure for load-time path
-  validation; `ExportManager` constructs the closure from the current `ExportDestination`.
+  `CollectionPlacementScope`.
+- Add `ExportPathPolicy` and `ExportPlacementResolver` (timeline-only resolver paths in this phase; collection
+  paths defined but unreachable until Phase 2).
+- Extract the JSONL+snapshot machinery from `ExportRecordStore` into `JSONLRecordFile<Snapshot, LogOp>`. Both the
+  existing timeline store and the new collection store compose it. No on-disk format change for timeline.
+- Add the parent-dir fsync to `JSONLRecordFile`'s atomic-write path. The current `writeSnapshotAndTruncate`
+  (`ExportRecordStore.swift:602`) skips it; the extraction is the natural place to fix it. Compaction also
+  inherits the corrected discipline.
+- Add `CollectionExportRecordStore`. Empty on first launch. Its API is the placement-keyed surface defined in
+  *Two Stores: API Surface*. Asserts that any placement passed in has `kind ∈ {.favorites, .album}`.
+- `ExportRecordStore` (timeline) keeps its current public API. `ExportManager`'s timeline call sites are
+  unchanged except for the one signature noted below.
+- Update `ExportJob` to carry an `ExportPlacement`. Update `ExportManager` queue counts to `[placementId: Int]`.
+  Year and All enumerate timeline placements internally; per-placement enqueue routes to the timeline store.
+- Add `currentJobPlacement: ExportPlacement?` to `ExportManager`. Route every `markVariant*` and `removeVariant`
+  call site by `placement.kind` to the correct store. Reset `currentJobPlacement` everywhere
+  `currentJobAssetId` is reset; assign it before `currentJobAssetId` at the start-of-job site. (See *Routing
+  record mutations to the right store* and *In-flight tracking* in *Export Jobs and ExportManager*.)
+- Update the `destinationId`-change wiring in `photo_exportApp.swift:39-45` to: (1) run the
+  `ExportRecordsDirectoryCoordinator` legacy migration for `newId` first; (2) then call `configure(for: newId)`
+  on **both** `exportRecordStore` and `collectionExportRecordStore`. Today the `.onChange` handler only
+  reconfigures the timeline store; the new ordering ensures the legacy `<oldId>` → `<newId>` directory rename
+  happens once before either store creates `<newId>`, avoiding orphaning timeline records when the collection
+  store would otherwise create `<newId>` first.
+- Wrap every existing year/month-shaped read API (`monthSummary(year:month:totalAssets:)`,
+  `yearExportedCount(year:)`, `sidebarSummary(...)`, etc.) so callers do not need to learn placements. Internally
+  the wrappers construct the synthetic timeline placement and route to the timeline store.
 - Change one timeline read-API signature: `monthSummary(assets:selection:)` →
-  `monthSummary(year:month:assets:selection:)`. Update `MonthContentView`'s single call site. All other timeline
-  read APIs keep their current signatures and become wrappers internally.
-- Add `ExportRecordStoreState` and the `.ready`-guard on every write entry point.
-- **Rewrite `writeSnapshotAndTruncate`** to follow the *Atomic Snapshot Writes* + rotation discipline: write
-  `.tmp`, fsync, rotate `.json` → `.json.bak` and `.jsonl` → `.jsonl.bak`, rename `.tmp` → `.json`, fsync parent
-  dir, create empty `.jsonl`, fsync parent dir. The current implementation
-  (`ExportRecordStore.swift:602`) skips parent-dir fsyncs; without them, a power loss between the rename and the
-  log truncation can leave the snapshot durable but the log un-truncated, producing a state where applying the
-  log replays mutations already in the snapshot.
-- Update `FakePhotoLibraryService`, `FakeExportDestination`, and all existing tests to the new APIs.
-- Add `ExportRecordV1ToV2MigrationTests`, `ExportPathPolicyTests`.
+  `monthSummary(year:month:assets:selection:)`. Update `MonthContentView`'s single call site. (Independent of
+  storage shape; the existing `Date()` fallback is unsafe under placement-aware queueing.)
+- Add `RecordStoreState` and the `.ready`-guard on every write entry point of *each* store. Each store's UI
+  control set is gated independently.
+- Implement the per-store corruption-recovery loader path described in *Recovery on Corruption*: on snapshot
+  decode failure, leave the corrupt file in place (deferred rename), set state → `.failed`. Both stores wired so
+  the collection store's failure leaves the timeline store's state untouched and vice versa. Add a
+  `resetToEmpty()` method on each store that performs the deferred `.broken-<ISO8601>` rename + writes an empty
+  snapshot/log; this is the API the Phase 4 alert UI will call.
+- Add `@Published RecordStoreState` on each store so Phase 4's alert host can observe.
+- Add `var canExport: Bool { exportRecordStore.state == .ready && collectionExportRecordStore.state == .ready }`
+  on `ExportManager`, and short-circuit `startExportMonth/Year/All` and the (future) collection start methods
+  with an early return + log line when `canExport == false`. This prevents the silent-false-success case in dev
+  where a `.failed` store would otherwise enqueue work whose `markVariant*` writes silently no-op.
+- Implement collection-store in-flight recovery: a `recoverInProgressVariants()`-equivalent pass that converts
+  `.inProgress` variants to `.failed` with the recoverable-error message during load. **In-memory only**, mirroring
+  the timeline store's existing behavior (no eager persistence; lazy correction on next mutation/compaction).
+- Update `FakeExportDestination` and add `FakeCollectionExportRecordStore`. Existing timeline tests need only
+  trivial changes (the wrapper APIs preserve their signatures).
+- Add `JSONLRecordFileTests`, `CollectionExportRecordStoreTests`, `ExportPathPolicyTests`. Recovery coverage:
+  corrupt-snapshot → file remains until `resetToEmpty()`; Quit-and-relaunch → still `.failed`.
 - Add `enum AppFlags { static var enableCollections = false }` in `photo-export/AppFlags.swift`. Phase 4 flips it
   to `true`. Removed in a follow-up cleanup once the feature stabilizes.
 
+Explicitly *not* in this phase:
+
+- Any migration of timeline records (the timeline store is untouched on disk).
+- The corruption alert UI (lives in Phase 4 alongside the rest of the Collections UI; Phase 1 only wires the
+  store-side `@Published` state and the `resetToEmpty()` action).
+- The album-rename dialog and `renamePlacement` log op (deferred to a follow-up plan; MVP behavior is "new
+  placement at the new path; old folder stays").
+- The `_album.json` sidecar writer (deferred to a follow-up plan).
+- Load-time path validation closure on `configure` (on-write validation is the single guard).
+
 Exit criteria:
 
-- All existing functional tests pass through v2 path.
-- Existing timeline file paths unchanged.
-- Crash-during-migration test passes (no marker → v1 reload).
-- v1-file-byte-identity test passes.
+- All existing functional tests pass with no change to timeline store on-disk format.
+- Existing timeline file paths unchanged on disk.
+- Collection store loads empty on first launch and writes its first snapshot only when something is upserted.
 - `AppFlags.enableCollections == false`; user-visible surface is timeline-only.
+- **Cross-store independence**: a forced corruption of one store leaves the other's `.ready` state and exports
+  unaffected. Verified by `CrossStoreIndependenceTests`.
+- **Deferred-rename recovery**: forced snapshot corruption produces `.failed` with the corrupt file *still
+  present* at its original path. Quit + relaunch reproduces `.failed`; no silent reset. `resetToEmpty()` is the
+  only path that performs the rename. Verified in each store's corruption test file.
+- **In-flight cleanup (lazy)**: pre-staging an `.inProgress` variant on each store and loading it leaves the
+  in-memory state showing `.failed` while the on-disk log retains the original `.inProgress` line — i.e. the
+  recovery did not write to disk.
+- **`destinationId` change reconfigures both stores**: changing the export destination at runtime invokes the
+  `ExportRecordsDirectoryCoordinator` once, then `configure(for:)` on both stores.
 
 ### Phase 2: PhotoKit collection discovery
 
 - Add `PhotoCollectionDescriptor` and `fetchCollectionTree()`.
-- Implement `fetchAssets(in:)`, `countAssets(in:)`, `countAdjustedAssets(in:)` for `.favorites`, `.recent`, and
-  `.album` scopes. Counts in this phase are uncached; callers re-fetch on every access.
+- Implement `fetchAssets(in:)`, `countAssets(in:)`, `countAdjustedAssets(in:)` for `.favorites` and `.album`
+  scopes. Counts in this phase are uncached; callers re-fetch on every access.
 - Wire collection-tree invalidation into the existing `PHPhotoLibraryChangeObserver` callback.
 - Add collection fixtures to `FakePhotoLibraryService`.
 - Activate the collection paths in `ExportPlacementResolver` and add resolver tests.
@@ -1436,83 +1404,62 @@ Exit criteria:
 
 - PhotoKit isolated; no `PHAssetCollection` leaks past `PhotoLibraryManager`.
 - Collection-tree mapping tests pass.
-- Resolver produces correct placement and `relativePath` for nested folders, sibling collisions, and the three
-  collection kinds (`favorites`, `recent`, `album`).
+- Resolver produces correct placement and `relativePath` for nested folders, sibling collisions, and the two
+  collection kinds (`favorites`, `album`).
 
 ### Phase 3: ExportManager and destination collection-aware
 
 - Add `urlForRelativeDirectory` to `ExportDestination` and back `urlForMonth` with it.
 - Add destination escape-protection tests (absolute paths, `..`, symlinked parent escaping root, intermediate file,
   path length).
-- Add `startExportFavorites()`, `startExportRecent()`, and `startExportAlbum(collectionId:)`.
+- Add `startExportFavorites()` and `startExportAlbum(collectionId:)`.
 - Wire collection scopes through the queue and record store.
 - Implement the **reuse-source copy path** (see *Reuse-Source Copy Path*): when any prior `.done` record (timeline
   or collection) points at an existing source file, copy it to the destination via `FileManager.copyItem` (auto-
   clones on APFS as a free optimization); fall back to PhotoKit re-export only on source-side errors. Destination-
   side errors fail the variant directly.
-- Implement the **album sidecar writer**: at the end of every successful collection export run, write
-  `_album.json` to the placement folder.
 - Add `CollectionCountCache` actor with per-id `Task` handles, cancellation, and `PHPhotoLibraryChangeObserver`
   invalidation. (Phase 2 counts were uncached; this phase introduces the cache.)
-- Add the album-rename dialog with three actions (rename folder / create new / cancel; default rename folder).
-- Add the `renamePlacement` log op + handler.
 
 Exit criteria:
 
 - Timeline export still writes exactly to `YYYY/MM/`.
-- Favorites export writes to `Collections/Favorites/`; Recent to `Collections/Recent/`; Album to
-  `Collections/Albums/...`.
+- Favorites export writes to `Collections/Favorites/`; Album to `Collections/Albums/...`.
 - On APFS, a collection export of an asset already exported elsewhere (timeline *or* another collection) results
-  in a CoW clone via `FileManager.copyItem` (verified by `volumeAvailableCapacityForImportantUsageKey` delta below
-  ~64 KB for a 10 MB known-size file, plus a write-then-divergence behavioral check). Source lookup is "any prior
-  `.done` record," not timeline-only.
-- On non-APFS, the same export produces a real copy.
-- Each placement folder contains a valid `_album.json` after a successful export.
+  in a CoW clone via `FileManager.copyItem` (verified by free-space delta on a known-size source file). On
+  non-APFS, the same export produces a real copy.
 - Cross-scope failure isolation: a failure marking on favorites does not mutate timeline state for the same asset;
   in-flight cleanup on Album A does not mutate Album B records. (Queue cancellation remains global; per-placement
   cancel is out of scope for this plan.)
-- Album-rename dialog default ("Rename existing folder") moves the folder on disk and rewrites records via the
-  `renamePlacement` log op; cancellation makes no changes; "Create new folder" preserves the previous behavior.
-- Album-rename pre-flight gates the primary action when: any export work is in flight (single global queue); new
-  path is occupied (by another placement, or an unknown disk artifact). Old folder missing on disk produces the
-  "Update records" copy variant rather than blocking the action. After a successful rename, the placement's
-  `_album.json` sidecar at the new path is rewritten immediately (best-effort) so it doesn't carry the old
-  title/path forward until the next export run.
+- Renaming an album in Photos.app produces a fresh placement at the new path on the next export of that album;
+  the old folder remains on disk untouched, and its placement record stays in the collection store.
 
-### Phase 4: UI
+### Phase 4: UI and docs
 
 - Extract timeline sidebar rows from `ContentView`.
 - Add the top `Timeline` / `Collections` segmented selector.
-- Add `CollectionsSidebarView` with rows for Favorites, Recent, and Albums.
+- Add `CollectionsSidebarView` with rows for Favorites and Albums.
 - Generalize `MonthViewModel` / `MonthContentView` into scope-based asset grid pieces.
-- Add export actions for favorites, recent, and albums.
-- Empty states: no favorites; no recent; no albums; selected album unavailable; limited Photos access may hide
-  some assets.
+- Add export actions for favorites and albums.
+- Empty states: no favorites; no albums; selected album unavailable; limited Photos access may hide some assets.
+- Build the corruption alert presenter (`RecordStoreAlertHost`) per *Corruption Alert Presenter*. Wire it to
+  observe both stores' `@Published RecordStoreState`. Both stores' alerts are flag-gated for the duration of
+  `AppFlags.enableCollections`. Buttons: "Reset to empty" (calls `store.resetToEmpty()`) and "Quit".
 - Flip the `enableCollections` feature flag on.
+- Update docs in the same PR: `README.md`, `docs/reference/persistence-store.md` (two-store layout, collection
+  store schema, recovery rules), `AGENTS.md` (placement vocabulary, cross-store independence invariant), the
+  manual testing guide (collections export, independence, rename behavior), the website/Starlight pages under
+  `website/src/content/docs/` (user-facing feature pages and any architecture references), and a cross-reference
+  in `auto-sync-background-sync-plan.md` (auto-sync remains timeline-scoped). Release notes call out the
+  post-rename "old folder stays on disk; sidebar shows new album only" behavior.
 
 Exit criteria:
 
 - Current timeline workflow remains familiar.
 - Collection browsing and export are available without a separate window.
 - Sidebar remains responsive on a 100-album fixture.
-
-### Phase 5: Docs
-
-Update:
-
-- root `README.md` (current capabilities).
-- `docs/reference/persistence-store.md` — v2 schema, key format, migration, atomic write order, fallback rules.
-- New `docs/reference/album-sidecar.md` — `_album.json` schema and what tools can do with it.
-- `AGENTS.md` — placement vocabulary, do-not-mutate-v1 invariant.
-- Website export feature/architecture docs.
-- Manual testing guide for collections export, including timeline/collection independence and rename behavior.
-- Cross-reference in `auto-sync-background-sync-plan.md`: auto-sync is timeline-scoped.
-
-Exit criteria:
-
-- User-facing docs match new behavior.
-- Manual test guide covers independence and rename.
-- Persistence reference matches the v2 on-disk format exactly.
+- Forced corruption of either store under flag-on surfaces the modal; Reset succeeds; Quit terminates.
+- User-facing docs match shipped behavior; persistence reference describes both stores.
 
 ## Testing Plan
 
@@ -1533,9 +1480,8 @@ Placement resolver:
 - three newly-discovered colliding albums lex-sorted by `collectionLocalIdentifier` produce `Trip/`, `Trip_2/`,
   `Trip_3/` deterministically,
 - a new placement collides with an existing `_2`-suffixed placement → resolver picks `_3`,
-- `priorPlacements(for:)` is `.album`-only: `.recent` and `.favorites` selections never invoke rename detection,
 - two placements with identical `collectionLocalIdentifier` but different display paths get different placement ids
-  (rename-detector behavior),
+  (the `displayPathHash8` segment changes on rename; the next export goes to the new placement),
 - title-with-slash vs nested folder produce different placement ids: an album titled `"Family/Trip"` at root has a
   different `displayPathHash8` than an album titled `"Trip"` inside a folder named `"Family"` (confirms the U+0000
   separator),
@@ -1553,13 +1499,26 @@ PhotoLibraryService fakes:
 - folder tree descriptors preserve nesting,
 - duplicate album titles produce distinct descriptors.
 
-Export record store:
+Timeline store (`ExportRecordStoreTests`) — existing behavior, unchanged signatures:
 
-- placement-scoped `isExported` does not leak across scopes,
+- existing test suite passes against the wrapped year/month-shaped read APIs,
+- `markVariantInProgress` / `markVariantExported` / `markVariantFailed` / `removeVariant` continue to work via
+  the existing `(year, month, relPath)` signatures,
+- `bulkImportRecords` (timeline-only) still satisfies timeline completion.
+
+Collection store (`CollectionExportRecordStoreTests`) — placement-keyed:
+
+- placement-scoped `isExported` does not leak across `(favorites, album)` placements,
 - failure on placement A does not mutate placement B for the same asset,
 - delete on placement A does not affect placement B,
 - two albums containing the same asset are independent,
-- bulk import (timeline placement) does not satisfy collection completion.
+- a `.timeline` placement passed to the collection store trips an assertion in debug; in release the call
+  silently drops without touching state.
+
+Cross-store independence (`CrossStoreIndependenceTests`) — full list in *Upgrade Behavior → Tests*. Highlights:
+
+- a write to one store never produces a log line in the other,
+- timeline completion does not satisfy any collection placement, and vice versa.
 
 Export manager:
 
@@ -1567,7 +1526,6 @@ Export manager:
 - year export enqueues N month placements and only timeline ids,
 - export-all enqueues only timeline placements,
 - favorites export writes favorites placement,
-- recent export writes recent placement,
 - album export writes album placement,
 - queued counts are placement-scoped,
 - duplicate asset in timeline and album writes two files,
@@ -1592,51 +1550,58 @@ Export manager:
 - failure cleanup on album A does not mutate timeline state for the same asset,
 - failure marking on favorites does not touch timeline state for the same asset.
 
-Migration (`ExportRecordV1ToV2MigrationTests`) — full list in *Migration → Migration Tests*.
+Storage, recovery, and cross-store independence — full lists in *Upgrade Behavior → Tests*
+(`ExportRecordStoreCorruptionTests`, `CollectionExportRecordStoreTests`, `JSONLRecordFileTests`,
+`CrossStoreIndependenceTests`).
 
 ### Manual Tests
 
 - Fresh destination, export one timeline month.
-- Export Favorites containing an already-exported timeline asset; on APFS, verify the new file is a clone (no new
-  used-bytes on disk); on exFAT, verify a real copy. Verify `_album.json` is written.
-- Export Recent (Recently Added smart album); verify it lands in `Collections/Recent/` with sidecar.
+- Export Favorites containing an already-exported timeline asset; on APFS, verify the new file is a clone
+  (free-space delta below ~64 KB on a 10 MB source); on exFAT, verify a real copy.
 - Export an album containing the same asset; verify a copy under `Collections/Albums/<album>/`.
 - Restart app; verify all placements show completed independently.
-- Rename an album in Photos.app; reopen the app; verify the rename dialog appears with "Rename existing folder"
-  highlighted; confirm; verify the folder on disk has been moved and no re-export occurs.
-- Repeat with the secondary action ("Create new folder"); verify a fresh folder is created and the old folder is
-  left untouched.
-- Cancel the rename dialog; verify nothing changes on disk or in records.
+- Rename an album in Photos.app; trigger another export of that album; verify the export writes to the new
+  folder under `Collections/Albums/<new-name>/`, the old folder remains untouched on disk, and the sidebar
+  shows both as separate rows.
 - Create duplicate album titles in different folders; verify folders do not collide on disk and both rows show
   correct counts.
-- Run migration from a pre-collections record store; verify existing timeline progress remains and no re-export is
-  needed.
-- Force-quit the app during migration (simulate by killing after v1 read but before v2 marker); verify next launch
-  re-runs migration cleanly.
-- Corruption recovery: manually corrupt `export-records-v2.json` (truncate to invalid JSON); launch the app; verify
-  the load alert appears and `*.broken-<ISO8601>` is created; quit and relaunch; verify a clean v2 is rebuilt from
-  v1 and no exports are lost vs. the v1 baseline.
+- Upgrade from a pre-collections record store; verify existing timeline progress remains, no re-export is needed,
+  and `collection-records.json` is created on first collection export (not before).
+- Corruption recovery: manually corrupt `collection-records.json` (truncate to invalid JSON); launch the app;
+  verify a per-store alert appears and **the corrupt file is still at `collection-records.json` on disk** (no
+  `*.broken-*` exists yet); verify timeline exports remain enabled; quit and relaunch — the same alert appears
+  and the file is still in place; choose Reset to empty and verify the corrupt file is renamed to
+  `collection-records.json.broken-<ISO8601>` and an empty collection store is initialized; verify timeline state
+  is intact throughout.
 - Limited Photos access: verify only visible albums/assets appear and copy does not promise full-library collections.
 - 100-album fixture: verify sidebar remains responsive while counts load.
 
 ## Effort Estimate
 
-Honest sizing, dominated by Phase 1 record-store and `ExportManager` rewires plus test refactors.
+Honest sizing. Phase 1 carries the persistence work and the routing diff; Phase 3 carries the user-visible
+export work; Phase 4 carries the UI plus the corruption-alert presenter plus docs.
 
-- Phase 0 (stable destination identity): ~3–5 days. Cheapest phase, highest leverage.
-- Phase 1 (v2 store, timeline-only end-to-end): ~3 weeks. (~22 test files need updating to placement-aware APIs;
-  migration crash-safety tests are new; placement normalization is non-trivial work even with the simpler lazy
-  `lastDoneAt` approach.)
-- Phase 2 (PhotoKit collection discovery, path policy): ~1 week.
-- Phase 3 (ExportManager collection-aware, count caching, sidecars, reuse-source copy path, rename UX):
-  ~1.5–2 weeks. Larger than the previous estimate: the rename UX with pre-flight is multi-day; the reuse-source
-  copy path with proper free-space-delta tests is another 1–2 days; the sidecar writer with drain trigger is its
-  own piece.
-- Phase 4 (UI): ~1–2 weeks.
-- Phase 5 (Docs): ~3 days.
+- **Phase 0** (stable destination identity, directory-migration coordinator): ~3–5 days. Includes the centralized
+  `ExportRecordsDirectoryCoordinator` that runs the legacy `<oldId>` → `<newId>` rename before either store
+  configures.
+- **Phase 1** (type/queue plumbing + new collection store, no migration): ~1.5–2 weeks. Extract `JSONLRecordFile`
+  from `ExportRecordStore` (one refactor PR), build `CollectionExportRecordStore` against it, thread
+  `ExportPlacement` through `ExportJob` and the queue, route every `markVariant*` call site by
+  `placement.kind`, add `currentJobPlacement` tracking with reset discipline, add `@Published
+  RecordStoreState` and `resetToEmpty()` on each store (no UI yet), wrap existing year/month read APIs so
+  timeline call sites don't change.
+- **Phase 2** (PhotoKit collection discovery, path policy): ~1 week.
+- **Phase 3** (ExportManager collection-aware, count caching, reuse-source copy path): ~1 week. Smaller than the
+  prior estimate because the album-rename dialog and `_album.json` sidecar are deferred.
+- **Phase 4** (UI + docs): ~1.5–2 weeks. Includes the corruption alert presenter (`RecordStoreAlertHost`),
+  flag-flip, and docs in the same PR.
 
-Total: 6–9 weeks. Phase 1 is the highest-risk and largest piece; Phase 3 is the largest user-visible piece.
-Time the later phases against Phase 1's actuals before committing to a release date.
+Total: ~5–6 weeks. Phase 1 risk is moderate (placement plumbing across `ExportManager` + new store) but
+contained — no migration, no on-disk format change for the timeline store. Phase 4 is the largest user-visible
+piece. Per the *Release strategy* note, no App Store release until Phase 4 is ready; phases 1–3 land behind
+`enableCollections == false` for internal/dev testers. Time later phases against Phase 1's actuals before
+committing to a release date.
 
 ## Open Questions
 

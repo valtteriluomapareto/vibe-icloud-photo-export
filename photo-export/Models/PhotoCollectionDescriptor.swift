@@ -40,8 +40,14 @@ struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
   /// rename of an album within its folder produces a fresh placement id.
   let pathComponents: [String]
 
-  /// Best-effort asset count. `nil` when the count would require a nontrivial fetch — the
-  /// sidebar fetches it lazily through `countAssets(in:)`.
+  /// Best-effort asset count. **Always `nil`** in production today: the sidebar
+  /// populates per-row counts asynchronously via `PhotoLibraryService.cachedCountAssets(in:)`,
+  /// which is the only consumer that reads counts at all. Eagerly populating this field
+  /// at tree-build time used to add 1–3 seconds of main-actor block per fetch on
+  /// libraries with 500+ albums (a `PHAsset.fetchAssets(in:).count` per album, all on
+  /// main); now we leave it nil. The field is preserved as part of the descriptor's
+  /// shape in case a future PhotoKit version exposes a free count API; no production
+  /// code currently reads it.
   let estimatedAssetCount: Int?
 
   /// Children of a `.folder`. Empty for `.album` and `.favorites`.

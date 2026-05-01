@@ -76,19 +76,212 @@ struct CollectionExportRecordStoreTests {
 
   // MARK: - Routing invariant: rejects .timeline
 
-  /// Plan §"Two Stores: API Surface → Collection store": ".timeline placement is a
-  /// programming error and trips an assertionFailure (release: silent drop)." Tests run in
-  /// debug; we cannot trip the assertion without crashing the test, so we verify the
-  /// observable side: `accept(_:)` returns false → the no-op path runs → state is unchanged.
-  /// In production the assertion catches this.
-  ///
-  /// We approximate by passing a `.timeline` placement and asserting nothing changes. Note:
-  /// the real assertion fires in debug; this test runs the no-op release branch via the
-  /// store's defensive `accept` check. (The store is built such that even if assertions
-  /// were ever disabled, no `.timeline` data would land in the collection store.)
-  // swift-format-ignore: NoLeadingUnderscores
-  // assertionFailure check intentionally omitted — would crash the test process.
-  // The "release silently drops" path is visible: state stays unchanged.
+  /// The collection store rejects `.timeline` placements at every entry point — three
+  /// layers of defense uphold the disjoint-key-space invariant:
+  /// 1. `accept(_:)` on every mutation API,
+  /// 2. snapshot-decode filter in `configure(for:)`,
+  /// 3. log-replay filter in `apply(.upsertPlacement)`.
+  /// Each test below exercises one of those paths and verifies the store remained empty
+  /// (or unchanged), proving the routing-bug protection.
+
+  private func timelinePlacement() -> ExportPlacement {
+    ExportPlacement.timeline(
+      year: 2025, month: 6, createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+  }
+
+  @Test func upsertPlacementRejectsTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-1")
+    let timeline = timelinePlacement()
+    store.upsertPlacement(timeline)
+    #expect(store.placements.isEmpty)
+    #expect(store.placement(id: timeline.id) == nil)
+  }
+
+  @Test func upsertScopedRecordRejectsTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-2")
+    let timeline = timelinePlacement()
+    let record = ScopedExportRecord(
+      placement: timeline, assetId: "a",
+      variants: [
+        .original: ExportVariantRecord(
+          filename: "x.heic", status: .done, exportDate: Date(), lastError: nil)
+      ]
+    )
+    store.upsert(record)
+    #expect(store.recordBodies.isEmpty)
+  }
+
+  @Test func markVariantInProgressRejectsTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-3")
+    store.markVariantInProgress(
+      assetId: "a", placement: timelinePlacement(), variant: .original, filename: nil)
+    #expect(store.recordBodies.isEmpty)
+  }
+
+  @Test func markVariantExportedRejectsTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-4")
+    store.markVariantExported(
+      assetId: "a", placement: timelinePlacement(), variant: .original,
+      filename: "x.heic", exportedAt: Date())
+    #expect(store.recordBodies.isEmpty)
+  }
+
+  @Test func markVariantFailedRejectsTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-5")
+    store.markVariantFailed(
+      assetId: "a", placement: timelinePlacement(), variant: .original,
+      error: "test", at: Date())
+    #expect(store.recordBodies.isEmpty)
+  }
+
+  @Test func removeVariantRejectsTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-6")
+    // Pre-populate via favorites placement so we can prove the .timeline call doesn't
+    // mutate state.
+    let favorites = favoritesPlacement()
+    store.upsertPlacement(favorites)
+    store.markVariantExported(
+      assetId: "a", placement: favorites, variant: .original,
+      filename: "x.heic", exportedAt: Date())
+    let beforeBodies = store.recordBodies
+    store.removeVariant(assetId: "a", placement: timelinePlacement(), variant: .original)
+    #expect(store.recordBodies == beforeBodies)
+  }
+
+  @Test func removeAssetRejectsTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-7")
+    let favorites = favoritesPlacement()
+    store.upsertPlacement(favorites)
+    store.markVariantExported(
+      assetId: "a", placement: favorites, variant: .original,
+      filename: "x.heic", exportedAt: Date())
+    let beforeBodies = store.recordBodies
+    store.remove(assetId: "a", placement: timelinePlacement())
+    #expect(store.recordBodies == beforeBodies)
+  }
+
+  @Test func deletePlacementForUnknownIdIsAllowed() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-9")
+    // No-op delete for an unknown id is harmless and emits a delete log line; verify the
+    // call doesn't crash and state stays empty.
+    store.deletePlacement(id: "collections:album:unknown")
+    #expect(store.placements.isEmpty)
+    #expect(store.recordBodies.isEmpty)
+  }
+
+  @Test func placementsMatchingTimelineReturnsEmpty() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-10")
+    store.upsertPlacement(favoritesPlacement())
+    #expect(store.placements(matching: .timeline).isEmpty)
+  }
+
+  @Test func readApisRejectTimeline() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-reject-11")
+    let timeline = timelinePlacement()
+    let asset = sampleAsset()
+
+    #expect(store.exportInfo(assetId: asset.id, placement: timeline) == nil)
+    #expect(!store.isExported(asset: asset, placement: timeline, selection: .edited))
+    let summary = store.summary(for: timeline)
+    #expect(summary.exportedCount == 0)
+    #expect(summary.totalCount == 0)
+    let monthSummary = store.monthSummary(
+      assets: [asset], placement: timeline, selection: .edited)
+    #expect(monthSummary.exportedCount == 0)
+    #expect(monthSummary.status == .notExported)
+  }
+
+  /// Snapshot-decode defense: hand-craft a snapshot file containing a `.timeline`
+  /// placement and verify it's dropped on load.
+  @Test func snapshotDecodeFiltersTimelinePlacements() throws {
+    let (dir, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let destDir = dir.appendingPathComponent("dest-corrupt", isDirectory: true)
+    try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+    // Build a tampered snapshot that mixes a .favorites placement (legitimate) with a
+    // .timeline placement (illegal). The .timeline entry's records should be dropped
+    // along with its placement metadata.
+    let timeline = timelinePlacement()
+    let favorites = favoritesPlacement()
+    let body = CollectionExportRecordStore.RecordBody(
+      variants: [
+        ExportVariant.original.rawValue: ExportVariantRecord(
+          filename: "x.heic", status: .done, exportDate: Date(timeIntervalSince1970: 1),
+          lastError: nil)
+      ]
+    )
+    let tampered = CollectionExportRecordStore.Snapshot(
+      version: CollectionExportRecordStore.Constants.snapshotVersion,
+      placements: [timeline.id: timeline, favorites.id: favorites],
+      records: [
+        timeline.id: ["a": body],
+        favorites.id: ["b": body],
+      ]
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let data = try encoder.encode(tampered)
+    let snapshotURL = destDir.appendingPathComponent(
+      CollectionExportRecordStore.Constants.snapshotFileName)
+    try data.write(to: snapshotURL)
+
+    // Configure a fresh store against the tampered file and assert the .timeline
+    // placement and its records are dropped while .favorites survives.
+    let store = CollectionExportRecordStore(baseDirectoryURL: dir)
+    store.configure(for: "dest-corrupt")
+    #expect(store.state == .ready, "snapshot is structurally valid; load should succeed")
+    #expect(store.placement(id: timeline.id) == nil)
+    #expect(store.placement(id: favorites.id) == favorites)
+    #expect(store.recordBodies[timeline.id] == nil)
+    #expect(store.recordBodies[favorites.id]?["b"] == body)
+  }
+
+  /// Log-replay defense: write an `upsertPlacement` log line for a `.timeline` placement
+  /// and verify it's dropped on replay.
+  @Test func logReplayFiltersTimelinePlacements() throws {
+    let (dir, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let destDir = dir.appendingPathComponent("dest-log-corrupt", isDirectory: true)
+    try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+    let timeline = timelinePlacement()
+    let logLine = CollectionExportRecordStore.LogOp.upsertPlacement(
+      placementId: timeline.id, placement: timeline)
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let data = try encoder.encode(logLine) + Data("\n".utf8)
+    let logURL = destDir.appendingPathComponent(
+      CollectionExportRecordStore.Constants.logFileName)
+    try data.write(to: logURL)
+
+    let store = CollectionExportRecordStore(baseDirectoryURL: dir)
+    store.configure(for: "dest-log-corrupt")
+    #expect(store.state == .ready)
+    #expect(store.placements.isEmpty, ".timeline placement must be dropped on log replay")
+  }
 
   // MARK: - Placement metadata
 

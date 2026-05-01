@@ -15,9 +15,15 @@ import os
 /// is no migration of any kind into this store — the timeline store's pre-existing data
 /// stays in `export-records.{json,jsonl}` untouched.
 ///
-/// The store **rejects** `.timeline` placements at every API entry point: an
-/// `assertionFailure` in debug, a silent drop in release. `ExportManager` is responsible for
-/// routing record mutations to the correct store via `placement.kind`.
+/// The store **rejects** `.timeline` placements at every entry point. Three layers of
+/// defense uphold the disjoint-key-space invariant:
+/// 1. The mutation API gate `accept(_:)` returns `false` and logs an error on `.timeline`.
+/// 2. `configure(for:)` filters `.timeline` placements out of the loaded snapshot before
+///    they enter `placements`.
+/// 3. `apply(.upsertPlacement)` filters `.timeline` placements out of the log replay.
+/// `ExportManager` is responsible for routing record mutations to the correct store via
+/// `placement.kind`; this store's defenses ensure that even a tampered-on-disk file
+/// cannot violate the invariant.
 @MainActor
 final class CollectionExportRecordStore: ObservableObject {
   enum Constants {
@@ -190,8 +196,26 @@ final class CollectionExportRecordStore: ObservableObject {
       state = .failed
     case .absent, .loaded:
       if let snapshot = loaded.snapshot {
-        placements = snapshot.placements
-        recordBodies = snapshot.records
+        // Defense in depth: the API entry points reject `.timeline` placements via
+        // `accept(_:)`, but a hand-edited or otherwise tampered snapshot file could still
+        // carry one. Drop them before they enter `placements` and drop their records too,
+        // so the disjoint-key-space invariant holds even on a corrupted-on-disk input.
+        var validPlacements: [String: ExportPlacement] = [:]
+        var droppedTimelineIds: Set<String> = []
+        for (placementId, placement) in snapshot.placements {
+          if placement.kind == .timeline {
+            droppedTimelineIds.insert(placementId)
+          } else {
+            validPlacements[placementId] = placement
+          }
+        }
+        if !droppedTimelineIds.isEmpty {
+          logger.error(
+            "Dropped \(droppedTimelineIds.count) .timeline placement(s) from snapshot; collection store does not hold timeline placements."
+          )
+        }
+        placements = validPlacements
+        recordBodies = snapshot.records.filter { !droppedTimelineIds.contains($0.key) }
       }
       for op in loaded.ops {
         apply(op)
@@ -229,6 +253,18 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   func deletePlacement(id: String) {
+    // `accept(_:)` takes a placement object; this entry point only has an id. Look up the
+    // existing placement to validate kind. If we don't know the placement (already deleted
+    // or never-recorded), we still allow the no-op `deleteRecord` op to land — a stray
+    // delete is harmless. We *do* refuse if the id matches a `.timeline`-kind entry that
+    // somehow snuck into memory (the snapshot-decode guard above is the primary defense;
+    // this is belt-and-braces).
+    if let existing = placements[id], existing.kind == .timeline {
+      logger.error(
+        "CollectionExportRecordStore.deletePlacement called for a .timeline placement \(id, privacy: .public); drop and ignore."
+      )
+      return
+    }
     append(.deletePlacement(placementId: id))
   }
 
@@ -237,8 +273,16 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   func placements(matching kind: ExportPlacement.Kind) -> [ExportPlacement] {
-    precondition(
-      kind != .timeline, "CollectionExportRecordStore does not hold .timeline placements")
+    if kind == .timeline {
+      // The collection store never holds `.timeline` placements (snapshot-decode and
+      // log-apply guards enforce that), so an empty array is the correct answer for the
+      // `.timeline` query. Log the call so a routing bug surfaces in diagnostics rather
+      // than the empty result quietly hiding it.
+      logger.error(
+        "CollectionExportRecordStore.placements(matching:) called with .timeline; returning empty."
+      )
+      return []
+    }
     return placements.values.filter { $0.kind == kind }
   }
 
@@ -438,12 +482,18 @@ final class CollectionExportRecordStore: ObservableObject {
 
   // MARK: - Internals
 
-  /// Validates that this store should accept the placement. Returns `false` (and trips an
-  /// assertion in debug) when given a `.timeline` placement; release builds silently drop.
+  /// Validates that this store should accept the placement. Returns `false` and logs an
+  /// error when given a `.timeline` placement; the store is then a no-op for the call.
+  /// Combined with the snapshot-decode and log-replay guards in `apply(_:)` and
+  /// `configure(for:)`, this is one of three layers that uphold the disjoint-key-space
+  /// invariant — a `.timeline` placement should never enter the collection store via any
+  /// path. (Earlier versions tripped `assertionFailure` here, which made the rejection
+  /// path untestable in debug builds; the routing-bug surfacing now happens via `Logger`
+  /// instead so tests can exercise every API entry point.)
   private func accept(_ placement: ExportPlacement) -> Bool {
     if placement.kind == .timeline {
-      assertionFailure(
-        "CollectionExportRecordStore received a .timeline placement \(placement.id); ExportManager routing should send these to ExportRecordStore."
+      logger.error(
+        "CollectionExportRecordStore received a .timeline placement \(placement.id, privacy: .public); routing bug — drop and ignore. Timeline placements belong in ExportRecordStore."
       )
       return false
     }
@@ -476,6 +526,14 @@ final class CollectionExportRecordStore: ObservableObject {
   private func apply(_ op: LogOp) {
     switch op {
     case .upsertPlacement(let placementId, let placement):
+      // Defense in depth — same rationale as the snapshot-decode guard. A `.timeline`
+      // placement must never enter the collection store, even via log replay.
+      if placement.kind == .timeline {
+        logger.error(
+          "Skipping .timeline placement \(placementId, privacy: .public) on apply; collection store does not hold timeline placements."
+        )
+        return
+      }
       placements[placementId] = placement
     case .deletePlacement(let placementId):
       placements.removeValue(forKey: placementId)

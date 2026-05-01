@@ -72,6 +72,10 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     for assets in assetsByYearMonth.values {
       if let found = assets.first(where: { $0.id == assetId }) { return found }
     }
+    if let found = favoritesAssets.first(where: { $0.id == assetId }) { return found }
+    for assets in assetsByAlbumLocalId.values {
+      if let found = assets.first(where: { $0.id == assetId }) { return found }
+    }
     return nil
   }
 

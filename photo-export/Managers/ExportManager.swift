@@ -282,6 +282,140 @@ final class ExportManager: ObservableObject {
     case unauthorized
   }
 
+  // MARK: - Collection start methods (Phase 3)
+
+  /// Starts an export of the user's Favorites. Routes through the resolver so the
+  /// placement is the canonical `collections:favorites`. Gated on
+  /// `canExportCollection`; the timeline store's state is not consulted (collection and
+  /// timeline exports are independent under the disjoint-key-spaces rationale).
+  func startExportFavorites() {
+    guard canExportCollection else {
+      logger.error(
+        "startExportFavorites ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public) (need .ready)"
+      )
+      return
+    }
+    let selection = versionSelection
+    clearEmptyRunMessage()
+    if !isRunning && !isProcessing { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.generation == gen else { return }
+      do {
+        let outcome = try await enqueueCollection(
+          selection: .favorites, scope: .favorites, selectionMode: selection, generation: gen)
+        guard self.generation == gen else { return }
+        switch outcome {
+        case .enqueued, .unauthorized:
+          break
+        case .alreadyComplete:
+          setEmptyRunMessage("Favorites are already exported.")
+        }
+        processQueueIfNeeded()
+      } catch {
+        logger.error(
+          "Failed to enqueue favorites export: \(String(describing: error), privacy: .public)"
+        )
+      }
+    }
+  }
+
+  /// Starts an export of a single user album by `collectionLocalIdentifier`.
+  func startExportAlbum(collectionId: String) {
+    guard canExportCollection else {
+      logger.error(
+        "startExportAlbum ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+    let selection = versionSelection
+    clearEmptyRunMessage()
+    if !isRunning && !isProcessing { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.generation == gen else { return }
+      do {
+        let outcome = try await enqueueCollection(
+          selection: .album(collectionId: collectionId),
+          scope: .album(collectionId: collectionId),
+          selectionMode: selection,
+          generation: gen
+        )
+        guard self.generation == gen else { return }
+        switch outcome {
+        case .enqueued, .unauthorized:
+          break
+        case .alreadyComplete:
+          setEmptyRunMessage("This album is already exported.")
+        }
+        processQueueIfNeeded()
+      } catch {
+        logger.error(
+          "Failed to enqueue album export: \(String(describing: error), privacy: .public)"
+        )
+      }
+    }
+  }
+
+  /// Resolves the placement for a collection selection and enqueues every asset that
+  /// isn't already `.done` for that placement. Mirrors `enqueueMonth` on the timeline
+  /// side; the only differences are the placement source (resolver vs synthetic
+  /// `.timeline(...)`), the fetch scope, and the record-store the existence check
+  /// reads from.
+  @discardableResult
+  private func enqueueCollection(
+    selection: LibrarySelection,
+    scope: PhotoFetchScope,
+    selectionMode: ExportVersionSelection,
+    generation gen: Int
+  ) async throws -> EnqueueOutcome {
+    try throwIfCancelledOrStale(gen)
+    guard photoLibraryService.isAuthorized else { return .unauthorized }
+
+    // Resolve the placement. For `.album`, the resolver needs the collection tree to
+    // find the album's display path and any colliding siblings; for `.favorites` the
+    // resolver returns a fixed placement.
+    let collections: [PhotoCollectionDescriptor]
+    if case .album = selection {
+      collections = try photoLibraryService.fetchCollectionTree()
+    } else {
+      collections = []
+    }
+    let existingPlacements = collectionExportRecordStore.placements
+      .values.map { $0 }
+    let resolver = ExportPlacementResolver()
+    let placement = try resolver.placement(
+      for: selection,
+      collections: collections,
+      existingPlacements: Array(existingPlacements)
+    )
+
+    // Persist the placement metadata so subsequent runs can match on the same
+    // (kind, collectionLocalIdentifier, displayPathHash8) triple. `upsertPlacement` is a
+    // no-op for `.timeline` kinds (which the collection store rejects), but we only
+    // ever pass `.favorites` or `.album` here.
+    collectionExportRecordStore.upsertPlacement(placement)
+
+    let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
+    try throwIfCancelledOrStale(gen)
+    let newJobs: [ExportJob] = assets.compactMap { asset in
+      guard
+        !collectionExportRecordStore.isExported(
+          asset: asset, placement: placement, selection: selectionMode)
+      else { return nil }
+      return ExportJob(
+        assetLocalIdentifier: asset.id, placement: placement, selection: selectionMode)
+    }
+    pendingJobs.append(contentsOf: newJobs)
+    totalJobsEnqueued += newJobs.count
+    queuedCountsByPlacementId[placement.id, default: 0] += newJobs.count
+    updateQueueCount()
+    logger.info(
+      "Enqueued \(newJobs.count) assets for export to \(placement.relativePath, privacy: .public)"
+    )
+    return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
+  }
+
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
     if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
@@ -544,16 +678,45 @@ final class ExportManager: ObservableObject {
       logger.debug("Begin scoped access for: \(scopedURL.path, privacy: .public)")
       defer { exportDestination.endScopedAccess(for: scopedURL) }
 
-      let destDir = try exportDestination.urlForMonth(
-        year: job.year, month: job.month, createIfNeeded: true)
-      let relPath = "\(job.year)/" + String(format: "%02d", job.month) + "/"
+      // Phase 3 unifies the destination resolution: every job's placement carries its
+      // own relativePath (e.g. "2025/02/" for timeline, "Collections/Albums/Trip/" for
+      // an album). The destination resolver applies escape-protection regardless of
+      // kind, so timeline and collection jobs flow through one path.
+      let destDir = try exportDestination.urlForRelativeDirectory(
+        job.placement.relativePath, createIfNeeded: true)
+      let relPath = job.placement.relativePath
 
       let resources = photoLibraryService.resources(for: descriptor.id)
       let resourceSummary = resources.map { "\($0.type.rawValue):\($0.originalFilename)" }.joined(
         separator: ", ")
       logger.debug("Asset resources: \(resourceSummary, privacy: .public)")
 
-      let existingRecord = exportRecordStore.exportInfo(assetId: descriptor.id)
+      // Look up the existing record for the *current placement* (not cross-placement).
+      // Timeline jobs read from the timeline store; collection jobs read from the
+      // collection store. The reuse-source copy path (Phase 3.3) consults the *other*
+      // store separately to avoid re-fetching from PhotoKit when an asset is already
+      // exported elsewhere.
+      let existingVariants: [ExportVariant: ExportVariantRecord]
+      switch job.placement.kind {
+      case .timeline:
+        existingVariants = exportRecordStore.exportInfo(assetId: descriptor.id)?.variants ?? [:]
+      case .favorites, .album:
+        existingVariants =
+          collectionExportRecordStore.exportInfo(assetId: descriptor.id, placement: job.placement)?
+          .variants ?? [:]
+      }
+      // Synthesize an `ExportRecord` shape for the existing-stem inheritance logic below
+      // (which today only accepts `ExportRecord?`). Collection placements don't have
+      // year/month, so we use the placement's relPath directly.
+      let existingRecord: ExportRecord?
+      if !existingVariants.isEmpty {
+        let (yr, mo) = job.placement.timelineYearMonth ?? (0, 0)
+        existingRecord = ExportRecord(
+          id: descriptor.id, year: yr, month: mo, relPath: job.placement.relativePath,
+          variants: existingVariants)
+      } else {
+        existingRecord = nil
+      }
       let required = requiredVariants(for: descriptor, selection: job.selection)
       let missing = required.filter { variant in
         existingRecord?.variants[variant]?.status != .done
@@ -726,7 +889,47 @@ final class ExportManager: ObservableObject {
       assetId: descriptor.id, placement: job.placement, variant: variant,
       relPath: relPath, filename: finalURL.lastPathComponent)
 
-    try await assetResourceWriter.writeResource(resource, forAssetId: descriptor.id, to: tempURL)
+    // Reuse-source copy path (Phase 3.3): if `(asset, variant)` is already exported
+    // under another placement, copy the existing file rather than re-fetching from
+    // PhotoKit. On APFS the copy is a CoW clone (no extra disk usage); on non-APFS
+    // it's a real copy. PhotoKit fallback only on source-side errors (the prior
+    // `.done` record is stale); destination-side errors fail the variant directly
+    // because retrying via PhotoKit would hit the same destination problem.
+    var didCopyFromReuseSource = false
+    if let reuse = findReuseSource(
+      assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
+      let destinationRoot = exportDestination.selectedFolderURL
+    {
+      let sourceURL =
+        destinationRoot
+        .appendingPathComponent(reuse.placement.relativePath, isDirectory: true)
+        .appendingPathComponent(reuse.filename)
+      do {
+        try fileSystem.copyItem(from: sourceURL, to: tempURL)
+        didCopyFromReuseSource = true
+        logger.debug(
+          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(reuse.placement.relativePath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
+        )
+      } catch {
+        if Self.isSourceSideCopyError(error) {
+          // Source missing/unreadable: prior `.done` record is stale. Fall through to
+          // PhotoKit re-export. We do NOT mutate the stale record — that placement's
+          // corruption surfaces on its next export run.
+          logger.warning(
+            "Reuse-source missing for id: \(descriptor.id, privacy: .public) (\(error.localizedDescription, privacy: .public)); falling back to PhotoKit"
+          )
+        } else {
+          // Destination-side error: out of space, permission denied, etc. Don't retry
+          // via PhotoKit — it would hit the same destination problem. Throw so the
+          // caller marks the variant `.failed`.
+          throw error
+        }
+      }
+    }
+    if !didCopyFromReuseSource {
+      try await assetResourceWriter.writeResource(
+        resource, forAssetId: descriptor.id, to: tempURL)
+    }
     try throwIfCancelledOrStale(gen)
 
     try await withCheckedThrowingContinuation {
@@ -904,6 +1107,83 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Helpers
+
+  // MARK: Reuse-source lookup
+
+  /// A `(asset, variant)` pair already exported under another placement. The reuse-source
+  /// copy path uses this to copy the existing file rather than re-fetching the asset
+  /// from PhotoKit. On APFS, `FileManager.copyItem` performs copy-on-write so the
+  /// duplicate uses no extra bytes; on non-APFS it's a real copy.
+  private struct ReuseSource {
+    let placement: ExportPlacement
+    let filename: String
+  }
+
+  /// Looks up any existing `.done` record for `(assetId, variant)` across both stores,
+  /// excluding the placement we're currently writing to. Order: timeline first, then
+  /// collection placements (sorted by id for determinism). Returns `nil` if nothing
+  /// reusable exists.
+  ///
+  /// Per `docs/project/plans/collections-export-plan.md` §"Reuse-Source Copy Path", any
+  /// prior `.done` write is acceptable as a source — there's no preference for timeline
+  /// over collection beyond the deterministic search order.
+  private func findReuseSource(
+    assetId: String, variant: ExportVariant, currentPlacement: ExportPlacement
+  ) -> ReuseSource? {
+    // 1) Timeline store (skip if we're currently writing to a timeline placement).
+    if currentPlacement.kind != .timeline {
+      if let record = exportRecordStore.exportInfo(assetId: assetId),
+        let variantRec = record.variants[variant],
+        variantRec.status == .done,
+        let filename = variantRec.filename
+      {
+        let placement = ExportPlacement.timeline(year: record.year, month: record.month)
+        return ReuseSource(placement: placement, filename: filename)
+      }
+    }
+    // 2) Collection placements (sorted for deterministic test behavior).
+    let sortedIds = collectionExportRecordStore.recordBodies.keys.sorted()
+    for placementId in sortedIds {
+      if placementId == currentPlacement.id { continue }
+      guard let placement = collectionExportRecordStore.placement(id: placementId) else {
+        continue
+      }
+      guard
+        let body = collectionExportRecordStore.recordBodies[placementId],
+        let assetBody = body[assetId],
+        let variantRec = assetBody.variants[variant.rawValue],
+        variantRec.status == .done,
+        let filename = variantRec.filename
+      else { continue }
+      return ReuseSource(placement: placement, filename: filename)
+    }
+    return nil
+  }
+
+  /// Distinguishes source-side errors (file missing/unreadable — fall back to PhotoKit)
+  /// from destination-side errors (out of space, permission denied — fail the variant
+  /// directly because PhotoKit retry would hit the same destination problem).
+  private static func isSourceSideCopyError(_ error: Error) -> Bool {
+    let nsError = error as NSError
+    if nsError.domain == NSCocoaErrorDomain {
+      switch nsError.code {
+      case NSFileReadNoSuchFileError, NSFileNoSuchFileError, NSFileReadUnknownError,
+        NSFileReadCorruptFileError:
+        return true
+      default:
+        return false
+      }
+    }
+    if nsError.domain == NSPOSIXErrorDomain {
+      switch nsError.code {
+      case Int(ENOENT), Int(EACCES):
+        return true
+      default:
+        return false
+      }
+    }
+    return false
+  }
 
   // MARK: Record-mutation routing
 

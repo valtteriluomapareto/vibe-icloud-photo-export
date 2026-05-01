@@ -1161,14 +1161,20 @@ final class ExportManager: ObservableObject {
   }
 
   /// Distinguishes source-side errors (file missing/unreadable — fall back to PhotoKit)
-  /// from destination-side errors (out of space, permission denied — fail the variant
-  /// directly because PhotoKit retry would hit the same destination problem).
+  /// from destination-side errors (out of space, target permission, target volume removed
+  /// — fail the variant directly because a PhotoKit retry would hit the same destination
+  /// problem and waste cycles).
+  ///
+  /// `NSFileReadNoPermissionError` belongs in the source-side bucket: the prior
+  /// `.done` file's permissions were changed in Finder (or the volume was remounted
+  /// read-only), so reading it fails — but we can still re-fetch from PhotoKit and
+  /// write a fresh copy at the destination, which the user owns.
   private static func isSourceSideCopyError(_ error: Error) -> Bool {
     let nsError = error as NSError
     if nsError.domain == NSCocoaErrorDomain {
       switch nsError.code {
       case NSFileReadNoSuchFileError, NSFileNoSuchFileError, NSFileReadUnknownError,
-        NSFileReadCorruptFileError:
+        NSFileReadCorruptFileError, NSFileReadNoPermissionError:
         return true
       default:
         return false

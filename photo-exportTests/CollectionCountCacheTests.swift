@@ -65,6 +65,45 @@ struct CollectionCountCacheTests {
     #expect(await counter.value == 2)
   }
 
+  // MARK: - Cancellation
+
+  /// `invalidateAll()` cancels every in-flight task. The fetch closure observes
+  /// `Task.isCancelled` (or hits a cancellation point) and aborts so resources aren't
+  /// stranded after a `PHPhotoLibraryChangeObserver` callback.
+  @Test func invalidateAllCancelsInFlightTask() async throws {
+    let cache = CollectionCountCache()
+    let observed = AtomicFlag()
+
+    // Start a fetch that suspends and observes cancellation.
+    async let result: Int = cache.count(for: "slow") {
+      do {
+        // Suspend long enough for invalidateAll to cancel us.
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+      } catch {
+        await observed.set(true)
+        throw error
+      }
+      return 42
+    }
+
+    // Give the task a moment to enter its sleep, then invalidate.
+    try await Task.sleep(nanoseconds: 50_000_000)
+    await cache.invalidateAll()
+
+    // The awaited task should now throw CancellationError.
+    do {
+      _ = try await result
+      Issue.record("Expected CancellationError")
+    } catch is CancellationError {
+      // Good
+    } catch {
+      // The closure rethrows whatever Task.sleep threw, which on cancellation is
+      // CancellationError. Accept that exact path.
+      #expect(error is CancellationError, "Expected CancellationError, got \(error)")
+    }
+    #expect(await observed.value)
+  }
+
   // MARK: - Error propagation
 
   @Test func errorIsPropagatedAndNotCached() async throws {
@@ -97,4 +136,11 @@ struct CollectionCountCacheTests {
 private actor Counter {
   private(set) var value = 0
   func increment() { value += 1 }
+}
+
+/// Tiny actor flag for the cancellation test (the closure observes cancellation in a
+/// detached context).
+private actor AtomicFlag {
+  private(set) var value = false
+  func set(_ newValue: Bool) { value = newValue }
 }

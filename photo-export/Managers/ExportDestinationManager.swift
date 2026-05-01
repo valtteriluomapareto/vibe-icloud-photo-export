@@ -225,7 +225,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // resolved path would not have the root as a prefix.
     let rootCanonical = root.standardizedFileURL.resolvingSymlinksInPath().path
     let targetCanonical = Self.canonicalizeExistingPrefix(of: target).path
-    if !targetCanonical.hasPrefix(rootCanonical) {
+    // Boundary-safe prefix check: a bare `hasPrefix(rootCanonical)` would let
+    // `/tmp/Backup-old/Trip` slip past a root of `/tmp/Backup`. Accept either equal-to-
+    // root (zero-length tail) or root-followed-by-slash. `rootCanonical` itself never
+    // ends with `/` (FileManager's standardized paths drop the trailing slash) so we
+    // append it explicitly here.
+    let rootBoundary = rootCanonical + "/"
+    if targetCanonical != rootCanonical && !targetCanonical.hasPrefix(rootBoundary) {
       throw ExportDestinationError.invalidRelativePath(
         "path resolves outside the export root: \(relativePath)")
     }

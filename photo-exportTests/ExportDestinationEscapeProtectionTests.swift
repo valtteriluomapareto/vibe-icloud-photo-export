@@ -79,6 +79,36 @@ struct ExportDestinationEscapeProtectionTests {
 
   // MARK: - Symlink escape
 
+  /// Regression: the prefix check used to be bare `hasPrefix(rootCanonical)`, which let
+  /// a sibling directory whose name *starts with* the root path (e.g. root `/tmp/Foo`
+  /// and target `/tmp/Foo-old/Trip`) bypass the escape check. The boundary-safe check
+  /// uses `root + "/"` (or equality with root) so the prefix only matches at a path
+  /// component boundary.
+  @Test func siblingDirectoryWithSimilarPrefixIsRejected() throws {
+    let parent = FileManager.default.temporaryDirectory
+      .appendingPathComponent("EscapePrefix-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: parent) }
+
+    let root = parent.appendingPathComponent("Backup", isDirectory: true)
+    let sibling = parent.appendingPathComponent("Backup-old", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+
+    let mgr = ExportDestinationManager(skipRestore: true)
+    mgr.setSelectedFolderForTesting(root)
+
+    // A symlink inside the root pointing at the sibling whose name happens to share a
+    // prefix with the root path. Without the boundary check, the resolver would accept
+    // any path under `escape/` as still being under root.
+    let escapeLink = root.appendingPathComponent("escape", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: escapeLink, withDestinationURL: sibling)
+
+    #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
+      _ = try mgr.urlForRelativeDirectory("escape/Trip", createIfNeeded: false)
+    }
+  }
+
   /// If a parent directory is a symlink pointing outside the export root, the resolver
   /// must catch it and refuse — otherwise a Finder-placed symlink could trick the app
   /// into writing exports outside the selected folder.

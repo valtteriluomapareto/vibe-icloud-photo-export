@@ -162,6 +162,39 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     }
   }
 
+  /// Phase 3 cache. Tests can read `collectionCountCache` to assert hit/miss behavior.
+  nonisolated let collectionCountCache = CollectionCountCache()
+
+  nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int {
+    try await collectionCountCache.count(
+      for: Self.cacheKey(for: scope, adjusted: false)
+    ) {
+      try await self.countAssets(in: scope)
+    }
+  }
+
+  nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
+    try await collectionCountCache.count(
+      for: Self.cacheKey(for: scope, adjusted: true)
+    ) {
+      try await self.countAdjustedAssets(in: scope)
+    }
+  }
+
+  nonisolated fileprivate static func cacheKey(for scope: PhotoFetchScope, adjusted: Bool)
+    -> String
+  {
+    let suffix = adjusted ? "@adjusted" : "@total"
+    switch scope {
+    case .timeline(let year, let month):
+      return "timeline:\(year)-\(month.map(String.init) ?? "all")\(suffix)"
+    case .favorites:
+      return "favorites\(suffix)"
+    case .album(let id):
+      return "album:\(id)\(suffix)"
+    }
+  }
+
   nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
     return await MainActor.run { [weak self] in
       guard let self else { return 0 }

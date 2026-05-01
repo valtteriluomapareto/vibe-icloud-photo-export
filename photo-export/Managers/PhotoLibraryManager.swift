@@ -31,6 +31,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `countAdjustedAssets` and cleared when the Photos library changes or the user re-authorises.
   private var adjustedCountByYearMonth: [String: Int] = [:]
 
+  /// Phase 3 collection-count cache. Keyed by scope. Invalidated on
+  /// `photoLibraryDidChange` so subsequent reads re-fetch.
+  nonisolated let collectionCountCache = CollectionCountCache()
+
   nonisolated static func isAuthorizationSufficient(_ status: PHAuthorizationStatus) -> Bool {
     status == .authorized || status == .limited
   }
@@ -160,6 +164,38 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
         return PHAsset.fetchAssets(in: collection, options: opts).count
       }
     }.value
+  }
+
+  // MARK: - Cached counts (Phase 3)
+
+  /// Stable string key for a scope. Same scope → same key, so the cache dedups across
+  /// callers asking the same question.
+  nonisolated fileprivate static func cacheKey(for scope: PhotoFetchScope, adjusted: Bool)
+    -> String
+  {
+    let suffix = adjusted ? "@adjusted" : "@total"
+    switch scope {
+    case .timeline(let year, let month):
+      return "timeline:\(year)-\(month.map(String.init) ?? "all")\(suffix)"
+    case .favorites:
+      return "favorites\(suffix)"
+    case .album(let id):
+      return "album:\(id)\(suffix)"
+    }
+  }
+
+  nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int {
+    let key = Self.cacheKey(for: scope, adjusted: false)
+    return try await collectionCountCache.count(for: key) {
+      try await self.countAssets(in: scope)
+    }
+  }
+
+  nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
+    let key = Self.cacheKey(for: scope, adjusted: true)
+    return try await collectionCountCache.count(for: key) {
+      try await self.countAdjustedAssets(in: scope)
+    }
   }
 
   /// Number of assets in a fetch scope whose `hasAdjustments` is `true`. Iterates the
@@ -508,6 +544,11 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
+    // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
+    // re-fetches against the updated library state.
+    Task { [collectionCountCache] in
+      await collectionCountCache.invalidateAll()
+    }
   }
 
   // MARK: - Collection scope fetch helpers

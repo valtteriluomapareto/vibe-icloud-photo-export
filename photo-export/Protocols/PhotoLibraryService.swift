@@ -56,6 +56,16 @@ protocol PhotoLibraryService: AnyObject {
   /// for the same reason as `countAssets(in:)`.
   nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
 
+  // MARK: - Cached counts (Phase 3)
+
+  /// Cached version of `countAssets(in:)`. The same scope returns a cached value until
+  /// the next `PHPhotoLibraryChangeObserver` callback invalidates the cache. Concurrent
+  /// callers for the same scope share one in-flight fetch.
+  nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int
+
+  /// Cached version of `countAdjustedAssets(in:)`.
+  nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
+
   func startCachingThumbnails(for assets: [AssetDescriptor])
   func stopCachingThumbnails(for assets: [AssetDescriptor])
   func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage?

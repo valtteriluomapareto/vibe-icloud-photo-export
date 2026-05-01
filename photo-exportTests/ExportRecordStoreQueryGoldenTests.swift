@@ -737,4 +737,260 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(store.recordCount(year: yr, month: mo, variant: .original, status: .done) == 0)
     #expect(store.recordCountOriginalDoneAtNaturalStem(year: yr, month: mo) == 0)
   }
+
+  // MARK: - Cross-cell move via the failed-then-inProgress quirk
+
+  /// Closes a coverage gap from the c15c159 review: `markVariantFailed` for a brand-new
+  /// asset id creates the record at year=0/month=0 (the API doesn't take year/month for
+  /// failed). A subsequent `markVariantInProgress` for the same asset id sets the real
+  /// year/month, which routes through `apply(.upsert(...))` with a counter diff that
+  /// must subtract from the (0,0) cell and add to the real cell.
+  ///
+  /// The diff is correct by inspection (subtract-old, add-new), but
+  /// `incrementalCountersStayConsistentUnderChurn` only exercises the in-progress→failed
+  /// direction. This test pins the reverse — failed-first-then-inProgress — and verifies
+  /// the counter map at (0,0) returns to zero after the move while (year,month) picks up
+  /// the contribution.
+  @Test func failedThenInProgressMovesCountersAcrossCells() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let now = Date(timeIntervalSince1970: 0)
+
+    // Step 1: failed call for a brand-new asset id → record at (0, 0).
+    store.markVariantFailed(
+      assetId: "moving", variant: .original, error: "test", at: now)
+    #expect(store.exportInfo(assetId: "moving")?.year == 0)
+    #expect(store.exportInfo(assetId: "moving")?.month == 0)
+    #expect(
+      store.recordCount(year: 0, month: 0, variant: .original, status: .failed) == 1,
+      "(0,0) cell holds the orphan failed record")
+    #expect(
+      store.recordCount(year: 2025, month: 6, variant: .original, status: .failed) == 0)
+
+    // Step 2: in-progress call sets year=2025/month=6 → cross-cell move.
+    store.markVariantInProgress(
+      assetId: "moving", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: nil)
+    #expect(store.exportInfo(assetId: "moving")?.year == 2025)
+    #expect(store.exportInfo(assetId: "moving")?.month == 6)
+
+    // (0,0) cell must have decremented to 0; (2025,6) cell picked up the in-progress.
+    #expect(
+      store.recordCount(year: 0, month: 0, variant: .original, status: .failed) == 0,
+      "(0,0) cell counter must drop to zero after cross-cell move")
+    #expect(
+      store.recordCount(year: 0, month: 0, variant: .original, status: .inProgress) == 0,
+      "no inProgress at (0,0) — record was moved before transition")
+    #expect(
+      store.recordCount(year: 2025, month: 6, variant: .original, status: .inProgress) == 1,
+      "(2025,6) cell holds the in-progress contribution")
+
+    // Step 3: complete the move with markVariantExported.
+    store.markVariantExported(
+      assetId: "moving", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "MOVING.HEIC", exportedAt: now)
+    #expect(
+      store.recordCount(year: 2025, month: 6, variant: .original, status: .inProgress) == 0)
+    #expect(
+      store.recordCount(year: 2025, month: 6, variant: .original, status: .done) == 1)
+    #expect(store.yearExportedCount(year: 2025) == 1)
+    #expect(store.yearExportedCount(year: 0) == 0)
+  }
+
+  // MARK: - bulkImportRecords counter consistency
+
+  /// Closes a coverage gap from the c15c159 review: `bulkImportRecords` constructs a
+  /// merged record (preserving existing `.done` variants, accepting weaker imports) and
+  /// routes through `append(.upsert(merged))`. The same counter diff applies, but the
+  /// merge-with-precedence logic combined with cross-record changes wasn't exercised
+  /// directly by the churn test.
+  ///
+  /// Fixture: pre-populate the store with one `.original.failed` record. Then bulk-import
+  /// two records: one that promotes the existing failed asset to `.original.done`, and
+  /// one fresh asset with `.edited.done`. After import, every public count method
+  /// matches a recompute-from-scratch over `recordsById`.
+  @Test func bulkImportRecordsKeepsCountersConsistent() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let now = Date(timeIntervalSince1970: 0)
+    let yr = 2025
+    let mo = 8
+    let rel = "2025/08/"
+
+    // Pre-state: one .original.failed via the standard mutation path.
+    store.markVariantInProgress(
+      assetId: "promoted", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: nil)
+    store.markVariantFailed(
+      assetId: "promoted", variant: .original, error: "test", at: now)
+    #expect(store.recordCount(year: yr, month: mo, variant: .original, status: .failed) == 1)
+
+    // Bulk-import: promote the failed asset's .original to .done, and add a fresh
+    // asset's .edited.done. `bulkImportRecords` builds `merged` per id and calls
+    // `append(.upsert(merged))`, which routes through the diff path.
+    let promotedDone = ExportRecord(
+      id: "promoted", year: yr, month: mo, relPath: rel,
+      variants: [
+        .original: ExportVariantRecord(
+          filename: "PROMOTED.HEIC", status: .done, exportDate: now, lastError: nil)
+      ])
+    let freshEdited = ExportRecord(
+      id: "fresh", year: yr, month: mo, relPath: rel,
+      variants: [
+        .edited: ExportVariantRecord(
+          filename: "FRESH.JPG", status: .done, exportDate: now, lastError: nil)
+      ])
+    store.bulkImportRecords([promotedDone, freshEdited])
+
+    // Recompute every count from scratch and verify the public methods agree.
+    var byVariantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
+    var bothDone = 0
+    var origAtNaturalStem = 0
+    for record in store.recordsById.values
+    where record.year == yr && record.month == mo {
+      for (variant, variantRec) in record.variants {
+        byVariantStatus[variant, default: [:]][variantRec.status, default: 0] += 1
+      }
+      let originalDone = record.variants[.original]?.status == .done
+      let editedDone = record.variants[.edited]?.status == .done
+      if originalDone && editedDone { bothDone += 1 }
+      if originalDone, !editedDone,
+        let filename = record.variants[.original]?.filename,
+        !ExportFilenamePolicy.isOrigCompanion(filename: filename)
+      {
+        origAtNaturalStem += 1
+      }
+    }
+    for variant in [ExportVariant.original, .edited] {
+      for status in [ExportStatus.pending, .inProgress, .done, .failed] {
+        let expected = byVariantStatus[variant]?[status] ?? 0
+        #expect(
+          store.recordCount(year: yr, month: mo, variant: variant, status: status) == expected
+        )
+      }
+    }
+    #expect(store.recordCountBothVariantsDone(year: yr, month: mo) == bothDone)
+    #expect(
+      store.recordCountOriginalDoneAtNaturalStem(year: yr, month: mo) == origAtNaturalStem)
+    #expect(store.yearExportedCount(year: yr) == byVariantStatus[.original]?[.done] ?? 0)
+
+    // Sanity: the failed record is gone (promoted to done) and the fresh edited landed.
+    #expect(store.recordCount(year: yr, month: mo, variant: .original, status: .failed) == 0)
+    #expect(store.recordCount(year: yr, month: mo, variant: .original, status: .done) == 1)
+    #expect(store.recordCount(year: yr, month: mo, variant: .edited, status: .done) == 1)
+  }
+
+  // MARK: - configure(for:) reload roundtrip
+
+  /// Closes the most important coverage gap from the c15c159 review:
+  /// `rebuildCountersFromRecords()` is the only path that materializes counters during
+  /// load. It runs after the snapshot+log replay (which calls `apply` with
+  /// `recordCounters: false`) and after `recoverInProgressVariants()` rewrites in-flight
+  /// variants to failed. If the rebuild has any divergence from the production
+  /// `contribute(_:sign:)` math, the incremental counters would silently disagree with
+  /// reality after every app launch — and no other test exercises this path end-to-end.
+  ///
+  /// Test approach: drive a deterministic mutation sequence on store A, capture every
+  /// public count value, then construct store B against the same on-disk directory and
+  /// verify B reports identical counts.
+  @Test func configureReloadReproducesCountersExactly() throws {
+    let (dir, storeA) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let now = Date(timeIntervalSince1970: 0)
+    let yr = 2025
+    let mo = 6
+    let rel = "2025/06/"
+
+    // Drive a mix of completed, failed, and in-progress variants. The in-progress
+    // ones will be rewritten to failed by recoverInProgressVariants on the second
+    // store's load, so the second-store counts reflect that recovery — verifying the
+    // post-recovery counter rebuild is consistent.
+    for i in 1...3 {
+      storeA.markVariantExported(
+        assetId: "done-\(i)", variant: .original, year: yr, month: mo, relPath: rel,
+        filename: "D\(i).HEIC", exportedAt: now)
+    }
+    storeA.markVariantInProgress(
+      assetId: "stuck", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: nil)
+    storeA.markVariantInProgress(
+      assetId: "alsostuck", variant: .edited, year: yr, month: mo, relPath: rel,
+      filename: nil)
+    storeA.markVariantInProgress(
+      assetId: "fail", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: nil)
+    storeA.markVariantFailed(
+      assetId: "fail", variant: .original, error: "test", at: now)
+    storeA.markVariantExported(
+      assetId: "both", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: "BOTH.HEIC", exportedAt: now)
+    storeA.markVariantExported(
+      assetId: "both", variant: .edited, year: yr, month: mo, relPath: rel,
+      filename: "BOTH.JPG", exportedAt: now)
+    storeA.flushForTesting()  // ensure the JSONL log is durable
+
+    // Construct a fresh store against the same on-disk directory. Triggers
+    // configure → snapshot/log load → recoverInProgressVariants → rebuild.
+    let storeB = ExportRecordStore(baseDirectoryURL: dir)
+    storeB.configure(for: "test")
+    #expect(storeB.state == .ready)
+
+    // Recovery transitions the two .inProgress variants → .failed. Both stores'
+    // observable state should now match.
+    #expect(
+      storeB.recordCount(year: yr, month: mo, variant: .original, status: .inProgress) == 0,
+      "stuck inProgress recovered to failed")
+    #expect(
+      storeB.recordCount(year: yr, month: mo, variant: .edited, status: .inProgress) == 0,
+      "stuck inProgress recovered to failed")
+
+    // Final-state count cross-check: every public count method on storeB matches a
+    // recompute over storeB.recordsById.
+    var byVariantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
+    var bothDone = 0
+    var origAtNaturalStem = 0
+    for record in storeB.recordsById.values
+    where record.year == yr && record.month == mo {
+      for (variant, variantRec) in record.variants {
+        byVariantStatus[variant, default: [:]][variantRec.status, default: 0] += 1
+      }
+      let originalDone = record.variants[.original]?.status == .done
+      let editedDone = record.variants[.edited]?.status == .done
+      if originalDone && editedDone { bothDone += 1 }
+      if originalDone, !editedDone,
+        let filename = record.variants[.original]?.filename,
+        !ExportFilenamePolicy.isOrigCompanion(filename: filename)
+      {
+        origAtNaturalStem += 1
+      }
+    }
+    for variant in [ExportVariant.original, .edited] {
+      for status in [ExportStatus.pending, .inProgress, .done, .failed] {
+        let expected = byVariantStatus[variant]?[status] ?? 0
+        let actual = storeB.recordCount(
+          year: yr, month: mo, variant: variant, status: status)
+        #expect(
+          actual == expected,
+          "post-reload recordCount(\(variant), \(status)) = \(actual), expected \(expected)"
+        )
+      }
+    }
+    #expect(storeB.recordCountBothVariantsDone(year: yr, month: mo) == bothDone)
+    #expect(
+      storeB.recordCountOriginalDoneAtNaturalStem(year: yr, month: mo) == origAtNaturalStem)
+    #expect(storeB.yearExportedCount(year: yr) == byVariantStatus[.original]?[.done] ?? 0)
+
+    // Concrete spot-checks:
+    // - 3 done-N records + 1 both = 4 .original.done.
+    // - 1 .both = 1 .edited.done.
+    // - 1 stuck (originally .original.inProgress) recovered → .original.failed.
+    // - 1 alsostuck (originally .edited.inProgress) recovered → .edited.failed.
+    // - 1 fail = 1 .original.failed.
+    // Total: .original.done = 4, .original.failed = 2, .edited.done = 1, .edited.failed = 1.
+    #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .done) == 4)
+    #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .failed) == 2)
+    #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .done) == 1)
+    #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .failed) == 1)
+    #expect(storeB.recordCountBothVariantsDone(year: yr, month: mo) == 1)
+  }
 }

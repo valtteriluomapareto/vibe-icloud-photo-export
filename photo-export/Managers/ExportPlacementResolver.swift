@@ -172,17 +172,29 @@ struct ExportPlacementResolver {
     // whose sanitized parent + leaf would land under the same folder. Excludes the
     // descriptor we're resolving. Each contributes one entry per (collectionId,
     // sanitized leaf) pair.
+    //
+    // "New" here means "no existing placement matches the album's *current*
+    // displayPathHash". A renamed or moved album whose old placement is still on disk
+    // counts as new for the new path: the old placement is stale (different path-hash)
+    // and the new path-hash hasn't been claimed yet. Without this distinction, two
+    // distinct renamed albums could each end up at the bare path because the filter
+    // would have dropped them as "covered above".
     let siblingCandidates = albumsInTree(collections)
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter { other in
-        // Must have an existing placement absent (otherwise covered above).
-        existingPlacements.first(where: {
-          $0.kind == .album && $0.collectionLocalIdentifier == other.localIdentifier
-        }) == nil
-      }
-      .filter { other in
         sanitizedFolderPath(other.pathComponents) == parentPathString
           && ExportPathPolicy.sanitizeComponent(other.title) == sanitizedLeaf
+      }
+      .filter { other in
+        // If an existing placement matches `other` at its *current* path-hash, it
+        // already has its bare/suffixed path locked in via `existingLeaves` above —
+        // skip it to avoid double-counting.
+        let otherHash = displayPathHash8(
+          pathComponents: other.pathComponents, title: other.title)
+        return existingPlacements.first(where: {
+          $0.kind == .album && $0.collectionLocalIdentifier == other.localIdentifier
+            && $0.id.hasSuffix(":\(otherHash)")
+        }) == nil
       }
 
     let collidingNewIds: [String] =

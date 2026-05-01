@@ -143,6 +143,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// detached-task implementation here.
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
     try await Task.detached(priority: .userInitiated) {
+      try Task.checkCancellation()
       let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
       guard Self.isAuthorizationSufficient(status) else {
         throw PhotoLibraryError.authorizationDenied
@@ -150,8 +151,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       let opts = Self.fetchOptions(for: scope)
       switch scope {
       case .timeline, .favorites:
+        try Task.checkCancellation()
         return PHAsset.fetchAssets(with: opts).count
       case .album(let collectionLocalId):
+        try Task.checkCancellation()
         guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
         else { return 0 }
         return PHAsset.fetchAssets(in: collection, options: opts).count
@@ -164,6 +167,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// main actor.
   nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
     try await Task.detached(priority: .userInitiated) {
+      try Task.checkCancellation()
       let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
       guard Self.isAuthorizationSufficient(status) else {
         throw PhotoLibraryError.authorizationDenied
@@ -172,16 +176,25 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       let result: PHFetchResult<PHAsset>
       switch scope {
       case .timeline, .favorites:
+        try Task.checkCancellation()
         result = PHAsset.fetchAssets(with: opts)
       case .album(let collectionLocalId):
+        try Task.checkCancellation()
         guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
         else { return 0 }
         result = PHAsset.fetchAssets(in: collection, options: opts)
       }
       var count = 0
-      result.enumerateObjects { asset, _, _ in
+      // Stop iteration when the task is cancelled. PHFetchResult.enumerateObjects' stop
+      // pointer is the documented way to abort early.
+      result.enumerateObjects { asset, _, stop in
+        if Task.isCancelled {
+          stop.pointee = true
+          return
+        }
         if asset.hasAdjustments { count += 1 }
       }
+      try Task.checkCancellation()
       return count
     }.value
   }
@@ -614,6 +627,27 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     return tree
   }
 
+  /// Phase 2 surfaces only user-created regular albums in the collection tree. The
+  /// `assetCollectionType == .album` check is **not** sufficient on its own — that type
+  /// includes `.albumCloudShared` (shared albums), `.albumImported` (legacy iTunes
+  /// imports), and `.albumMyPhotoStream` (deprecated). Filter explicitly to user-managed
+  /// albums.
+  ///
+  /// Smart albums (including the Favorites smart album) have a different
+  /// `assetCollectionType == .smartAlbum`, so they are excluded by the type check above
+  /// and never reach this filter — Favorites is surfaced as a synthetic descriptor in
+  /// `fetchCollectionTree()` instead.
+  nonisolated fileprivate static func isSurfacedAlbumSubtype(
+    _ subtype: PHAssetCollectionSubtype
+  ) -> Bool {
+    switch subtype {
+    case .albumRegular, .albumSyncedAlbum:
+      return true
+    default:
+      return false
+    }
+  }
+
   /// Builds a descriptor for a `PHCollection`. Albums become leaf descriptors; folders
   /// recurse into their children. Returns `nil` for kinds we don't surface (smart albums
   /// other than Favorites, shared albums, etc).
@@ -622,7 +656,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   {
     let title = collection.localizedTitle ?? ""
     if let assetCollection = collection as? PHAssetCollection,
-      assetCollection.assetCollectionType == .album
+      assetCollection.assetCollectionType == .album,
+      Self.isSurfacedAlbumSubtype(assetCollection.assetCollectionSubtype)
     {
       let count = PHAsset.fetchAssets(in: assetCollection, options: nil).count
       return PhotoCollectionDescriptor(

@@ -209,6 +209,43 @@ struct ExportPlacementResolverTests {
     #expect(pTitle.id != pNested.id)  // displayPathHash8 differs because of the U+0000 separator
   }
 
+  /// Regression: when album A has an old placement at a different path (e.g. it was
+  /// renamed or moved) and is now collidng with album B at a new shared path, both must
+  /// participate in collision resolution. Previously the filter excluded any descriptor
+  /// with *any* existing placement, dropping A from the new sibling set and letting B
+  /// take the bare path while A would also try to take it on its own resolve.
+  @Test func renamedAlbumParticipatesInSiblingCollision() throws {
+    let resolver = makeResolver()
+    // Album A: old placement at "Old/Trip", now renamed to root-level "Trip".
+    let albumARenamed = descriptor(id: "id-A", title: "Trip")
+    // Album B: brand new, also titled "Trip" at root, no existing placement.
+    let albumB = descriptor(id: "id-B", title: "Trip")
+    let collections = [albumARenamed, albumB]
+
+    // A has a stale placement under the old path-hash (different displayPathHash than the
+    // new "Trip" at root would produce).
+    let stalePlacement = ExportPlacement(
+      kind: .album, id: "collections:album:hash16-A:stalehs",
+      displayName: "Old/Trip", collectionLocalIdentifier: "id-A",
+      relativePath: "Collections/Albums/Old/Trip/",
+      createdAt: Date(timeIntervalSince1970: 1000)
+    )
+
+    let placementA = try resolver.placement(
+      for: .album(collectionId: "id-A"),
+      collections: collections, existingPlacements: [stalePlacement])
+    let placementB = try resolver.placement(
+      for: .album(collectionId: "id-B"),
+      collections: collections, existingPlacements: [stalePlacement])
+
+    #expect(placementA.relativePath != placementB.relativePath)
+    // A and B sort lexicographically by collectionLocalIdentifier ("id-A" < "id-B"); the
+    // stale placement is at a different path so it doesn't claim "Trip". Both A and B
+    // are new claimants for the bare path → A gets bare, B gets _2.
+    #expect(placementA.relativePath == "Collections/Albums/Trip/")
+    #expect(placementB.relativePath == "Collections/Albums/Trip_2/")
+  }
+
   // MARK: - Multiple existing matches → pick latest
 
   @Test func multipleExistingMatchesPicksLatestCreatedAt() throws {

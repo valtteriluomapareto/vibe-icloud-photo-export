@@ -992,6 +992,17 @@ final class ExportManager: ObservableObject {
       logger.warning("Cannot import: no destination selected")
       return
     }
+    // Gate the import on a `.ready` timeline store. Otherwise the scanner would happily
+    // run, the bulkImportRecords call would silently drop every record (its `.ready`
+    // guard short-circuits on `.unconfigured`/`.failed`), and the user would see a
+    // success report with the matched counts despite nothing being persisted. This is
+    // the same hazard `canExportTimeline` guards on the export-start side.
+    guard exportRecordStore.state == .ready else {
+      logger.error(
+        "Cannot import: timeline record store state=\(String(describing: self.exportRecordStore.state), privacy: .public) (need .ready)"
+      )
+      return
+    }
 
     isImporting = true
     importStage = .scanningBackupFolder

@@ -13,7 +13,7 @@ Tracked per phase. Each phase lands as one or more commits on the `collections-e
 | 1. Type/queue plumbing + new collection store | ✅ Done | Foundation types, `JSONLRecordFile`, `CollectionExportRecordStore`, corruption recovery, `ExportManager` routing. Behind `enableCollections == false`. |
 | 2. PhotoKit collection discovery | ✅ Done | `PhotoCollectionDescriptor` + scope-based fetch/count APIs; `ExportPlacementResolver` with placement-id format and sibling-collision disambiguation. Resolver not yet wired (Phase 3). |
 | 3. ExportManager and destination collection-aware | ✅ Done | `urlForRelativeDirectory` + escape protection; `startExportFavorites`/`startExportAlbum` + queue wiring; reuse-source copy path; `CollectionCountCache` actor. Behind `enableCollections == false`. |
-| 4. UI + docs | ⬜ Not started | Flips `enableCollections` to `true` |
+| 4. UI + docs | ✅ Done | `LibraryRootView` + Timeline/Collections segmented selector; `CollectionsSidebarView`, `CollectionContentView`, `RecordStoreAlertHost`. `enableCollections` flipped to `true`. Docs updated (README, AGENTS, persistence-store, architecture, features, auto-sync cross-reference). |
 
 The whole feature ships to the App Store only when Phase 4 is ready; phases 1–3 stay behind the feature flag for
 internal/dev testers in the meantime (see *Release strategy* in the Summary).

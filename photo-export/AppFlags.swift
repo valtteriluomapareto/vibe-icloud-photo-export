@@ -10,5 +10,5 @@ enum AppFlags {
   /// Phase 4 of `docs/project/plans/collections-export-plan.md` flips this to `true`. Under
   /// the release strategy, no App Store build ships with the flag on until phases 1–4 are
   /// all ready. Removed in a follow-up cleanup once the feature stabilizes.
-  static let enableCollections: Bool = false
+  static let enableCollections: Bool = true
 }

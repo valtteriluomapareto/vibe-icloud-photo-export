@@ -27,8 +27,8 @@ The app already has useful building blocks:
 The current APIs are not enough for auto-sync as-is:
 
 - `ExportManager.startExportAll()` is fire-and-forget, user-visible, and mutates toolbar/progress state. Auto-sync needs a run context and an awaitable result.
-- `destinationId` is currently derived from bookmark data, which can change when a stale bookmark is re-saved. Auto-sync must not treat the same folder as a new empty destination.
-- `PHPhotoLibraryChangeObserver` can fire for many changes that do not require a library-wide export scan. Auto-sync needs persistent-change tracking, targeted asset re-evaluation, and backpressure before it falls back to full reconciliation.
+- `destinationId` was previously derived from bookmark data (which can change when a stale bookmark is re-saved). The collections-export Phase 0 work replaced this with a hash of `volumeUUID || U+0000 || volumeRelativePath`, so the same folder produces the same id across stale-bookmark refreshes; auto-sync should adopt this `destinationId` directly rather than re-derive it from bookmarks.
+- `PHPhotoLibraryChangeObserver` can fire for many changes that do not require a library-wide export scan. Auto-sync needs persistent-change tracking, targeted asset re-evaluation, and backpressure before it falls back to full reconciliation. Note: the collections feature now also surfaces a `PhotoLibraryManager.libraryRevision` published counter and a `CollectionCountCache` actor that is invalidated on the same observer callback — both are useful prior art for auto-sync's targeted invalidation work.
 
 ## Scope for Simple Auto-Sync
 

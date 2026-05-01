@@ -39,30 +39,36 @@ Source code under `photo-export/` is organized as follows:
 
 - `Managers/` — long-lived stateful services and pure helpers (see breakdown below)
 - `Protocols/` — test seams: `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`. Add a new protocol here when you need to inject a fake.
-- `Models/` — value types: `AssetDescriptor`, `AssetDetails`, `ExportRecord`, `ExportVariant`
+- `Models/` — value types: `AssetDescriptor`, `AssetDetails`, `ExportRecord`, `ExportVariant`, `ExportPlacement`, `LibrarySelection`, `PhotoCollectionDescriptor`
 - `Views/` — SwiftUI views (see list below)
 - `ViewModels/` — `MonthViewModel`
 - `Helpers/` — small pure utilities (`MonthFormatting`)
 - `Resources/`, `SupportingFiles/`, `Assets.xcassets` — bundle resources, Info.plist, asset catalog
 
-**App entry point** (`photo_exportApp.swift`): creates four `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
+**App entry point** (`photo_exportApp.swift`): creates five `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
 
 - **PhotoLibraryManager** — Photos framework authorization and asset fetching (thumbnails, full-size images). Uses `PHCachingImageManager`.
 - **ExportDestinationManager** — manages the chosen export destination folder (security-scoped bookmarks).
-- **ExportRecordStore** — tracks which assets have been exported per-destination to avoid duplicates and support resume. Reconfigures when destination changes.
-- **ExportManager** — orchestrates the export queue (enqueue/pause/cancel/resume). Depends on the other three managers.
+- **ExportRecordStore** — tracks timeline (year/month) exports per-destination. Reconfigures when destination changes.
+- **CollectionExportRecordStore** — sibling store for Favorites + user-album exports per-destination. Disjoint key space from the timeline store; the two stores cannot corrupt each other. Routed to by `ExportManager` via `placement.kind`.
+- **ExportManager** — orchestrates the export queue (enqueue/pause/cancel/resume). Depends on the other four managers; routes record mutations to the correct store via `ExportPlacement.kind`.
 
 **Other code under `Managers/`:**
 
 - `BackupScanner` — scans an existing backup folder and matches files to Photos assets (used by Import Existing Backup)
 - `ExportFilenamePolicy` — pure rules for `_orig` companion filenames
+- `ExportPathPolicy` — pure path-component sanitization for collection folder names
+- `ExportPlacementResolver` — maps a `LibrarySelection` to an `ExportPlacement`, including sibling-collision suffixing for albums
+- `CollectionCountCache` — actor that dedups concurrent count fetches for the Collections sidebar; invalidated on `PHPhotoLibraryChangeObserver` callbacks
+- `JSONLRecordFile` — shared JSONL+snapshot persistence used by both record stores
+- `ExportRecordsDirectoryCoordinator` — runs the legacy `<oldId>` → `<newId>` directory migration once before either store configures
 - `ResourceSelection` — picks the right `PHAssetResource` for a variant (original vs. edited)
 - `ProductionAssetResourceWriter` — production implementation behind the `AssetResourceWriter` seam
 - `FileIOService` — atomic file moves and timestamp handling (conforms to `FileSystemService`)
 
-**Views** (`photo-export/Views/`): `ContentView` is a `NavigationSplitView` with year/month sidebar. `MonthContentView` shows thumbnails for a month (each thumbnail rendered by `ThumbnailView`). `ExportToolbarView` shows export controls. `OnboardingView` handles first-run flow. `AssetDetailView` shows full-size preview. `ImportView` runs the Import Existing Backup flow. `AboutView` is the in-app about box.
+**Views** (`photo-export/Views/`): `ContentView` routes between auth/onboarding/library states. `LibraryRootView` hosts the `NavigationSplitView` with a Timeline / Collections segmented selector (gated on `AppFlags.enableCollections`). `TimelineSidebarView` renders the year/month tree; `CollectionsSidebarView` renders Favorites + user albums and folders. `MonthContentView` shows thumbnails for a month and `CollectionContentView` shows thumbnails for a Favorites/album scope (both share `MonthViewModel` via the scope-based loader). `ThumbnailView` renders an individual thumbnail. `ExportToolbarView` shows export controls. `RecordStoreAlertHost` is a view modifier that surfaces the corruption-recovery alert for whichever store enters `.failed`. `OnboardingView` handles first-run flow. `AssetDetailView` shows full-size preview. `ImportView` runs the Import Existing Backup flow. `AboutView` is the in-app about box.
 
-**ViewModels** (`photo-export/ViewModels/`): `MonthViewModel` manages asset loading for a selected month.
+**ViewModels** (`photo-export/ViewModels/`): `MonthViewModel` manages cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album).
 
 ## Documentation Layout
 
@@ -84,7 +90,7 @@ When changing user-visible behavior, update both the root `README.md` and the ma
 ## Key Conventions
 
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.
-- The four UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. Pure helpers under `Managers/` (`FileIOService`, `ExportFilenamePolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`) are plain types — do not add `@MainActor` reflexively.
+- The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. Pure helpers under `Managers/` (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `JSONLRecordFile`, `ExportRecordsDirectoryCoordinator`) are plain types — do not add `@MainActor` reflexively. `CollectionCountCache` is an actor.
 - Track exports by `PHAsset.localIdentifier`; never overwrite existing files.
 - Use `.task(id:)` for cancellation-aware async loading in views.
 - New code that touches Photos, the filesystem, or the export destination should go through the `Protocols/` seams so it can be unit-tested with fakes.

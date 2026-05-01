@@ -87,18 +87,23 @@ final class ExportManager: ObservableObject {
   let assetResourceWriter: any AssetResourceWriter
   let fileSystem: any FileSystemService
 
-  /// True when neither store is `.failed`. Phase 1's start* methods short-circuit when this
-  /// is false to prevent the silent-false-success case where a `.failed` store would have
-  /// all its `markVariant*` writes silently no-op while files land on disk anyway.
+  /// True when the **timeline** store is ready to accept writes. Timeline `startExport*`
+  /// methods short-circuit when false, preventing the silent-false-success case where the
+  /// pipeline would write files to disk while the store's `append` silently no-ops because
+  /// `state != .ready` (either `.unconfigured` or `.failed`).
   ///
-  /// Note: `.unconfigured` (no destination yet for this store) is acceptable — the start
-  /// methods route by `placement.kind` and only the matching store's writes need to land.
-  /// In production both stores are configured together via `configureRecordStore(for:)` in
-  /// `photo_exportApp`, so under normal operation either both are `.ready` or both are
-  /// `.unconfigured`. Tests can leave the collection store unconfigured when they only
-  /// exercise timeline jobs.
-  var canExport: Bool {
-    exportRecordStore.state != .failed && collectionExportRecordStore.state != .failed
+  /// Phase 3 adds `canExportCollection` for the `.favorites`/`.album` start methods. The
+  /// two are deliberately independent so a `.failed` collection store does not block
+  /// timeline export and vice versa — the disjoint-key-spaces rationale (a failed
+  /// favorites export can't corrupt timeline records) extends to the start-side guards.
+  var canExportTimeline: Bool {
+    exportRecordStore.state == .ready
+  }
+
+  /// True when the **collection** store is ready. Used by Phase 3's
+  /// `startExportFavorites`/`startExportAlbum` start methods.
+  var canExportCollection: Bool {
+    collectionExportRecordStore.state == .ready
   }
 
   // MARK: - Internals
@@ -148,9 +153,9 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
-    guard canExport else {
+    guard canExportTimeline else {
       logger.error(
-        "startExportMonth ignored: canExport == false (timelineState=\(String(describing: self.exportRecordStore.state), privacy: .public), collectionState=\(String(describing: self.collectionExportRecordStore.state), privacy: .public))"
+        "startExportMonth ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public) (need .ready)"
       )
       return
     }
@@ -184,8 +189,10 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportYear(year: Int) {
-    guard canExport else {
-      logger.error("startExportYear ignored: canExport == false")
+    guard canExportTimeline else {
+      logger.error(
+        "startExportYear ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
+      )
       return
     }
     let selection = versionSelection
@@ -214,8 +221,10 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportAll() {
-    guard canExport else {
-      logger.error("startExportAll ignored: canExport == false")
+    guard canExportTimeline else {
+      logger.error(
+        "startExportAll ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
+      )
       return
     }
     guard !isEnqueueingAll else { return }
@@ -514,8 +523,8 @@ final class ExportManager: ObservableObject {
       guard let descriptor = photoLibraryService.fetchAssetDescriptor(for: job.assetLocalIdentifier)
       else {
         try throwIfCancelledOrStale(gen)
-        exportRecordStore.markVariantFailed(
-          assetId: job.assetLocalIdentifier, variant: .original,
+        recordVariantFailed(
+          assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
           error: "Asset not found", at: Date())
         logger.error(
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")

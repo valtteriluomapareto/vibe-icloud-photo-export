@@ -141,8 +141,14 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// in Phase 1 there is no UI for this and the store remains `.failed` with the corrupt
   /// file intact until `resetToEmpty()` is called from a test).
   func resetToEmpty(emptySnapshot: Snapshot) throws {
+    // Filename-safe timestamp: ISO8601 basic-format date+time with no separators,
+    // e.g. `20260430T123456Z`. The default ISO8601 (`.withInternetDateTime`) includes
+    // colons (`:`), which are illegal on exFAT/NTFS — destinations users commonly pick
+    // for backups. Without this, `moveItem` would throw, the catch below would fall
+    // through to `writeSnapshot`, and the corrupt snapshot would be silently overwritten,
+    // defeating the deferred-rename rule's forensic-preservation purpose.
     let isoFormatter = ISO8601DateFormatter()
-    isoFormatter.formatOptions = [.withInternetDateTime]
+    isoFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime]
     let timestamp = isoFormatter.string(from: Date())
     if fileManager.fileExists(atPath: snapshotURL.path) {
       let brokenURL =
@@ -154,12 +160,14 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         logger.info(
           "Reset corrupt snapshot to \(brokenURL.lastPathComponent, privacy: .public)")
       } catch {
+        // Bail with the rename error rather than silently overwriting the corrupt file
+        // by falling through to `writeSnapshot`. The corrupt bytes are the only forensic
+        // trail; preserve them. The composing store catches this throw and stays
+        // `.failed`, so the user can retry later.
         logger.error(
           "Failed to rename corrupt snapshot \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
         )
-        // Fall through and try to write the empty snapshot anyway; if the rename failed
-        // because of permissions, the empty write probably will too, and the throw below
-        // surfaces it.
+        throw error
       }
     }
     try writeSnapshot(emptySnapshot)

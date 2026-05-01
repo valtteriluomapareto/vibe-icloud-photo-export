@@ -372,6 +372,48 @@ struct CollectionExportRecordStoreTests {
     #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
   }
 
+  // MARK: - Orphan record skip on replay
+
+  /// Plan §"Collection Store Format → Loader applies log entries in order": an upsertRecord
+  /// referencing an unknown placementId is logged and skipped (defends against truncated
+  /// logs). Without this, a partial write that loses the `upsertPlacement` line but
+  /// preserves a later `upsertRecord` line would replay an orphan record under a placement
+  /// id with no metadata — and the next compaction would freeze the orphan into the
+  /// snapshot.
+  @Test func replaySkipsRecordsForUnknownPlacements() throws {
+    let (dir, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let destDir = dir.appendingPathComponent("dest-orphan")
+    try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+    let logURL = destDir.appendingPathComponent(
+      CollectionExportRecordStore.Constants.logFileName)
+
+    // Hand-craft a log with an upsertRecord whose placement was never written (simulating
+    // a truncated log).
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let orphanOp = CollectionExportRecordStore.LogOp.upsertRecord(
+      placementId: "collections:album:missing",
+      assetId: "asset-1",
+      body: CollectionExportRecordStore.RecordBody(
+        variants: [
+          ExportVariant.original.rawValue: ExportVariantRecord(
+            filename: "IMG.HEIC", status: .done, exportDate: Date(), lastError: nil)
+        ])
+    )
+    var logBytes = try encoder.encode(orphanOp)
+    logBytes.append(0x0A)
+    try logBytes.write(to: logURL)
+
+    let store = CollectionExportRecordStore(baseDirectoryURL: dir)
+    store.configure(for: "dest-orphan")
+
+    // The orphan record was skipped — no placement, no record.
+    #expect(store.placement(id: "collections:album:missing") == nil)
+    #expect(store.recordBodies["collections:album:missing"] == nil)
+  }
+
   // MARK: - ExportPlacement Codable round-trip
 
   @Test func exportPlacementCodableRoundTrip() throws {

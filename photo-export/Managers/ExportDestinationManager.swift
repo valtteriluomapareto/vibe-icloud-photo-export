@@ -216,6 +216,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   // MARK: - Internal Helpers
   private func setSelectedFolder(_ url: URL) {
     logger.info("User selected export folder: \(url.path, privacy: .public)")
+    // Clear any stashed legacy id from a prior bookmark restore. Otherwise a sequence
+    // like "restore folder A → user picks new folder B" would leave A's legacy hash in
+    // place; the next `currentLegacyDestinationId()` call would return A's hash and the
+    // directory coordinator would migrate A's records into B's `<newId>` directory —
+    // mixing destinations and stranding A.
+    stashedLegacyDestinationId = nil
     guard saveBookmark(for: url) else {
       statusMessage = "Failed to save access to selected folder"
       return

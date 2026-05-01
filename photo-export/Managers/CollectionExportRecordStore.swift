@@ -448,6 +448,18 @@ final class CollectionExportRecordStore: ObservableObject {
       placements.removeValue(forKey: placementId)
       recordBodies.removeValue(forKey: placementId)
     case .upsertRecord(let placementId, let assetId, let body):
+      // Reject orphan records: the on-disk format requires every record to reference an
+      // existing placement. If a log truncation or partial write loses the upsertPlacement
+      // line but preserves a later upsertRecord line, replaying would otherwise write a
+      // record under a placement id with no metadata — and the next compaction would
+      // freeze the orphan into the snapshot. Skip with a log line so the issue is
+      // observable but doesn't corrupt the store.
+      guard placements[placementId] != nil else {
+        logger.error(
+          "Skipping upsertRecord for unknown placementId \(placementId, privacy: .public) (assetId=\(assetId, privacy: .public)); placement metadata missing."
+        )
+        return
+      }
       var byAsset = recordBodies[placementId] ?? [:]
       byAsset[assetId] = body
       recordBodies[placementId] = byAsset

@@ -16,7 +16,7 @@ The project is intentionally small: SwiftUI on top, system frameworks only, and 
   - Collections: Favorites plus your Photos albums and folders
 - Preview thumbnails and selected assets
 - Export a month, a year, or the full queue without overwriting existing files
-- Export your Favorites or any user album to `Collections/Favorites/` or `Collections/Albums/<Album>/`
+- Export your Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`
 - Choose what to write with the toolbar's **Include originals** toggle. Off (default)
   exports one file per photo, in the version Photos shows. On adds a `_orig` companion
   (e.g. `IMG_0001_orig.HEIC`) for any photo edited in Photos so you keep a copy of the

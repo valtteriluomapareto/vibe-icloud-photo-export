@@ -35,7 +35,7 @@ Click **Choose Folder** and select your external hard drive or any local folder.
 Browse your library two ways via the **Timeline / Collections** segmented control above the sidebar:
 
 - **Timeline** — your library by year and month. Click a month to preview its thumbnails and full-size photos.
-- **Collections** — your **Favorites** plus every album and folder from Photos. Click an album to preview its contents.
+- **Collections** — your **Favorites** plus every album and folder you've created in Photos. Click an album to preview its contents. (Smart albums other than Favorites and shared albums aren't included.)
 
 Once you've picked a scope, decide what to write:
 

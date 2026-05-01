@@ -3,7 +3,7 @@ title: Getting Started
 description: How to install and use Photo Export on your Mac.
 ---
 
-Photo Export is a native macOS app that exports your Apple Photos library to local or external storage. Browse two ways: a **Timeline** view organized by year and month, or a **Collections** view that lists your Favorites and every user album from Photos.
+Photo Export is a native macOS app that exports your Apple Photos library to local or external storage. Browse two ways: a **Timeline** view organized by year and month, or a **Collections** view that lists your Favorites and every album you've created in Photos. (Smart albums other than Favorites and shared albums aren't included.)
 
 ## Prerequisites
 

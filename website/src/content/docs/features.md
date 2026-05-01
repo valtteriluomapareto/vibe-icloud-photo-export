@@ -18,7 +18,7 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 ## Export
 
 - One-click export for a single month, a year, or the entire library
-- One-click export for Favorites or any user album, written to `Collections/Favorites/` or `Collections/Albums/<Album>/`
+- One-click export for Favorites or any album you've created in Photos, written to `Collections/Favorites/` or `Collections/Albums/<Album>/`
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
 - Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)

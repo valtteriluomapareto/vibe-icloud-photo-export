@@ -177,19 +177,26 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   /// Persists `op` to the JSONL log. When the mutation count crosses
   /// `compactEveryNMutations`, the calling actor's `currentSnapshot` closure is invoked
-  /// synchronously to capture the current in-memory state, and a compaction (atomic
-  /// snapshot write + log truncation) is dispatched on the IO queue after the log write.
+  /// synchronously to capture the in-memory state, and a compaction (atomic snapshot
+  /// write + log truncation) is dispatched on the IO queue after the log write.
   ///
-  /// This API matches the existing `ExportRecordStore.append` semantics exactly:
-  /// - Encode happens on the calling actor (cheap and prevents future mutations from
-  ///   slipping into the encoded bytes).
-  /// - Compaction snapshot is captured synchronously *before* the IO dispatch (Swift
-  ///   dictionaries are CoW; the capture is cheap) so newer mutations cannot slip in
-  ///   between threshold-crossing and snapshot-encode.
-  /// - On log-write failure, the mutation count is rolled back so subsequent appends
-  ///   re-attempt the threshold check.
-  /// - On compaction-write failure, the count is rolled back to one shy of the threshold so
-  ///   the next append re-triggers compaction.
+  /// Threading split:
+  /// - The op is encoded synchronously on the calling actor. JSON-encoded ops are small
+  ///   (a few hundred bytes); encoding inline keeps the failure mode simple — if the op
+  ///   itself fails to encode, no log line is written and the mutation count is not
+  ///   advanced.
+  /// - The compaction snapshot is **captured** synchronously on the calling actor (Swift
+  ///   dictionaries are CoW; the capture is cheap and freezes the in-memory state at
+  ///   threshold-crossing time, so newer mutations cannot slip into the same snapshot)
+  ///   but **encoded** off-main on `ioQueue`. At ~150 MB JSON for a 500k-record library
+  ///   the encode itself was the dominant main-actor stall during compaction; moving it
+  ///   off-main is the entire point of this split.
+  /// - On log-write failure, the mutation count is rolled back to its pre-append value
+  ///   so subsequent appends re-attempt the threshold check.
+  /// - On compaction encode-or-write failure, the count is rolled back to one shy of the
+  ///   threshold so the next append re-triggers compaction. The log line itself is
+  ///   already on disk in this case (encode runs *after* a successful log append) — the
+  ///   store is durable, the snapshot is just stale until the next compaction lands.
   func append(_ op: LogOp, currentSnapshot: () -> Snapshot) {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = dateEncodingStrategy
@@ -204,44 +211,23 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     }
 
     let nextMutationCount = mutationCountSinceCompact + 1
-    let snapshotData: Data?
+    let frozenSnapshot: Snapshot?
     if nextMutationCount >= Constants.compactEveryNMutations {
-      // Capture the snapshot synchronously and serialize it now (cheap; CoW dictionaries)
-      // so the IO closure works against frozen bytes and newer mutations cannot slip in
-      // between threshold-crossing and snapshot-encode.
-      let snapshot = currentSnapshot()
-      do {
-        snapshotData = try encoder.encode(snapshot)
-      } catch {
-        logger.error(
-          "Failed to encode compaction snapshot for \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-        )
-        // Snapshot encode failed → leave the count at its threshold-1 value so the next
-        // append re-triggers compaction, and proceed with a normal append (no compaction).
-        mutationCountSinceCompact = nextMutationCount - 1
-        ioQueue.async { [weak self] in
-          do {
-            try Self.appendLogLine(data: opData, to: self?.logURL ?? URL(fileURLWithPath: "/"))
-          } catch {
-            // Already in a degraded path; just log.
-            self?.logger.error(
-              "Failed to append log line during degraded path: \(String(describing: error), privacy: .public)"
-            )
-          }
-        }
-        return
-      }
+      // Cheap CoW capture; the expensive `encoder.encode(snapshot)` runs off-main below.
+      frozenSnapshot = currentSnapshot()
       mutationCountSinceCompact = 0
     } else {
-      snapshotData = nil
+      frozenSnapshot = nil
       mutationCountSinceCompact = nextMutationCount
     }
 
-    // Capture all values needed inside the IO queue as locals so the closure does not
-    // reach back into `self` for them (keeps the dispatch closure self-contained).
+    // Capture everything the closure needs as locals so the dispatch isn't reaching back
+    // into `self` for read-only fields (keeps the closure self-contained and avoids any
+    // suggestion of cross-actor dependency on `self`).
     let logURL = self.logURL
     let snapshotURL = self.snapshotURL
     let logger = self.logger
+    let dateEncodingStrategy = self.dateEncodingStrategy
 
     ioQueue.async { [weak self] in
       do {
@@ -256,7 +242,28 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         return
       }
 
-      guard let snapshotData else { return }
+      guard let frozenSnapshot else { return }
+
+      // Off-main snapshot encode. This used to run synchronously on the calling actor
+      // before the dispatch; the change keeps the encoded bytes identical (the captured
+      // snapshot value is frozen) but unblocks the main actor for other UI work.
+      let snapshotEncoder = JSONEncoder()
+      snapshotEncoder.dateEncodingStrategy = dateEncodingStrategy
+      let snapshotData: Data
+      do {
+        snapshotData = try snapshotEncoder.encode(frozenSnapshot)
+      } catch {
+        logger.error(
+          "Failed to encode compaction snapshot for \(snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+        )
+        // Log line already landed on disk; only the snapshot is missing. Roll back the
+        // counter so the next append re-triggers compaction.
+        Task { @MainActor [weak self] in
+          self?.rollbackMutationCount(to: Constants.compactEveryNMutations - 1)
+        }
+        return
+      }
+
       do {
         try Self.writeSnapshotAndTruncate(
           snapshotData: snapshotData, snapshotURL: snapshotURL, logURL: logURL)

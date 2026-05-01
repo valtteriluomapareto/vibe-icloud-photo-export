@@ -116,6 +116,68 @@ struct JSONLRecordFileRoundTripTests {
     #expect(loaded.ops.count == ops.count)
   }
 
+  // MARK: - Off-main-actor encode (threading invariant)
+
+  /// `append` must return promptly even when crossing the compaction threshold with a
+  /// large snapshot. The encode used to run synchronously on the calling actor, which
+  /// stalled the main actor for seconds at scale (~150 MB JSON for a 500k-record store).
+  /// The current implementation captures the snapshot synchronously (cheap CoW) and
+  /// dispatches the encode + write to `ioQueue`, so the calling-actor wall-time of the
+  /// threshold-crossing append is bounded by the cheap-capture cost, not by the encode
+  /// cost.
+  ///
+  /// Test approach: wire a `currentSnapshot` closure that returns a "heavy" snapshot
+  /// (1000 keys × 1000-byte values ≈ 1 MB JSON), trigger the threshold, and assert that
+  /// `append` returns *before* the on-disk snapshot file has been written. The
+  /// difference between "append returns" and "snapshot file exists" is the off-main
+  /// dispatch — without it, the snapshot file would already be on disk by the time
+  /// `append` returns.
+  @Test func appendReturnsBeforeSnapshotIsWrittenAtThresholdCrossing() throws {
+    let (dir, file, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let snapshotURL = dir.appendingPathComponent("snapshot.json")
+    let n = JSONLRecordFile<Snapshot, Op>.Constants.compactEveryNMutations
+
+    // Drive (n - 1) ops without crossing the threshold so we can isolate the
+    // threshold-crossing call.
+    var rolling: [String: String] = [:]
+    for i in 0..<(n - 1) {
+      let op = Op(kind: .upsert, key: "k\(i)", value: "v\(i)")
+      rolling["k\(i)"] = "v\(i)"
+      let captured = rolling
+      file.append(op, currentSnapshot: { Snapshot(records: captured) })
+    }
+    // No snapshot yet (threshold not crossed).
+    file.flushForTesting()  // drain the ioQueue so we know the n-1 log lines are durable
+    #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
+
+    // Build a heavy snapshot to amplify the encode cost. ~1 MB of data.
+    var heavy: [String: String] = rolling
+    for i in 0..<1000 {
+      heavy["heavy-k\(i)"] = String(repeating: "x", count: 1000)
+    }
+
+    // The threshold-crossing append. After this returns, the on-disk snapshot file
+    // should NOT exist yet — encode + write are queued on `ioQueue`, not synchronous.
+    let crossing = Op(kind: .upsert, key: "k\(n - 1)", value: "v")
+    heavy["k\(n - 1)"] = "v"
+    file.append(crossing, currentSnapshot: { Snapshot(records: heavy) })
+
+    #expect(
+      !FileManager.default.fileExists(atPath: snapshotURL.path),
+      "snapshot must NOT be on disk synchronously — encode + write run on ioQueue"
+    )
+
+    // Drain the queue and confirm the snapshot eventually lands.
+    file.flushForTesting()
+    #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
+
+    // Snapshot reflects the frozen `heavy` capture.
+    let loaded = file.load()
+    #expect(loaded.snapshot?.records.count == heavy.count)
+  }
+
   // MARK: - Cross-threshold compaction
 
   /// Crossing the threshold once + a few more appends afterward: load must produce the

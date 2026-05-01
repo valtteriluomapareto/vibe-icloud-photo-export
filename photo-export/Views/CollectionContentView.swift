@@ -99,13 +99,15 @@ struct CollectionContentView: View {
     }
   }
 
-  /// Re-runs the asset-load `.task` whenever the selection changes or the library is
-  /// mutated externally (sidebar drives `libraryRevision`). Includes the revision so a
-  /// rename or favorite-toggle triggers a fresh fetch even if the same album is still
-  /// selected.
-  private var scopeTaskId: String {
-    "\(scopeKey)|\(photoLibraryManager.libraryRevision)"
-  }
+  /// Re-runs the asset-load `.task` whenever the user picks a different scope. The
+  /// `libraryRevision` counter is intentionally **not** included here: any
+  /// `photoLibraryDidChange` (favoriting a single photo elsewhere, adding to an
+  /// unrelated album) would otherwise blank the entire grid through the `assets = []`
+  /// path inside `MonthViewModel.loadAssets(for:)` while a fresh fetch loads. The
+  /// sidebar's count refresh and tree refresh still observe `libraryRevision`; the user
+  /// can re-select the album to force a grid refetch when they know the contents
+  /// changed.
+  private var scopeTaskId: String { scopeKey }
 
   private var scopeKey: String {
     switch selection {

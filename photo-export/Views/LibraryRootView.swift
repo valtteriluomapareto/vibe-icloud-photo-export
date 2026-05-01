@@ -68,17 +68,22 @@ struct LibraryRootView: View {
     .onChange(of: selection) { _, newValue in
       // Track the last selection within each section so the segmented switch restores
       // it. Asset selection clears on any section change because the new section's
-      // assets are a different set.
+      // assets are a different set. Both branches are guarded against `nil` writes
+      // (which can come from the segmented-switch transition itself or from List's
+      // selection model swallowing empty-area clicks): nil should not clobber the
+      // last-known per-section selection — preserving it is exactly the point of
+      // tracking it.
       switch section {
       case .timeline:
         if case .timelineMonth = newValue {
           lastTimelineSelection = newValue
         }
       case .collections:
-        if let newValue, case .timelineMonth = newValue {
-          // ignore — timeline tags shouldn't fire while collections is active
-        } else {
+        switch newValue {
+        case .favorites, .album:
           lastCollectionsSelection = newValue
+        case .timelineMonth, .none:
+          break  // ignore — only collection-shaped values count for this section
         }
       }
       selectedAsset = nil

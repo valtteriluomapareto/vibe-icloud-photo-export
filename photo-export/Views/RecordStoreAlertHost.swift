@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// View modifier that surfaces the corruption-recovery alert for both record stores.
@@ -8,6 +9,11 @@ import SwiftUI
 /// chooses Reset, so the user never silently loses their record history. This host
 /// presents a single alert at a time; if both stores are failed, the timeline store's
 /// alert shows first and the collection store's alert follows after the user acks it.
+///
+/// Buttons match the plan's recovery contract: **Reset** runs the deferred rename and
+/// reinitializes the failed store, **Quit** terminates the app (the user can investigate
+/// the broken file by hand before relaunching), and **Cancel** dismisses the alert
+/// without touching disk so the user can choose later.
 struct RecordStoreAlertHost: ViewModifier {
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
@@ -19,6 +25,7 @@ struct RecordStoreAlertHost: ViewModifier {
         isPresented: timelineAlertBinding,
         actions: {
           Button("Reset") { exportRecordStore.resetToEmpty() }
+          Button("Quit") { NSApplication.shared.terminate(nil) }
           Button("Cancel", role: .cancel) {}
         },
         message: {
@@ -33,6 +40,7 @@ struct RecordStoreAlertHost: ViewModifier {
         isPresented: collectionAlertBinding,
         actions: {
           Button("Reset") { collectionExportRecordStore.resetToEmpty() }
+          Button("Quit") { NSApplication.shared.terminate(nil) }
           Button("Cancel", role: .cancel) {}
         },
         message: {

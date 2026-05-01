@@ -149,10 +149,14 @@ struct ExportToolbarView: ToolbarContent {
     }
     switch exportManager.versionSelection {
     case .edited:
-      return "Export every photo, in the version Photos shows."
+      return
+        "Export every photo in the timeline (year/month) view, in the version Photos shows. "
+        + "Use the Export Favorites or Export Album button on the Collections tab to export those."
     case .editedWithOriginals:
       return
-        "Export every photo, plus a _orig companion for any photo edited in Photos."
+        "Export every photo in the timeline (year/month) view, plus a _orig companion for any "
+        + "photo edited in Photos. Use the Export Favorites or Export Album button on the "
+        + "Collections tab to export those."
     }
   }
 

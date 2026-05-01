@@ -249,7 +249,15 @@ struct ExportPlacementResolver {
   }
 
   private func displayPathHash8(pathComponents: [String], title: String) -> String {
-    let combined = pathComponents.joined(separator: "\u{0000}") + "\u{0000}" + title
+    // Apply Unicode NFC (canonical composition) to every component before hashing so
+    // PhotoKit titles that arrive in different normalization forms across launches or
+    // OS versions hash to the same value. Without this, an album titled "Café" arriving
+    // as NFD on one launch and NFC on another would produce two different placement
+    // ids and the next export would silently land at a brand-new on-disk folder.
+    let normalizedComponents = pathComponents.map(\.precomposedStringWithCanonicalMapping)
+    let normalizedTitle = title.precomposedStringWithCanonicalMapping
+    let combined =
+      normalizedComponents.joined(separator: "\u{0000}") + "\u{0000}" + normalizedTitle
     return Self.sha256Hex(of: combined, prefix: 8)
   }
 

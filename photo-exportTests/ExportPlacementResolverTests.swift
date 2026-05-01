@@ -209,6 +209,58 @@ struct ExportPlacementResolverTests {
     #expect(pTitle.id != pNested.id)  // displayPathHash8 differs because of the U+0000 separator
   }
 
+  /// Regression: PhotoKit can return album titles in either Unicode normalization form
+  /// (NFC composed: "é" as a single codepoint, NFD decomposed: "e" + combining acute).
+  /// Two semantically-identical titles in different forms used to hash to different
+  /// placement ids, so the same album silently relocated to a fresh on-disk folder
+  /// across launches. The resolver now NFC-normalizes every component before hashing.
+  @Test func nfcAndNfdTitleHashToSamePlacementId() throws {
+    let resolver = makeResolver()
+    // "Café" composed (NFC): U+0063 U+0061 U+0066 U+00E9.
+    let nfc = "Caf\u{00E9}"
+    // "Café" decomposed (NFD): U+0063 U+0061 U+0066 U+0065 U+0301.
+    // Swift's String `==` is canonical-equivalence-aware, so `nfc == nfd` returns true,
+    // but the underlying utf8 byte sequences differ (4 vs 5 bytes). The placement-id
+    // hash takes `Data(string.utf8)`, so without normalization the two would still hash
+    // differently — verify that's no longer the case.
+    let nfd = "Cafe\u{0301}"
+    #expect(
+      Array(nfc.utf8) != Array(nfd.utf8),
+      "fixture sanity: utf8 bytes must differ pre-normalization")
+
+    let nfcDescriptor = descriptor(id: "id-cafe", title: nfc)
+    let nfdDescriptor = descriptor(id: "id-cafe", title: nfd)
+
+    let pNFC = try resolver.placement(
+      for: .album(collectionId: "id-cafe"),
+      collections: [nfcDescriptor], existingPlacements: [])
+    let pNFD = try resolver.placement(
+      for: .album(collectionId: "id-cafe"),
+      collections: [nfdDescriptor], existingPlacements: [])
+
+    #expect(pNFC.id == pNFD.id, "NFC vs NFD title must hash to the same placement id")
+  }
+
+  /// Same property for parent folder names: a folder titled "Café" in NFC vs NFD must
+  /// not change the album's placement id either.
+  @Test func nfcAndNfdParentFolderHashToSamePlacementId() throws {
+    let resolver = makeResolver()
+    let nfcParent = "Caf\u{00E9}"
+    let nfdParent = "Cafe\u{0301}"
+
+    let nfc = descriptor(id: "id-trip", title: "Trip", parent: [nfcParent])
+    let nfd = descriptor(id: "id-trip", title: "Trip", parent: [nfdParent])
+
+    let pNFC = try resolver.placement(
+      for: .album(collectionId: "id-trip"),
+      collections: [nfc], existingPlacements: [])
+    let pNFD = try resolver.placement(
+      for: .album(collectionId: "id-trip"),
+      collections: [nfd], existingPlacements: [])
+
+    #expect(pNFC.id == pNFD.id)
+  }
+
   /// Regression: when album A has an old placement at a different path (e.g. it was
   /// renamed or moved) and is now collidng with album B at a new shared path, both must
   /// participate in collision resolution. Previously the filter excluded any descriptor

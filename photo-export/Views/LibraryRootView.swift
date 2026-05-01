@@ -1,13 +1,9 @@
 import SwiftUI
 
 /// Top-level layout for the authorized state. Hosts the segmented Timeline/Collections
-/// selector (gated on `AppFlags.enableCollections`) above a `NavigationSplitView`. The
-/// sidebar swaps between `TimelineSidebarView` and `CollectionsSidebarView` based on
-/// the active section; the content + detail panes render the selected scope.
-///
-/// When `AppFlags.enableCollections == false` (today's behavior), the segmented control
-/// is hidden and only the timeline sidebar is reachable, so flag-off users see no
-/// difference from the pre-Phase-4 layout.
+/// selector above a `NavigationSplitView`. The sidebar swaps between
+/// `TimelineSidebarView` and `CollectionsSidebarView` based on the active section; the
+/// content + detail panes render the selected scope.
 struct LibraryRootView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportManager: ExportManager
@@ -54,10 +50,8 @@ struct LibraryRootView: View {
       }
     )
     .toolbar {
-      if AppFlags.enableCollections {
-        ToolbarItem(placement: .navigation) {
-          sectionPicker
-        }
+      ToolbarItem(placement: .navigation) {
+        sectionPicker
       }
       ExportToolbarView()
     }

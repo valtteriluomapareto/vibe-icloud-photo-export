@@ -63,12 +63,11 @@ The plan defers two pieces of work to follow-up plans: an interactive album-rena
 in Photos = new placement at the new path; old folder stays") and the `_album.json` membership sidecar
 (speculative metadata; nothing in the app reads it). Both can land later without changing the schema.
 
-**Release strategy.** No App Store release until **all four phases are ready**. Phases 1–3 land in `main` but
-stay behind `AppFlags.enableCollections == false` for the duration; only internal/dev testers see the new code
-paths during the ramp. Phase 4 is the gate: when its UI, the corruption alert presenter, and the docs are all
-ready, `enableCollections` flips to `true` and the next App Store build ships collections to all users. This
-avoids the Phase 1 → Phase 4 user-visible window where a `.failed` collection store could otherwise produce
-silent false-success exports for real users.
+**Release strategy.** No App Store release until **all four phases are ready**. Phases 1–3 landed in `main`
+behind a build-time flag (`AppFlags.enableCollections`) that stayed `false` while the UI and corruption alert
+presenter were under construction; only internal/dev testers saw the new code paths during the ramp. Phase 4
+flipped the flag to `true` and shipped collections to all users; the flag itself was removed in the cleanup
+commit that followed.
 
 ## Goals
 

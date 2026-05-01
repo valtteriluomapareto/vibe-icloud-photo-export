@@ -45,6 +45,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         return l == r
       case (.failedToCreateFolder(let lURL, _), .failedToCreateFolder(let rURL, _)):
         return lURL == rURL
+      case (.invalidRelativePath(let l), .invalidRelativePath(let r)):
+        return l == r
       default:
         return false
       }
@@ -58,6 +60,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     case pathTooLong
     case notDirectory(URL)
     case failedToCreateFolder(URL, underlying: Error)
+    /// The relative path supplied to `urlForRelativeDirectory` was rejected at the
+    /// destination boundary. The associated message names the specific failure (absolute
+    /// path, `..` segment, escapes root, non-directory intermediate, etc.) so the log
+    /// surfaces what to fix.
+    case invalidRelativePath(String)
 
     var errorDescription: String? {
       switch self {
@@ -72,6 +79,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       case .notDirectory(let url): return "Path exists but is not a folder: \(url.path)"
       case .failedToCreateFolder(let url, let underlying):
         return "Failed to create folder at \(url.path): \(underlying.localizedDescription)"
+      case .invalidRelativePath(let message):
+        return "Invalid relative path: \(message)"
       }
     }
   }
@@ -147,36 +156,131 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Returns the URL for the <root>/<year>/<month>/ folder, optionally creating it.
   /// Month is formatted as two digits ("01" … "12").
-  /// - Parameters:
-  ///   - year: e.g., 2025
-  ///   - month: 1…12
-  ///   - createIfNeeded: create the directory if it does not exist (default true)
-  /// - Throws: ExportDestinationError on invalid state or inability to create.
+  ///
+  /// Backed by `urlForRelativeDirectory` after Phase 3 of the collections-export plan.
+  /// Year/month-specific validation (positive year, month in `1...12`) lives here; the
+  /// generic destination-escape validation lives in `urlForRelativeDirectory`.
   func urlForMonth(year: Int, month: Int, createIfNeeded: Bool = true) throws -> URL {
+    guard year > 0 else { throw ExportDestinationError.invalidYear }
+    guard (1...12).contains(month) else { throw ExportDestinationError.invalidMonth }
+    let relativePath = "\(year)/\(String(format: "%02d", month))/"
+    return try urlForRelativeDirectory(relativePath, createIfNeeded: createIfNeeded)
+  }
+
+  /// Resolves a relative directory under the export root. Rejects any path that escapes
+  /// the root, contains `..`/absolute-path segments, lands at or beneath a non-directory
+  /// intermediate, or exceeds the platform path length.
+  ///
+  /// The path is split on `/`, individual components are inspected (no `.`/`..`/empty
+  /// components other than a possible trailing slash), and the resolved URL is verified
+  /// to lie within the canonical root using `standardizedFileURL`. Symlink escapes are
+  /// caught by canonicalizing every parent that already exists on disk and asserting the
+  /// canonical path still has the root as a prefix.
+  func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
     guard let root = selectedFolderURL else { throw ExportDestinationError.noSelection }
     guard isAvailable else { throw ExportDestinationError.notAvailable }
     guard isWritable else { throw ExportDestinationError.notWritable }
-    guard year > 0 else { throw ExportDestinationError.invalidYear }
-    guard (1...12).contains(month) else { throw ExportDestinationError.invalidMonth }
+    guard !relativePath.isEmpty else {
+      throw ExportDestinationError.invalidRelativePath("path is empty")
+    }
+    guard !relativePath.hasPrefix("/") else {
+      throw ExportDestinationError.invalidRelativePath("absolute path: \(relativePath)")
+    }
 
-    let yearComponent = String(year)
-    let monthComponent = String(format: "%02d", month)
-    let target = root.appendingPathComponent(yearComponent, isDirectory: true)
-      .appendingPathComponent(monthComponent, isDirectory: true)
+    // Split on forward slash. Trailing slash is allowed (collection placements include it
+    // by convention); empty interior components are not (would be a `//` segment).
+    let trimmed =
+      relativePath.hasSuffix("/")
+      ? String(relativePath.dropLast()) : relativePath
+    let components = trimmed.split(separator: "/", omittingEmptySubsequences: false).map(
+      String.init)
+    for component in components {
+      if component.isEmpty {
+        throw ExportDestinationError.invalidRelativePath(
+          "empty component in path: \(relativePath)")
+      }
+      if component == ".." {
+        throw ExportDestinationError.invalidRelativePath(
+          ".. segment in path: \(relativePath)")
+      }
+      if component == "." {
+        throw ExportDestinationError.invalidRelativePath(
+          ". segment in path: \(relativePath)")
+      }
+    }
 
-    // Guard against excessively long paths (PATH_MAX ~1024 on macOS)
+    // Build the target URL by appending components.
+    var target = root
+    for component in components {
+      target = target.appendingPathComponent(component, isDirectory: true)
+    }
+
+    // Path-length guard (PATH_MAX is 1024 on macOS; reserve some headroom for the
+    // filename that will be appended later).
     if target.path.utf8.count >= 1000 { throw ExportDestinationError.pathTooLong }
+
+    // Symlink-escape protection: resolve symlinks on the deepest existing prefix and
+    // verify it still lies under the root's canonical path. If the user has placed a
+    // symlink at `<root>/Collections/Albums/Trip` pointing outside the destination, the
+    // resolved path would not have the root as a prefix.
+    let rootCanonical = root.standardizedFileURL.resolvingSymlinksInPath().path
+    let targetCanonical = Self.canonicalizeExistingPrefix(of: target).path
+    if !targetCanonical.hasPrefix(rootCanonical) {
+      throw ExportDestinationError.invalidRelativePath(
+        "path resolves outside the export root: \(relativePath)")
+    }
+
+    // Verify each existing intermediate component is a directory (or doesn't exist yet,
+    // in which case `ensureDirectoryExists` will create it).
+    let fileManager = FileManager.default
+    var probe = root
+    for component in components {
+      probe = probe.appendingPathComponent(component, isDirectory: true)
+      var isDir: ObjCBool = false
+      if fileManager.fileExists(atPath: probe.path, isDirectory: &isDir) {
+        if !isDir.boolValue {
+          throw ExportDestinationError.notDirectory(probe)
+        }
+      } else {
+        // Stop probing; remaining segments don't exist yet.
+        break
+      }
+    }
 
     if createIfNeeded {
       try ensureDirectoryExists(at: target)
     } else {
       var isDir: ObjCBool = false
-      if FileManager.default.fileExists(atPath: target.path, isDirectory: &isDir) {
+      if fileManager.fileExists(atPath: target.path, isDirectory: &isDir) {
         if !isDir.boolValue { throw ExportDestinationError.notDirectory(target) }
       }
     }
 
     return target
+  }
+
+  /// Walks `url` upward until it finds an ancestor that exists on disk, then resolves
+  /// symlinks on that ancestor to get a canonical path. The non-existing tail is
+  /// re-appended so the result is still the requested URL — but with the symlink-resolved
+  /// existing prefix substituted in. Used by `urlForRelativeDirectory` to detect
+  /// symlink-escape attacks where a parent component is a symlink pointing outside the
+  /// root.
+  private static func canonicalizeExistingPrefix(of url: URL) -> URL {
+    let fileManager = FileManager.default
+    var components: [String] = []
+    var current = url
+    while !fileManager.fileExists(atPath: current.path) {
+      components.insert(current.lastPathComponent, at: 0)
+      let parent = current.deletingLastPathComponent()
+      // Stop at the filesystem root to avoid infinite loops on malformed input.
+      if parent.path == current.path { break }
+      current = parent
+    }
+    var result = current.standardizedFileURL.resolvingSymlinksInPath()
+    for component in components {
+      result = result.appendingPathComponent(component, isDirectory: true)
+    }
+    return result
   }
 
   /// Ensures the directory exists at the given URL, creating with intermediates.

@@ -34,10 +34,12 @@ struct PhotoExportApp: App {
   var body: some Scene {
     WindowGroup("Photo Export") {
       ContentView()
+        .recordStoreAlertHost()
         .environmentObject(exportDestinationManager)
         .environmentObject(photoLibraryManager)
         .environmentObject(exportManager)
         .environmentObject(exportRecordStore)
+        .environmentObject(collectionExportRecordStore)
         .task {
           // Configure store for current destination (if any) at launch
           configureRecordStore(for: exportDestinationManager.destinationId)

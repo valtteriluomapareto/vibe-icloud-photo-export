@@ -370,6 +370,39 @@ final class CollectionExportRecordStore: ObservableObject {
     return count
   }
 
+  /// Asset-aware summary used by the collection grid header (`CollectionContentView`).
+  /// Mirrors `ExportRecordStore.monthSummary(assets:selection:)` on the timeline side:
+  /// the caller supplies the visible asset list, the store evaluates each asset's
+  /// `requiredVariants(for:selection:)` against its variant records under `placement.id`,
+  /// and the result counts only assets that are in the current scope. This avoids the
+  /// drift `summary(for:)` would show when a user has removed photos from an album: the
+  /// store still holds historical records for those assets but the visible grid no longer
+  /// includes them, so a record-keyed total would over-report.
+  func monthSummary(
+    assets: [AssetDescriptor], placement: ExportPlacement, selection: ExportVersionSelection
+  ) -> MonthStatusSummary {
+    guard accept(placement) else {
+      return MonthStatusSummary(
+        year: 0, month: 0, exportedCount: 0, totalCount: assets.count, status: .notExported)
+    }
+    var exported = 0
+    for asset in assets where isExported(asset: asset, placement: placement, selection: selection) {
+      exported += 1
+    }
+    let status: MonthExportStatus
+    if assets.isEmpty {
+      status = .notExported
+    } else if exported >= assets.count {
+      status = .complete
+    } else if exported == 0 {
+      status = .notExported
+    } else {
+      status = .partial
+    }
+    return MonthStatusSummary(
+      year: 0, month: 0, exportedCount: exported, totalCount: assets.count, status: status)
+  }
+
   func summary(for placement: ExportPlacement) -> PlacementSummary {
     guard accept(placement) else {
       return PlacementSummary(

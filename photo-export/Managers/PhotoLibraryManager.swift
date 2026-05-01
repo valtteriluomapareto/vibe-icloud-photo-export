@@ -10,6 +10,14 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
   @Published var isAuthorized: Bool = false
 
+  /// Bumps on every `photoLibraryDidChange`. Sidebar/grid views that depend on the
+  /// current PhotoKit state observe this to trigger a re-fetch — without it, a user who
+  /// renames an album or favorites/unfavorites a photo while the app is open would see
+  /// stale data until manually re-selecting. The counter doesn't carry payload; its sole
+  /// purpose is to break SwiftUI view-update equality so the dependent `.task(id:)`
+  /// re-runs.
+  @Published var libraryRevision: Int = 0
+
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
 
   /// Errors that can occur in the Photo Library Manager
@@ -544,6 +552,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
+    libraryRevision &+= 1
     // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
     // re-fetches against the updated library state.
     Task { [collectionCountCache] in

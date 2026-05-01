@@ -10,35 +10,16 @@ import Foundation
 import Photos
 import SwiftUI
 
+/// Top-level router for the app's three states: pre-onboarding, onboarding, and the
+/// authorized library view. The Phase 4 refactor moved the bulk of the authorized
+/// layout into `LibraryRootView`; this file is now responsible for routing only.
 struct ContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportManager: ExportManager
-  @State private var selectedYearMonth: YearMonth? = YearMonth(
-    year: Calendar.current.component(.year, from: Date()),
-    month: Calendar.current.component(.month, from: Date()))
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @State private var years: [Int] = []
-  @State private var expandedYears: Set<Int> = []
-  @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
-  @State private var assetCountsByYearMonth: [String: Int] = [:]
-  @State private var assetCountsByYear: [Int: Int] = [:]
-  @State private var adjustedCountsByYearMonth: [String: Int] = [:]
 
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
-
-  // Detail selection
-  @State private var selectedAsset: AssetDescriptor?
-
-  // Import sheet
-  @State private var isShowingImportSheet: Bool = false
-
-  private var canImport: Bool {
-    hasCompletedOnboarding && photoLibraryManager.isAuthorized
-      && exportDestinationManager.canImportNow && !exportManager.hasActiveExportWork
-      && !exportManager.isImporting
-  }
 
   var body: some View {
     Group {
@@ -47,87 +28,14 @@ struct ContentView: View {
           hasCompletedOnboarding = true
         }
       } else if photoLibraryManager.isAuthorized {
-        NavigationSplitView(
-          sidebar: {
-            List(selection: $selectedYearMonth) {
-              Section("Photos by Year") {
-                ForEach(years, id: \.self) { year in
-                  DisclosureGroup(
-                    isExpanded: Binding(
-                      get: { expandedYears.contains(year) },
-                      set: { newValue in
-                        if newValue {
-                          expandedYears.insert(year)
-                        } else {
-                          expandedYears.remove(year)
-                        }
-                      }
-                    )
-                  ) {
-                    ForEach(monthsWithAssetsByYear[year] ?? [], id: \.self) { month in
-                      MonthRow(
-                        year: year,
-                        month: month,
-                        total: assetCountsByYearMonth["\(year)-\(month)"]
-                          ?? 0,
-                        adjusted: adjustedCountsByYearMonth["\(year)-\(month)"]
-                      )
-                      .tag(YearMonth(year: year, month: month))
-                      .task(id: "\(year)-\(month)-adjusted") {
-                        await loadAdjustedCount(year: year, month: month)
-                      }
-                    }
-                  } label: {
-                    YearRow(
-                      year: year,
-                      totalAssets: assetCountsByYear[year] ?? 0,
-                      totalCountsByMonth: monthTotals(for: year),
-                      adjustedCountsByMonth: adjustedMonths(for: year)
-                    )
-                  }
-                }
-              }
-            }
-            .navigationTitle("Photo Export")
-          },
-          content: {
-            if let selected = selectedYearMonth {
-              MonthContentView(
-                year: selected.year, month: selected.month,
-                selectedAsset: $selectedAsset,
-                photoLibraryService: photoLibraryManager
-              )
-              .environmentObject(photoLibraryManager)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-              VStack {
-                Spacer()
-                Text("Select a month")
-                  .foregroundColor(.gray)
-                Spacer()
-              }
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-          },
-          detail: {
-            AssetDetailView(asset: selectedAsset)
-              .environmentObject(photoLibraryManager)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-          }
-        )
-        .toolbar {
-          ExportToolbarView()
-        }
-        .sheet(isPresented: $isShowingImportSheet) {
-          ImportView()
-            .environmentObject(exportManager)
-        }
+        LibraryRootView()
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)
       }
     }
     .onAppear {
-      // Auto-skip onboarding for existing users who already have an export destination or records
+      // Auto-skip onboarding for existing users who already have an export destination
+      // or records.
       if !hasCompletedOnboarding {
         let hasDestination = exportDestinationManager.selectedFolderURL != nil
         let hasRecords = !exportRecordStore.recordsById.isEmpty
@@ -135,100 +43,7 @@ struct ContentView: View {
           hasCompletedOnboarding = true
         }
       }
-      if photoLibraryManager.isAuthorized {
-        loadYears()
-        if let selected = selectedYearMonth {
-          expandedYears.insert(selected.year)
-          monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(
-            for: selected.year)
-        }
-      }
     }
-    .onChange(of: photoLibraryManager.isAuthorized) { _, new in
-      if new {
-        loadYears()
-        if let selected = selectedYearMonth {
-          expandedYears.insert(selected.year)
-          monthsWithAssetsByYear[selected.year] = computeMonthsWithAssets(
-            for: selected.year)
-        }
-      } else {
-        years = []
-        expandedYears.removeAll()
-        monthsWithAssetsByYear.removeAll()
-        assetCountsByYear.removeAll()
-      }
-    }
-    .onChange(of: expandedYears) { _, _ in
-      // Lazy compute months for newly expanded years
-      for year in expandedYears where monthsWithAssetsByYear[year] == nil {
-        monthsWithAssetsByYear[year] = computeMonthsWithAssets(for: year)
-      }
-    }
-    .onChange(of: selectedYearMonth) { _, _ in
-      // Clear asset selection when month changes
-      selectedAsset = nil
-    }
-    .focusedSceneValue(
-      \.importBackupAction,
-      canImport
-        ? ImportBackupAction {
-          isShowingImportSheet = true
-          exportManager.startImport()
-        } : nil
-    )
-    .frame(minWidth: 900, minHeight: 600)
-    .background(Color(.windowBackgroundColor))
-  }
-
-  private struct YearMonth: Hashable, Identifiable {
-    let year: Int
-    let month: Int
-    var id: String { "\(year)-\(month)" }
-  }
-
-  private func loadYears() {
-    let yearCounts = (try? photoLibraryManager.availableYearsWithCounts()) ?? []
-    years = yearCounts.map(\.year)
-    for (year, count) in yearCounts {
-      assetCountsByYear[year] = count
-    }
-  }
-
-  private func computeMonthsWithAssets(for year: Int) -> [Int] {
-    var months: [Int] = []
-    for month in 1...12 {
-      let count = (try? photoLibraryManager.countAssets(year: year, month: month)) ?? 0
-      assetCountsByYearMonth["\(year)-\(month)"] = count
-      if count > 0 {
-        months.append(month)
-      }
-    }
-    return months
-  }
-
-  private func loadAdjustedCount(year: Int, month: Int) async {
-    let key = "\(year)-\(month)"
-    guard adjustedCountsByYearMonth[key] == nil else { return }
-    if let count = try? await photoLibraryManager.countAdjustedAssets(year: year, month: month) {
-      adjustedCountsByYearMonth[key] = count
-    }
-  }
-
-  private func monthTotals(for year: Int) -> [Int: Int] {
-    var map: [Int: Int] = [:]
-    for month in 1...12 {
-      map[month] = assetCountsByYearMonth["\(year)-\(month)"] ?? 0
-    }
-    return map
-  }
-
-  private func adjustedMonths(for year: Int) -> [Int: Int?] {
-    var map: [Int: Int?] = [:]
-    for month in 1...12 {
-      map[month] = adjustedCountsByYearMonth["\(year)-\(month)"]
-    }
-    return map
   }
 }
 

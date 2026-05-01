@@ -3,7 +3,7 @@ title: Getting Started
 description: How to install and use Photo Export on your Mac.
 ---
 
-Photo Export is a native macOS app that exports your Apple Photos library to local or external storage, organized by year and month.
+Photo Export is a native macOS app that exports your Apple Photos library to local or external storage. Browse two ways: a **Timeline** view organized by year and month, or a **Collections** view that lists your Favorites and every user album from Photos.
 
 ## Prerequisites
 
@@ -43,14 +43,15 @@ The folder needs to be writable. The app remembers your choice across launches u
 
 ### 3. Start exporting
 
-Once the destination is set, you'll see the main window with a **year/month sidebar** on the left and a **thumbnail grid** in the center. From here you can:
+Once the destination is set, you'll see the main window with a **Timeline / Collections** segmented control above the sidebar and a **thumbnail grid** in the center.
 
-- Click a month to browse its photos
-- Use the **Include originals** toggle in the toolbar to choose what gets written. Off
-  (default) exports one file per photo, in the version Photos shows. On adds a `_orig`
-  companion for any photo edited in Photos so you keep a copy of the original bytes.
-- Click **Export All** in the toolbar to queue the entire library
-- Use **File → Import Existing Backup...** (Cmd+Shift+I) if you already have a previous export and want to avoid re-copying those files
+- **Timeline** — browse year by year, month by month. Click a month to see its photos. Click **Export Month** in the grid header to export that month, or **Export All** in the toolbar to queue the entire library.
+- **Collections** — see your **Favorites** at the top, then every album and folder from Photos beneath. Click an album to see its photos, then **Export Favorites** or **Export Album** in the grid header. Albums under Photos folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`).
+
+A few extras that work in both views:
+
+- The **Include originals** toggle in the toolbar chooses what gets written. Off (default) exports one file per photo, in the version Photos shows. On adds a `_orig` companion for any photo edited in Photos so you keep a copy of the original bytes.
+- **File → Import Existing Backup...** (Cmd+Shift+I) is useful if you already have a previous timeline export and want to avoid re-copying those files.
 
 Export progress is shown in the toolbar. You can pause, resume, or cancel at any time.
 

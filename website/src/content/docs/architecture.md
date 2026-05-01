@@ -93,20 +93,20 @@ Orchestrates the export queue. Depends on the other three managers.
 
 The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 
-| Type                      | Responsibility                                                                                  |
-| ------------------------- | ----------------------------------------------------------------------------------------------- |
-| `ContentView`             | Top-level router (auth → onboarding → library)                                                  |
-| `LibraryRootView`         | `NavigationSplitView` shell with the Timeline / Collections segmented selector                  |
-| `TimelineSidebarView`     | Year/month tree                                                                                 |
-| `CollectionsSidebarView`  | Favorites + user albums and folders, lazy-counted via `cachedCountAssets(in:)`                  |
-| `MonthContentView`        | Thumbnail grid for the selected month                                                           |
-| `CollectionContentView`   | Thumbnail grid for Favorites or a user album, sharing `MonthViewModel` via a scope-based loader |
-| `AssetDetailView`         | Full-size image or video preview                                                                |
-| `ExportToolbarView`       | Export destination and queue controls                                                           |
-| `RecordStoreAlertHost`    | Surfaces a corruption-recovery alert when either record store transitions to `.failed`          |
-| `OnboardingView`          | First-run flow for permissions and destination setup                                            |
-| `ImportView`              | Progress and results for importing an existing backup                                           |
-| `MonthViewModel`          | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album)       |
+| Type                     | Responsibility                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `ContentView`            | Top-level router (auth → onboarding → library)                                                  |
+| `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                  |
+| `TimelineSidebarView`    | Year/month tree                                                                                 |
+| `CollectionsSidebarView` | Favorites + user albums and folders, lazy-counted via `cachedCountAssets(in:)`                  |
+| `MonthContentView`       | Thumbnail grid for the selected month                                                           |
+| `CollectionContentView`  | Thumbnail grid for Favorites or a user album, sharing `MonthViewModel` via a scope-based loader |
+| `AssetDetailView`        | Full-size image or video preview                                                                |
+| `ExportToolbarView`      | Export destination and queue controls                                                           |
+| `RecordStoreAlertHost`   | Surfaces a corruption-recovery alert when either record store transitions to `.failed`          |
+| `OnboardingView`         | First-run flow for permissions and destination setup                                            |
+| `ImportView`             | Progress and results for importing an existing backup                                           |
+| `MonthViewModel`         | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album)       |
 
 ## Persistence
 

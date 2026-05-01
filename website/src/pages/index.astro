@@ -9,7 +9,7 @@ import screenshot from '../assets/photo_export_screenshot.png';
 const base = import.meta.env.BASE_URL;
 const title = 'Photo Export — Free Mac App to Back Up iCloud & Apple Photos';
 const description =
-	'Free, open-source macOS app to export your iCloud and Apple Photos library to any external drive or local folder. Organized by year/month. No subscription, no cloud services.';
+	'Free, open-source macOS app to export your iCloud and Apple Photos library to any external drive or local folder. Browse by year/month or by Favorites and albums. No subscription, no cloud services.';
 
 const faqData = {
 	'@context': 'https://schema.org',
@@ -53,6 +53,14 @@ const faqData = {
 			acceptedAnswer: {
 				'@type': 'Answer',
 				text: 'Yes. The app exports photos and videos. Live Photos are exported as a single still image — full motion export (paired image + video) is planned for a future release.',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'Can I export Favorites or specific albums?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'Yes. Switch the sidebar to the Collections tab to see your Favorites and every user album from Photos. One click exports the visible Favorites or album to Collections/Favorites/ or Collections/Albums/<Album>/ on your destination drive. Albums under Photos folders preserve their hierarchy on disk. Timeline (year/month) export still works exactly as before.',
 			},
 		},
 		{
@@ -112,7 +120,9 @@ const faqData = {
 				<div class="value-prop">
 					<strong>Organized automatically</strong>
 					<span
-						>Photos sorted into a clean <code>Year/Month/</code> folder hierarchy.</span
+						>Browse by <code>Year/Month/</code> or by your Photos
+						<strong>Favorites</strong> and <strong>albums</strong>. Pick the
+						view that fits your library.</span
 					>
 				</div>
 				<div class="value-prop">
@@ -138,8 +148,16 @@ const faqData = {
 			<h2 id="features">Features</h2>
 			<div class="feature-grid">
 				<FeatureCard title="Library Browsing" icon="📸">
-					Browse your entire Photos library with a year/month sidebar. See photo
-					counts and export status at a glance.
+					Switch between a <strong>Timeline</strong> view (year/month) and a <strong
+						>Collections</strong
+					> view (Favorites and your Photos albums). Photo counts and export status
+					at a glance.
+				</FeatureCard>
+				<FeatureCard title="Favorites & Albums" icon="❤️">
+					Export your Favorites or any user album as a single click. Albums
+					under Photos folders preserve their hierarchy on disk, e.g. <code
+						>Collections/Albums/Trips/Iceland/</code
+					>.
 				</FeatureCard>
 				<FeatureCard title="Thumbnail Previews" icon="🖼">
 					Fast thumbnail grid with in-memory caching. Click any photo for a
@@ -194,17 +212,20 @@ const faqData = {
 					<div class="step-number">2</div>
 					<h3>Browse your library</h3>
 					<p>
-						Navigate by year and month. Preview thumbnails and inspect
-						individual photos before exporting.
+						Switch between Timeline (year/month) and Collections (Favorites and
+						albums) in the sidebar. Preview thumbnails and inspect individual
+						photos before exporting.
 					</p>
 				</div>
 				<div class="step">
 					<div class="step-number">3</div>
 					<h3>Export</h3>
 					<p>
-						Hit export and the app copies original files into an organized <code
-							>Year/Month/</code
-						> folder tree. Track progress in real time.
+						Hit export and the app copies original files into an organized
+						folder tree — <code>Year/Month/</code> for the timeline,
+						<code>Collections/Favorites/</code> or <code
+							>Collections/Albums/&lt;Album&gt;/</code
+						> for collections. Track progress in real time.
 					</p>
 				</div>
 			</div>
@@ -334,6 +355,18 @@ const faqData = {
 						Yes. The app exports photos and videos. Live Photos are exported as
 						a single still image — full motion export (paired image + video) is
 						planned for a future release.
+					</dd>
+				</div>
+				<div class="faq-item">
+					<dt>Can I export Favorites or specific albums?</dt>
+					<dd>
+						Yes. Switch the sidebar to the <strong>Collections</strong> tab to see
+						your Favorites and every user album from Photos. One click exports the
+						visible Favorites or album to <code>Collections/Favorites/</code> or <code
+							>Collections/Albums/&lt;Album&gt;/</code
+						> on your destination drive. Albums under Photos folders preserve their
+						hierarchy on disk. Timeline (year/month) export still works exactly as
+						before.
 					</dd>
 				</div>
 				<div class="faq-item">

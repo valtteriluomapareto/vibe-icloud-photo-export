@@ -3,7 +3,7 @@
 [![CI](https://github.com/valtteriluomapareto/photo-export/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/valtteriluomapareto/photo-export/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Photo Export is a native macOS app for exporting your Apple Photos library to local or external storage in a predictable `YYYY/MM/` folder layout.
+Photo Export is a native macOS app for exporting your Apple Photos library to local or external storage. Pick the layout that fits your library: a predictable `YYYY/MM/` timeline, or per-album folders under `Collections/Favorites/` and `Collections/Albums/<Album>/`.
 
 **[Download on the Mac App Store](https://apps.apple.com/app/photo-export-local-backup/id6761410742)** · [Download from GitHub (free)](https://github.com/valtteriluomapareto/photo-export/releases) · [Documentation](https://valtteriluomapareto.github.io/photo-export/)
 

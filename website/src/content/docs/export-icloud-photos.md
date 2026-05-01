@@ -32,20 +32,27 @@ Click **Choose Folder** and select your external hard drive or any local folder.
 
 ## Step 4: Browse and export
 
-Use the year/month sidebar to browse your library. You can preview thumbnails and inspect individual photos before exporting. When you're ready:
+Browse your library two ways via the **Timeline / Collections** segmented control above the sidebar:
 
-- Use the toolbar's **Include originals** toggle to choose what to write. Off (default)
-  exports one file per photo, in the version Photos shows — edited photos write the edit,
-  unedited photos write the original. On adds a `_orig` companion (e.g.
-  `IMG_0001_orig.HEIC`) for any photo with edits in Photos so you keep a copy of the
-  original bytes.
-- To export a single month, navigate to it and click **Export Month**.
-- To export your entire library, click **Export All** in the toolbar.
+- **Timeline** — your library by year and month. Click a month to preview its thumbnails and full-size photos.
+- **Collections** — your **Favorites** plus every album and folder from Photos. Click an album to preview its contents.
 
-The app copies the chosen file(s) into an organized `Year/Month/` folder structure on your
-chosen drive. If any photos are stored only in iCloud, the app automatically downloads the
-originals during export. Unedited photos never produce a `_orig` companion — there is
-nothing to pair with.
+Once you've picked a scope, decide what to write:
+
+- Use the toolbar's **Include originals** toggle to choose what to write. Off (default) exports one file per photo, in the version Photos shows — edited photos write the edit, unedited photos write the original. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo with edits in Photos so you keep a copy of the original bytes.
+
+Then export:
+
+- **Timeline:** navigate to a month and click **Export Month**, or click **Export All** in the toolbar to queue the whole library.
+- **Collections:** select **Favorites** or any album and click **Export Favorites** / **Export Album**.
+
+The app organizes the output on disk:
+
+- Timeline exports land in a `Year/Month/` folder structure (e.g. `2025/06/IMG_0001.JPG`).
+- Favorites land in `Collections/Favorites/`.
+- Albums land in `Collections/Albums/<Album>/`. Albums under Photos folders preserve their hierarchy (e.g. `Collections/Albums/Trips/Iceland/`).
+
+If any photos are stored only in iCloud, the app automatically downloads the originals during export. Unedited photos never produce a `_orig` companion — there is nothing to pair with.
 
 ## Resuming an interrupted export
 

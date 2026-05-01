@@ -19,6 +19,17 @@ import os
 /// timeline `writeSnapshotAndTruncate` skipped both renames' parent-dir fsyncs, which under
 /// power loss could leave a snapshot durable while the log still contained pre-snapshot
 /// mutations — replaying mutations already in the snapshot on next load).
+///
+/// `@MainActor` isolates the calling-actor side: every entry point (`load`, `append`,
+/// `writeSnapshot`, `resetToEmpty`, `clearOnDiskState`, `flushForTesting`) and every
+/// mutable property (`mutationCountSinceCompact`) must be touched from the main actor.
+/// Both production composing stores (`ExportRecordStore`,
+/// `CollectionExportRecordStore`) are themselves `@MainActor`, so this matches how the
+/// type is actually used. Off-actor work — the encode + write inside `append`'s
+/// `ioQueue.async` block — happens on the dispatch queue and only reads `Sendable`
+/// locals captured from the calling actor, never reaching back into `self` for
+/// non-Sendable state.
+@MainActor
 final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Sendable> {
   enum Constants {
     static var compactEveryNMutations: Int { 1000 }
@@ -332,7 +343,9 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   ///
   /// (`Data(...).write(to: ..., options: .atomic)` writes via `.tmp` + rename internally
   /// and fsyncs the file but **does not** fsync the parent directory.)
-  private static func writeSnapshotAndTruncate(
+  /// `nonisolated` because this is called from inside `append`'s `ioQueue.async` block.
+  /// Pure file I/O against URLs passed in by value; touches no actor state.
+  nonisolated private static func writeSnapshotAndTruncate(
     snapshotData: Data, snapshotURL: URL, logURL: URL
   ) throws {
     let fileManager = FileManager.default
@@ -351,14 +364,16 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     try fsyncDirectory(logURL.deletingLastPathComponent())
   }
 
-  private static func fsyncDirectory(_ url: URL) throws {
+  /// `nonisolated` for the same reason as `writeSnapshotAndTruncate`.
+  nonisolated private static func fsyncDirectory(_ url: URL) throws {
     let fd = open(url.path, O_RDONLY)
     if fd < 0 { return }
     defer { close(fd) }
     _ = fsync(fd)
   }
 
-  private static func appendLogLine(data: Data, to url: URL) throws {
+  /// `nonisolated` for the same reason as `writeSnapshotAndTruncate`.
+  nonisolated private static func appendLogLine(data: Data, to url: URL) throws {
     if !FileManager.default.fileExists(atPath: url.path) {
       FileManager.default.createFile(atPath: url.path, contents: nil)
     }

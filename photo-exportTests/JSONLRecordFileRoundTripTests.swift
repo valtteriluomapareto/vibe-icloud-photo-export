@@ -126,14 +126,15 @@ struct JSONLRecordFileRoundTripTests {
   /// threshold-crossing append is bounded by the cheap-capture cost, not by the encode
   /// cost.
   ///
-  /// Test approach: wire a `currentSnapshot` closure that returns a "heavy" snapshot
-  /// (1000 keys × 1000-byte values ≈ 1 MB JSON), trigger the threshold, and assert that
-  /// `append` returns *before* the on-disk snapshot file has been written. The
-  /// difference between "append returns" and "snapshot file exists" is the off-main
-  /// dispatch — without it, the snapshot file would already be on disk by the time
-  /// `append` returns.
+  /// Test approach: **suspend the IO queue** before the threshold-crossing append so the
+  /// dispatched encode + write cannot run, then assert the snapshot file is absent
+  /// immediately after `append` returns. Without the suspend the test relies on the
+  /// main actor winning a race against `ioQueue` — usually true on a developer machine
+  /// (the encode + write takes milliseconds; the next test instruction is microseconds
+  /// away) but a fast SSD plus a busy main actor could in principle invert the order.
+  /// Suspending makes the assertion deterministic.
   @Test func appendReturnsBeforeSnapshotIsWrittenAtThresholdCrossing() throws {
-    let (dir, file, _) = try makeStore()
+    let (dir, file, queue) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let snapshotURL = dir.appendingPathComponent("snapshot.json")
@@ -148,32 +149,39 @@ struct JSONLRecordFileRoundTripTests {
       let captured = rolling
       file.append(op, currentSnapshot: { Snapshot(records: captured) })
     }
-    // No snapshot yet (threshold not crossed).
-    file.flushForTesting()  // drain the ioQueue so we know the n-1 log lines are durable
+    // Drain the ioQueue so the n-1 log lines are durable; snapshot still absent.
+    file.flushForTesting()
     #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
 
-    // Build a heavy snapshot to amplify the encode cost. ~1 MB of data.
+    // Build a heavy snapshot to amplify the encode cost (~1 MB of JSON).
     var heavy: [String: String] = rolling
     for i in 0..<1000 {
       heavy["heavy-k\(i)"] = String(repeating: "x", count: 1000)
     }
-
-    // The threshold-crossing append. After this returns, the on-disk snapshot file
-    // should NOT exist yet — encode + write are queued on `ioQueue`, not synchronous.
-    let crossing = Op(kind: .upsert, key: "k\(n - 1)", value: "v")
     heavy["k\(n - 1)"] = "v"
+
+    // Suspend the ioQueue. Anything dispatched onto it from this point on is queued but
+    // not executed until we resume. This makes the "snapshot must not be on disk"
+    // assertion deterministic — without the suspend, we'd be racing the queue.
+    // (Swift Testing's `#expect(boolExpr)` records issues without throwing, so the
+    // function flows linearly and a failed assertion does not leak a suspended queue.)
+    queue.suspend()
+
+    let crossing = Op(kind: .upsert, key: "k\(n - 1)", value: "v")
     file.append(crossing, currentSnapshot: { Snapshot(records: heavy) })
 
+    // The append-log + encode + snapshot-write all run on the suspended queue, so
+    // nothing should have landed.
     #expect(
       !FileManager.default.fileExists(atPath: snapshotURL.path),
       "snapshot must NOT be on disk synchronously — encode + write run on ioQueue"
     )
 
-    // Drain the queue and confirm the snapshot eventually lands.
+    // Resume + drain confirms the snapshot eventually lands and reflects the frozen
+    // `heavy` capture.
+    queue.resume()
     file.flushForTesting()
     #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
-
-    // Snapshot reflects the frozen `heavy` capture.
     let loaded = file.load()
     #expect(loaded.snapshot?.records.count == heavy.count)
   }

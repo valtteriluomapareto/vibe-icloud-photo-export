@@ -118,7 +118,7 @@ struct CollectionsSidebarView: View {
     tree.first(where: { $0.kind == .favorites })
       ?? PhotoCollectionDescriptor(
         id: "favorites", localIdentifier: nil, title: "Favorites", kind: .favorites,
-        pathComponents: [], estimatedAssetCount: nil, children: [])
+        pathComponents: [], children: [])
   }
 
   private var userCollections: [PhotoCollectionDescriptor] {

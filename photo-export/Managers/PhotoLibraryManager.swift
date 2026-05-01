@@ -658,7 +658,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
         title: "Favorites",
         kind: .favorites,
         pathComponents: [],
-        estimatedAssetCount: nil,
         children: []
       ))
     let topLevel = PHCollection.fetchTopLevelUserCollections(with: nil)
@@ -701,16 +700,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Builds a descriptor for a `PHCollection`. Albums become leaf descriptors; folders
   /// recurse into their children. Returns `nil` for kinds we don't surface (smart albums
   /// other than Favorites, shared albums, etc).
-  ///
-  /// `estimatedAssetCount` is left `nil`. The previous implementation called
-  /// `PHAsset.fetchAssets(in: assetCollection, options: nil).count` per album on the
-  /// main actor, which at scale (500+ albums) added 1–3 seconds of UI block to first
-  /// sidebar render after every Photos library change. The result was wasted work — the
-  /// sidebar populates per-row counts asynchronously via `cachedCountAssets(in:)`,
-  /// which is the only consumer that reads counts at all (no production code reads
-  /// `descriptor.estimatedAssetCount` directly; the field's contract has always been
-  /// "best-effort, may be nil"). See `cachedCountIsSourceOfTruthForAlbumCounts` in
-  /// `PhotoLibraryServiceCollectionsTests` for the test that pins the invariant.
   fileprivate static func descriptor(from collection: PHCollection, parentPath: [String])
     -> PhotoCollectionDescriptor?
   {
@@ -725,7 +714,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
         title: title,
         kind: .album,
         pathComponents: parentPath,
-        estimatedAssetCount: nil,
         children: []
       )
     }
@@ -744,7 +732,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
         title: title,
         kind: .folder,
         pathComponents: parentPath,
-        estimatedAssetCount: nil,
         children: childDescriptors
       )
     }

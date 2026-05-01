@@ -143,10 +143,10 @@ struct ReuseSourceAlbumPathTests {
     photoLib.collectionTree = [
       PhotoCollectionDescriptor(
         id: "album:album-A-id", localIdentifier: "album-A-id", title: "AlbumA",
-        kind: .album, pathComponents: [], estimatedAssetCount: 1, children: []),
+        kind: .album, pathComponents: [], children: []),
       PhotoCollectionDescriptor(
         id: "album:album-B-id", localIdentifier: "album-B-id", title: "AlbumB",
-        kind: .album, pathComponents: [], estimatedAssetCount: 1, children: []),
+        kind: .album, pathComponents: [], children: []),
     ]
 
     // Pre-stage album A export.
@@ -201,7 +201,7 @@ struct ReuseSourceAlbumPathTests {
     photoLib.collectionTree = [
       PhotoCollectionDescriptor(
         id: "album:album-new", localIdentifier: "album-new", title: "NewAlbum",
-        kind: .album, pathComponents: [], estimatedAssetCount: 1, children: [])
+        kind: .album, pathComponents: [], children: [])
     ]
 
     // Pre-stage timeline export.
@@ -259,7 +259,7 @@ struct ReuseSourceAlbumPathTests {
     photoLib.collectionTree = [
       PhotoCollectionDescriptor(
         id: "album:album-new", localIdentifier: "album-new", title: "NewAlbum",
-        kind: .album, pathComponents: [], estimatedAssetCount: 1, children: [])
+        kind: .album, pathComponents: [], children: [])
     ]
 
     // Two pre-existing album placements with deterministic id ordering.
@@ -317,7 +317,7 @@ struct ReuseSourceAlbumPathTests {
     photoLib.collectionTree = [
       PhotoCollectionDescriptor(
         id: "album:solo-album", localIdentifier: "solo-album", title: "Solo",
-        kind: .album, pathComponents: [], estimatedAssetCount: 1, children: [])
+        kind: .album, pathComponents: [], children: [])
     ]
 
     // Plant a record under what *would* be the resolver's id for this album, and a

@@ -19,7 +19,7 @@ struct ExportPlacementResolverTests {
   ) -> PhotoCollectionDescriptor {
     PhotoCollectionDescriptor(
       id: "album:\(id)", localIdentifier: id, title: title, kind: kind,
-      pathComponents: parent, estimatedAssetCount: nil, children: children)
+      pathComponents: parent, children: children)
   }
 
   private func makeResolver(now: @escaping () -> Date = { Date(timeIntervalSince1970: 0) })

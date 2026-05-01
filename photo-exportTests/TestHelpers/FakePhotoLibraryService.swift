@@ -11,6 +11,12 @@ final class FakePhotoLibraryService: PhotoLibraryService {
 
   // Canned data
   var assetsByYearMonth: [String: [AssetDescriptor]] = [:]
+  /// Canned favorites assets returned by `.favorites` scope fetches.
+  var favoritesAssets: [AssetDescriptor] = []
+  /// Canned per-album assets keyed by album localIdentifier.
+  var assetsByAlbumLocalId: [String: [AssetDescriptor]] = [:]
+  /// Canned collection tree returned by `fetchCollectionTree()`. Empty by default.
+  var collectionTree: [PhotoCollectionDescriptor] = []
   /// Asset IDs that fetchAssetDescriptor should treat as missing, even if they
   /// are present in assetsByYearMonth. Simulates an asset being deleted from the
   /// Photos library after it was enqueued for export.
@@ -101,6 +107,79 @@ final class FakePhotoLibraryService: PhotoLibraryService {
 
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
     yearCounts
+  }
+
+  // MARK: - Phase 2: Collections
+
+  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
+    collectionTree
+  }
+
+  func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
+    -> [AssetDescriptor]
+  {
+    if let error = fetchAssetsError { throw error }
+    switch scope {
+    case .timeline(let year, let month):
+      return try await fetchAssets(year: year, month: month, mediaType: mediaType)
+    case .favorites:
+      if let mediaType {
+        return favoritesAssets.filter { $0.mediaType == mediaType }
+      }
+      return favoritesAssets
+    case .album(let collectionId):
+      let assets = assetsByAlbumLocalId[collectionId] ?? []
+      if let mediaType {
+        return assets.filter { $0.mediaType == mediaType }
+      }
+      return assets
+    }
+  }
+
+  nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
+    // The fake's storage is `@MainActor`-isolated; hop on to read it.
+    return await MainActor.run { [weak self] in
+      guard let self else { return 0 }
+      switch scope {
+      case .timeline(let year, let month):
+        if let month {
+          return self.assetsByYearMonth["\(year)-\(month)"]?.count ?? 0
+        }
+        var total = 0
+        for m in 1...12 {
+          total += self.assetsByYearMonth["\(year)-\(m)"]?.count ?? 0
+        }
+        return total
+      case .favorites:
+        return self.favoritesAssets.count
+      case .album(let collectionId):
+        return self.assetsByAlbumLocalId[collectionId]?.count ?? 0
+      }
+    }
+  }
+
+  nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
+    return await MainActor.run { [weak self] in
+      guard let self else { return 0 }
+      let assets: [AssetDescriptor]
+      switch scope {
+      case .timeline(let year, let month):
+        if let month {
+          assets = self.assetsByYearMonth["\(year)-\(month)"] ?? []
+        } else {
+          var collected: [AssetDescriptor] = []
+          for m in 1...12 {
+            collected.append(contentsOf: self.assetsByYearMonth["\(year)-\(m)"] ?? [])
+          }
+          assets = collected
+        }
+      case .favorites:
+        assets = self.favoritesAssets
+      case .album(let collectionId):
+        assets = self.assetsByAlbumLocalId[collectionId] ?? []
+      }
+      return assets.reduce(0) { $0 + ($1.hasAdjustments ? 1 : 0) }
+    }
   }
 
   func startCachingThumbnails(for assets: [AssetDescriptor]) {

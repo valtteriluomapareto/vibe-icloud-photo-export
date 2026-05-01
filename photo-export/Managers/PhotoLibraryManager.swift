@@ -106,9 +106,84 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   func fetchAssets(year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil) async throws
     -> [AssetDescriptor]
   {
-    let phAssets = try await fetchPHAssets(year: year, month: month, mediaType: mediaType)
-    cacheAssets(phAssets)
-    return phAssets.map { Self.descriptor(from: $0) }
+    try await fetchAssets(in: .timeline(year: year, month: month), mediaType: mediaType)
+  }
+
+  /// Generic scope-based asset fetch. The timeline path goes through the existing
+  /// `fetchPHAssets(year:month:mediaType:)`; collection scopes (`.favorites`, `.album`)
+  /// build a fetch with the appropriate predicate or use the album's
+  /// `PHAssetCollection`. Hidden assets stay excluded by default; sort is by
+  /// `creationDate` ascending for deterministic output (matches existing timeline
+  /// behavior).
+  func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
+    -> [AssetDescriptor]
+  {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    switch scope {
+    case .timeline(let year, let month):
+      let phAssets = try await fetchPHAssets(year: year, month: month, mediaType: mediaType)
+      cacheAssets(phAssets)
+      return phAssets.map { Self.descriptor(from: $0) }
+    case .favorites:
+      let phAssets = fetchFavoritesPHAssets(mediaType: mediaType)
+      cacheAssets(phAssets)
+      return phAssets.map { Self.descriptor(from: $0) }
+    case .album(let collectionLocalId):
+      let phAssets = fetchAlbumPHAssets(collectionLocalId: collectionLocalId, mediaType: mediaType)
+      cacheAssets(phAssets)
+      return phAssets.map { Self.descriptor(from: $0) }
+    }
+  }
+
+  // MARK: - Collection scope counts (Phase 2; uncached)
+
+  /// Number of assets in a fetch scope. Phase 2 keeps these uncached. The implementation
+  /// runs the `PHFetchResult` on a detached task so the call doesn't block the main
+  /// actor. The protocol declares this `nonisolated`; we forward to a
+  /// detached-task implementation here.
+  nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
+    try await Task.detached(priority: .userInitiated) {
+      let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+      guard Self.isAuthorizationSufficient(status) else {
+        throw PhotoLibraryError.authorizationDenied
+      }
+      let opts = Self.fetchOptions(for: scope)
+      switch scope {
+      case .timeline, .favorites:
+        return PHAsset.fetchAssets(with: opts).count
+      case .album(let collectionLocalId):
+        guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
+        else { return 0 }
+        return PHAsset.fetchAssets(in: collection, options: opts).count
+      }
+    }.value
+  }
+
+  /// Number of assets in a fetch scope whose `hasAdjustments` is `true`. Iterates the
+  /// fetch result inside a detached task; PHAsset values are not crossed back to the
+  /// main actor.
+  nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
+    try await Task.detached(priority: .userInitiated) {
+      let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+      guard Self.isAuthorizationSufficient(status) else {
+        throw PhotoLibraryError.authorizationDenied
+      }
+      let opts = Self.fetchOptions(for: scope)
+      let result: PHFetchResult<PHAsset>
+      switch scope {
+      case .timeline, .favorites:
+        result = PHAsset.fetchAssets(with: opts)
+      case .album(let collectionLocalId):
+        guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
+        else { return 0 }
+        result = PHAsset.fetchAssets(in: collection, options: opts)
+      }
+      var count = 0
+      result.enumerateObjects { asset, _, _ in
+        if asset.hasAdjustments { count += 1 }
+      }
+      return count
+    }.value
   }
 
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
@@ -419,6 +494,167 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   private func invalidateCache() {
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
+    cachedCollectionTree = nil
+  }
+
+  // MARK: - Collection scope fetch helpers
+
+  /// Builds a `PHFetchOptions` for the given scope. Hidden assets stay excluded by
+  /// default; sort is `creationDate` ascending for deterministic output. The Favorites
+  /// scope adds a `favorite == YES` predicate; the timeline scope adds a date-range
+  /// predicate. Album scope's predicate is empty (the collection itself bounds the
+  /// fetch).
+  nonisolated fileprivate static func fetchOptions(for scope: PhotoFetchScope) -> PHFetchOptions {
+    let opts = PHFetchOptions()
+    opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+    switch scope {
+    case .timeline(let year, let month):
+      let calendar = Calendar.current
+      var startComps = DateComponents()
+      startComps.year = year
+      startComps.month = month ?? 1
+      startComps.day = 1
+      var endComps = DateComponents()
+      endComps.year = month == nil ? year + 1 : year
+      endComps.month = month == nil ? 1 : (month! + 1)
+      endComps.day = 1
+      if let startDate = calendar.date(from: startComps),
+        let endDate = calendar.date(from: endComps)
+      {
+        opts.predicate = NSPredicate(
+          format: "creationDate >= %@ AND creationDate < %@", startDate as NSDate,
+          endDate as NSDate)
+      }
+    case .favorites:
+      opts.predicate = NSPredicate(format: "favorite == YES")
+    case .album:
+      // Album scope is bounded by the PHAssetCollection; no additional predicate.
+      break
+    }
+    return opts
+  }
+
+  nonisolated fileprivate static func fetchAssetCollection(localIdentifier: String)
+    -> PHAssetCollection?
+  {
+    let result = PHAssetCollection.fetchAssetCollections(
+      withLocalIdentifiers: [localIdentifier], options: nil)
+    return result.firstObject
+  }
+
+  /// Fetches Favorites contents on the main actor (used by `fetchAssets(in:)` to populate
+  /// the asset cache). Counts go through the detached `countAssets(in:)` path instead.
+  private func fetchFavoritesPHAssets(mediaType: PHAssetMediaType?) -> [PHAsset] {
+    let opts = Self.fetchOptions(for: .favorites)
+    if let mediaType = mediaType {
+      let mediaPredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
+      opts.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+        opts.predicate ?? NSPredicate(value: true), mediaPredicate,
+      ])
+    }
+    let result = PHAsset.fetchAssets(with: opts)
+    var assets: [PHAsset] = []
+    result.enumerateObjects { asset, _, _ in assets.append(asset) }
+    return assets
+  }
+
+  /// Fetches one user album's contents.
+  private func fetchAlbumPHAssets(collectionLocalId: String, mediaType: PHAssetMediaType?)
+    -> [PHAsset]
+  {
+    guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId) else {
+      return []
+    }
+    let opts = Self.fetchOptions(for: .album(collectionId: collectionLocalId))
+    if let mediaType = mediaType {
+      let mediaPredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
+      opts.predicate = mediaPredicate
+    }
+    let result = PHAsset.fetchAssets(in: collection, options: opts)
+    var assets: [PHAsset] = []
+    result.enumerateObjects { asset, _, _ in assets.append(asset) }
+    return assets
+  }
+
+  // MARK: - Collection tree (Phase 2)
+
+  /// Cached collection tree. Invalidated on `photoLibraryDidChange`. Constructed lazily
+  /// on the first `fetchCollectionTree()` call after a change (or first launch).
+  private var cachedCollectionTree: [PhotoCollectionDescriptor]?
+
+  /// Builds the user's Photos collection tree: a synthetic Favorites entry first, then
+  /// user-created top-level albums and folders (recursively).
+  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
+    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    if let cached = cachedCollectionTree { return cached }
+    var tree: [PhotoCollectionDescriptor] = []
+    tree.append(
+      PhotoCollectionDescriptor(
+        id: "favorites",
+        localIdentifier: nil,
+        title: "Favorites",
+        kind: .favorites,
+        pathComponents: [],
+        estimatedAssetCount: nil,
+        children: []
+      ))
+    let topLevel = PHCollection.fetchTopLevelUserCollections(with: nil)
+    var folderQueue: [(PHCollection, [String])] = []
+    topLevel.enumerateObjects { collection, _, _ in
+      folderQueue.append((collection, []))
+    }
+    var topResults: [PhotoCollectionDescriptor] = []
+    for (collection, parentPath) in folderQueue {
+      if let descriptor = Self.descriptor(from: collection, parentPath: parentPath) {
+        topResults.append(descriptor)
+      }
+    }
+    tree.append(contentsOf: topResults)
+    cachedCollectionTree = tree
+    return tree
+  }
+
+  /// Builds a descriptor for a `PHCollection`. Albums become leaf descriptors; folders
+  /// recurse into their children. Returns `nil` for kinds we don't surface (smart albums
+  /// other than Favorites, shared albums, etc).
+  fileprivate static func descriptor(from collection: PHCollection, parentPath: [String])
+    -> PhotoCollectionDescriptor?
+  {
+    let title = collection.localizedTitle ?? ""
+    if let assetCollection = collection as? PHAssetCollection,
+      assetCollection.assetCollectionType == .album
+    {
+      let count = PHAsset.fetchAssets(in: assetCollection, options: nil).count
+      return PhotoCollectionDescriptor(
+        id: "album:\(assetCollection.localIdentifier)",
+        localIdentifier: assetCollection.localIdentifier,
+        title: title,
+        kind: .album,
+        pathComponents: parentPath,
+        estimatedAssetCount: count,
+        children: []
+      )
+    }
+    if let folder = collection as? PHCollectionList {
+      let childPath = parentPath + [title]
+      let children = PHCollection.fetchCollections(in: folder, options: nil)
+      var childDescriptors: [PhotoCollectionDescriptor] = []
+      children.enumerateObjects { child, _, _ in
+        if let descriptor = Self.descriptor(from: child, parentPath: childPath) {
+          childDescriptors.append(descriptor)
+        }
+      }
+      return PhotoCollectionDescriptor(
+        id: "folder:\(folder.localIdentifier)",
+        localIdentifier: folder.localIdentifier,
+        title: title,
+        kind: .folder,
+        pathComponents: parentPath,
+        estimatedAssetCount: nil,
+        children: childDescriptors
+      )
+    }
+    return nil
   }
 
   private func fetchPHAssets(identifiers: [String]) -> [PHAsset] {

@@ -113,7 +113,11 @@ struct LibraryRootView: View {
             month: Calendar.current.component(.month, from: Date())
           )
       case .collections:
-        selection = lastCollectionsSelection
+        // First flip to Collections defaults to Favorites instead of nil. Favorites is
+        // always present (synthetic — no underlying PHAssetCollection required) and the
+        // most common entry point; landing on a blank "Select a collection" pane on the
+        // first switch felt broken to users in review.
+        selection = lastCollectionsSelection ?? .favorites
       }
       selectedAsset = nil
     }

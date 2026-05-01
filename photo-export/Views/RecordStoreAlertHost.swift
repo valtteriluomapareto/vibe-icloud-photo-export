@@ -6,14 +6,20 @@ import SwiftUI
 /// Either store can independently transition to `.failed` when its snapshot fails to
 /// decode (see `JSONLRecordFile.load()`). The store keeps the corrupt snapshot on disk
 /// untouched and only renames it (`<name>.broken-<ISO8601>`) when the user explicitly
-/// chooses Reset, so the user never silently loses their record history. This host
-/// presents a single alert at a time; if both stores are failed, the timeline store's
-/// alert shows first and the collection store's alert follows after the user acks it.
+/// chooses Reset Records, so the user never silently loses their record history. This
+/// host presents a single alert at a time; if both stores are failed, the timeline
+/// alert shows first and the collection alert follows after the user resolves it.
 ///
-/// Buttons match the plan's recovery contract: **Reset** runs the deferred rename and
-/// reinitializes the failed store, **Quit** terminates the app (the user can investigate
-/// the broken file by hand before relaunching), and **Cancel** dismisses the alert
-/// without touching disk so the user can choose later.
+/// Buttons:
+/// - **Reset Records** — runs the deferred rename and reinitializes the failed store.
+///   The exported files on disk are untouched; only the in-app progress tracking is
+///   reset. The next export run rebuilds the records.
+/// - **Quit** — terminates the app so the user can inspect the broken file by hand
+///   before relaunching.
+///
+/// There is no Cancel action: dismissing without resolving would leave the affected
+/// sidebar in an unexplained "stuck" state with no way back into the recovery flow
+/// short of relaunching. Both actions move the user forward.
 struct RecordStoreAlertHost: ViewModifier {
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
@@ -21,33 +27,33 @@ struct RecordStoreAlertHost: ViewModifier {
   func body(content: Content) -> some View {
     content
       .alert(
-        "Timeline Records Could Not Be Read",
+        "Photo Export couldn't read its timeline progress file",
         isPresented: timelineAlertBinding,
         actions: {
-          Button("Reset") { exportRecordStore.resetToEmpty() }
+          Button("Reset Records") { exportRecordStore.resetToEmpty() }
           Button("Quit") { NSApplication.shared.terminate(nil) }
-          Button("Cancel", role: .cancel) {}
         },
         message: {
           Text(
-            "The timeline export records file is corrupt or unreadable. Reset will move "
-              + "the broken file aside and start fresh — your exported files on disk are "
-              + "untouched. The next export run will rebuild the records.")
+            "Your exported photos on disk are safe — only the in-app progress tracking "
+              + "for timeline (year/month) exports is affected. Reset Records will move "
+              + "the broken file aside and start fresh; the next export run rebuilds the "
+              + "records.")
         }
       )
       .alert(
-        "Collection Records Could Not Be Read",
+        "Photo Export couldn't read its collections progress file",
         isPresented: collectionAlertBinding,
         actions: {
-          Button("Reset") { collectionExportRecordStore.resetToEmpty() }
+          Button("Reset Records") { collectionExportRecordStore.resetToEmpty() }
           Button("Quit") { NSApplication.shared.terminate(nil) }
-          Button("Cancel", role: .cancel) {}
         },
         message: {
           Text(
-            "The collection export records file is corrupt or unreadable. Reset will move "
-              + "the broken file aside and start fresh — your exported files on disk are "
-              + "untouched. The next collection export will rebuild the records.")
+            "Your exported photos on disk are safe — only the in-app progress tracking "
+              + "for Favorites and album exports is affected. Reset Records will move the "
+              + "broken file aside and start fresh; the next collection export rebuilds "
+              + "the records.")
         }
       )
   }

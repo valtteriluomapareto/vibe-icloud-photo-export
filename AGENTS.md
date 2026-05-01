@@ -90,7 +90,7 @@ When changing user-visible behavior, update both the root `README.md` and the ma
 ## Key Conventions
 
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.
-- The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. Pure helpers under `Managers/` (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `JSONLRecordFile`, `ExportRecordsDirectoryCoordinator`) are plain types — do not add `@MainActor` reflexively. `CollectionCountCache` is an actor.
+- The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. `JSONLRecordFile` is also `@MainActor` because both composing stores call into it from the main actor and it owns mutable state (`mutationCountSinceCompact`); its IO-queue-bound static helpers are explicitly `nonisolated`. Pure helpers under `Managers/` (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `ExportRecordsDirectoryCoordinator`) are plain types — do not add `@MainActor` reflexively. `CollectionCountCache` is an actor.
 - Track exports by `PHAsset.localIdentifier`; never overwrite existing files.
 - Use `.task(id:)` for cancellation-aware async loading in views.
 - New code that touches Photos, the filesystem, or the export destination should go through the `Protocols/` seams so it can be unit-tested with fakes.

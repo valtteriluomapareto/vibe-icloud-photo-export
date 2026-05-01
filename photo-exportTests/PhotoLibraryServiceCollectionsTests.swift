@@ -138,4 +138,65 @@ struct PhotoLibraryServiceCollectionsTests {
     #expect(result[1].children[0].kind == .album)
     #expect(result[1].children[0].pathComponents == ["Family"])
   }
+
+  // MARK: - Cache-is-source-of-truth contract
+
+  /// Locks the architectural invariant that the sidebar's count display comes from
+  /// `cachedCountAssets(in:)`, NOT from `PhotoCollectionDescriptor.estimatedAssetCount`.
+  /// The field's doc comment calls itself "best-effort" and may be nil — production
+  /// callers must never trust it as the count, because:
+  /// - The production `PhotoLibraryManager.fetchCollectionTree()` drops the eager
+  ///   `PHAsset.fetchAssets(in:).count` per album (it was a synchronous main-actor
+  ///   stall at scale: 1–3s on a 500-album library after every Photos library change).
+  /// - Even a tree built before that change would carry a stale count if the user
+  ///   added/removed assets between fetches.
+  ///
+  /// This test verifies the contract by setting the descriptor's `estimatedAssetCount`
+  /// to a bogus value (999) and the album's actual contents to a different value (3).
+  /// `cachedCountAssets(in: .album(...))` must return the actual count (3), not the
+  /// stale field. Any future "optimization" that wires the sidebar to read
+  /// `descriptor.estimatedAssetCount` directly would break this test.
+  @Test func cachedCountIsSourceOfTruthForAlbumCounts() async throws {
+    let svc = FakePhotoLibraryService()
+
+    // Tree carries an intentionally-bogus stale count (999).
+    svc.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "album:stale", localIdentifier: "stale-album-id", title: "Stale",
+        kind: .album, pathComponents: [], estimatedAssetCount: 999, children: []),
+      PhotoCollectionDescriptor(
+        id: "album:nilcount", localIdentifier: "nilcount-id", title: "NoCount",
+        kind: .album, pathComponents: [], estimatedAssetCount: nil, children: []),
+    ]
+    // Actual contents: 3 assets in the "stale" album, 5 in "nilcount".
+    svc.assetsByAlbumLocalId["stale-album-id"] = [
+      makeAsset(id: "a"), makeAsset(id: "b"), makeAsset(id: "c"),
+    ]
+    svc.assetsByAlbumLocalId["nilcount-id"] = (0..<5).map { makeAsset(id: "x-\($0)") }
+
+    // Cache returns the actual count, regardless of descriptor field value.
+    let staleCount = try await svc.cachedCountAssets(
+      in: .album(collectionId: "stale-album-id"))
+    #expect(staleCount == 3, "cache must return actual count, not the stale 999")
+
+    let nilCount = try await svc.cachedCountAssets(
+      in: .album(collectionId: "nilcount-id"))
+    #expect(nilCount == 5, "cache must return actual count when descriptor has nil")
+  }
+
+  /// Same contract for the favorites scope. The synthetic Favorites descriptor's
+  /// `estimatedAssetCount` is always nil in production (no PHAssetCollection backs it);
+  /// the sidebar must populate the count via `cachedCountAssets(in: .favorites)`.
+  @Test func cachedCountIsSourceOfTruthForFavoritesCount() async throws {
+    let svc = FakePhotoLibraryService()
+    svc.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "favorites", localIdentifier: nil, title: "Favorites", kind: .favorites,
+        pathComponents: [], estimatedAssetCount: nil, children: [])
+    ]
+    svc.favoritesAssets = (0..<7).map { makeAsset(id: "f-\($0)") }
+
+    let count = try await svc.cachedCountAssets(in: .favorites)
+    #expect(count == 7)
+  }
 }

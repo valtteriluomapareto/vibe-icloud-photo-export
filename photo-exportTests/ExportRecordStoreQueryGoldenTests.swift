@@ -578,6 +578,126 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(store.isExported(asset: adjusted, selection: .editedWithOriginals))
   }
 
+  // MARK: - Incremental counter integrity under churn
+
+  /// Stress-test the incremental counter maintenance: drive a sequence that visits every
+  /// transition shape (insert, update, cross-month move, variant add/remove, full-record
+  /// delete) and verify each public count method matches a recompute-from-scratch over
+  /// `recordsById` after every step. If the counter diff implementation drifts from the
+  /// linear scan it replaced, this test fires.
+  ///
+  /// This covers the path that `apply(_:recordCounters: true)` exercises in production
+  /// — every mutation routes through `apply` via `append`. The golden-state tests above
+  /// verify end-state correctness on hand-checked fixtures; this test verifies that the
+  /// counter map stays consistent through arbitrary mutation sequences.
+  @Test func incrementalCountersStayConsistentUnderChurn() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let now = Date(timeIntervalSince1970: 0)
+
+    func assertConsistentCountsForAllCells() {
+      // Recompute every count method by scanning recordsById from scratch and assert
+      // the public method returns the same value. We probe a few (year, month) cells
+      // and a few variant×status combinations covering the whole 2024–2026 range so a
+      // counter leak in any direction surfaces.
+      for year in [2024, 2025, 2026] {
+        var yearOriginalDone = 0
+        for month in 1...12 {
+          var byVariantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
+          var bothDone = 0
+          var origAtNaturalStem = 0
+          for record in store.recordsById.values
+          where record.year == year && record.month == month {
+            for (variant, variantRec) in record.variants {
+              byVariantStatus[variant, default: [:]][variantRec.status, default: 0] += 1
+            }
+            let originalDone = record.variants[.original]?.status == .done
+            let editedDone = record.variants[.edited]?.status == .done
+            if originalDone && editedDone { bothDone += 1 }
+            if originalDone, !editedDone,
+              let filename = record.variants[.original]?.filename,
+              !ExportFilenamePolicy.isOrigCompanion(filename: filename)
+            {
+              origAtNaturalStem += 1
+            }
+            if originalDone { yearOriginalDone += 1 }
+          }
+          for variant in [ExportVariant.original, .edited] {
+            for status in [ExportStatus.pending, .inProgress, .done, .failed] {
+              let expected = byVariantStatus[variant]?[status] ?? 0
+              let actual = store.recordCount(
+                year: year, month: month, variant: variant, status: status)
+              #expect(
+                actual == expected,
+                "recordCount(\(year)-\(month), \(variant), \(status)) = \(actual), expected \(expected)"
+              )
+            }
+          }
+          #expect(store.recordCountBothVariantsDone(year: year, month: month) == bothDone)
+          #expect(
+            store.recordCountOriginalDoneAtNaturalStem(year: year, month: month)
+              == origAtNaturalStem)
+        }
+        #expect(
+          store.yearExportedCount(year: year) == yearOriginalDone,
+          "yearExportedCount(\(year)) = \(store.yearExportedCount(year: year)), expected \(yearOriginalDone)"
+        )
+      }
+    }
+
+    // Step 1: insert across multiple (year, month) cells.
+    store.markVariantExported(
+      assetId: "a", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "A.HEIC", exportedAt: now)
+    assertConsistentCountsForAllCells()
+
+    store.markVariantExported(
+      assetId: "b", variant: .original, year: 2025, month: 7, relPath: "2025/07/",
+      filename: "B.HEIC", exportedAt: now)
+    assertConsistentCountsForAllCells()
+
+    store.markVariantExported(
+      assetId: "c", variant: .original, year: 2024, month: 12, relPath: "2024/12/",
+      filename: "C.HEIC", exportedAt: now)
+    assertConsistentCountsForAllCells()
+
+    // Step 2: add edited variant — both-done count and natural-stem count should diff.
+    store.markVariantExported(
+      assetId: "a", variant: .edited, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "A.JPG", exportedAt: now)
+    assertConsistentCountsForAllCells()
+
+    // Step 3: switch a's original filename to a _orig companion (simulating a paired
+    // export). Natural-stem count should decrement.
+    store.markVariantExported(
+      assetId: "a", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "A_orig.HEIC", exportedAt: now)
+    assertConsistentCountsForAllCells()
+
+    // Step 4: in-progress + failed transitions.
+    store.markVariantInProgress(
+      assetId: "d", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: nil)
+    assertConsistentCountsForAllCells()
+    store.markVariantFailed(
+      assetId: "d", variant: .original, error: "test", at: now)
+    assertConsistentCountsForAllCells()
+
+    // Step 5: remove a single variant.
+    store.removeVariant(assetId: "a", variant: .edited)
+    assertConsistentCountsForAllCells()
+
+    // Step 6: full-record delete.
+    store.remove(assetId: "c")
+    assertConsistentCountsForAllCells()
+
+    // Step 7: re-add with a different year/month (cross-cell move on re-insert).
+    store.markVariantExported(
+      assetId: "c", variant: .original, year: 2026, month: 1, relPath: "2026/01/",
+      filename: "C.HEIC", exportedAt: now)
+    assertConsistentCountsForAllCells()
+  }
+
   // MARK: - Mutation transitions
 
   /// Drives a sequence of state transitions on one record and asserts counts after each.

@@ -30,6 +30,34 @@ final class ExportRecordStore: ObservableObject {
 
   private(set) var recordsById: [String: ExportRecord] = [:]
 
+  /// Incrementally-maintained per-`(year, month)` counters that back the public count
+  /// queries. Without these, `recordCount`, `monthSummary`, `sidebarSummary`, and the
+  /// year-roll-up helpers each iterate `recordsById.values` once per call — a 500k-record
+  /// library × ~5 visible years on screen × every coalesced `mutationCounter` bump turned
+  /// the timeline sidebar into a multi-second stall during exports. The counters are
+  /// rebuilt from scratch at `configure(for:)` time and updated incrementally on every
+  /// `apply(_:)` thereafter (every public mutation routes through `apply` via `append`).
+  ///
+  /// All public read methods translate one-for-one against the original implementations;
+  /// `ExportRecordStoreQueryGoldenTests` pins the exact integer outputs against
+  /// hand-checked fixtures so any drift here surfaces immediately.
+  private struct MonthKey: Hashable {
+    let year: Int
+    let month: Int
+  }
+  private struct MonthCounters {
+    /// Per-variant, per-status occurrence count.
+    var variantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
+    /// Records where both `.original` and `.edited` variants are `.done`.
+    var bothVariantsDone: Int = 0
+    /// Records where `.original.done` at a natural-stem filename (not `_orig`-companion)
+    /// AND `.edited` is not `.done`. The records-only sidebar formula's "unedited asset
+    /// exported once" estimator depends on this.
+    var originalDoneAtNaturalStem: Int = 0
+    static let zero = MonthCounters()
+  }
+  private var monthCounters: [MonthKey: MonthCounters] = [:]
+
   /// Per-store load state. See `RecordStoreState` for semantics. The corruption alert UI
   /// that drives `resetToEmpty()` lives in Phase 4; before then, a `.failed` state is
   /// observable in logs and tests but not surfaced to the user.
@@ -75,6 +103,7 @@ final class ExportRecordStore: ObservableObject {
   func configure(for destinationId: String?) {
     // Reset in-memory state
     recordsById = [:]
+    monthCounters = [:]
 
     guard let destinationId else {
       currentStoreDirURL = nil
@@ -110,10 +139,16 @@ final class ExportRecordStore: ObservableObject {
       if let snapshot = loaded.snapshot {
         recordsById = snapshot
       }
+      // During load, apply each op directly to `recordsById` without touching
+      // `monthCounters` — incrementally updating against an empty counter map would
+      // produce negative counts for keys whose snapshot value should be subtracted.
+      // After all ops are applied and recovery runs, rebuild counters once from the
+      // final `recordsById`.
       for op in loaded.ops {
-        apply(op)
+        apply(op, recordCounters: false)
       }
       recoverInProgressVariants()
+      rebuildCountersFromRecords()
       state = .ready
     }
     mutationCounter &+= 1
@@ -132,6 +167,7 @@ final class ExportRecordStore: ObservableObject {
     do {
       try jsonl.resetToEmpty(emptySnapshot: [:])
       recordsById = [:]
+      monthCounters = [:]
       state = .ready
       mutationCounter &+= 1
     } catch {
@@ -305,21 +341,21 @@ final class ExportRecordStore: ObservableObject {
   /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
   /// yearly progress counting for unadjusted libraries.
   func yearExportedCount(year: Int) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.variants[.original]?.status == .done else { return sum }
-      return sum + 1
+    var total = 0
+    for month in 1...12 {
+      total +=
+        monthCounters[MonthKey(year: year, month: month)]?
+        .variantStatus[.original]?[.done] ?? 0
     }
+    return total
   }
 
   /// Legacy month summary that counts `.original` done records. Preserved for call sites that
   /// have not yet adopted `monthSummary(assets:selection:)`.
   func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
-    let exportedCount = recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month,
-        record.variants[.original]?.status == .done
-      else { return sum }
-      return sum + 1
-    }
+    let exportedCount =
+      monthCounters[MonthKey(year: year, month: month)]?
+      .variantStatus[.original]?[.done] ?? 0
     return makeSummary(year: year, month: month, exported: exportedCount, total: totalAssets)
   }
 
@@ -348,24 +384,15 @@ final class ExportRecordStore: ObservableObject {
   func recordCount(
     year: Int, month: Int, variant: ExportVariant, status: ExportStatus
   ) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month,
-        record.variants[variant]?.status == status
-      else { return sum }
-      return sum + 1
-    }
+    monthCounters[MonthKey(year: year, month: month)]?
+      .variantStatus[variant]?[status] ?? 0
   }
 
   /// Count of records in `year`/`month` whose `.original` and `.edited` variants are both
   /// `.done`. These records are definitely fully complete under `editedWithOriginals`
   /// regardless of whether the asset is currently adjusted.
   func recordCountBothVariantsDone(year: Int, month: Int) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month else { return sum }
-      let originalDone = record.variants[.original]?.status == .done
-      let editedDone = record.variants[.edited]?.status == .done
-      return sum + (originalDone && editedDone ? 1 : 0)
-    }
+    monthCounters[MonthKey(year: year, month: month)]?.bothVariantsDone ?? 0
   }
 
   /// Count of records in `year`/`month` whose `.edited` variant is `.done`. Used by the
@@ -379,14 +406,7 @@ final class ExportRecordStore: ObservableObject {
   /// sidebar formula to estimate "unedited asset, exported once" rows without loading
   /// descriptors.
   func recordCountOriginalDoneAtNaturalStem(year: Int, month: Int) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month else { return sum }
-      guard let original = record.variants[.original], original.status == .done,
-        let filename = original.filename
-      else { return sum }
-      if record.variants[.edited]?.status == .done { return sum }
-      return sum + (ExportFilenamePolicy.isOrigCompanion(filename: filename) ? 0 : 1)
-    }
+    monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
   }
 
   /// Records-only approximation of "fully exported under this selection," capped by the
@@ -522,14 +542,70 @@ final class ExportRecordStore: ObservableObject {
     jsonl.append(mutation, currentSnapshot: { self.recordsById })
   }
 
-  private func apply(_ mutation: ExportRecordMutation) {
+  /// Applies a mutation to in-memory state. When `recordCounters` is `true` (the default
+  /// for production mutations), `monthCounters` is updated incrementally by subtracting
+  /// the old record's contribution and adding the new record's. The `false` path is used
+  /// during `configure(for:)` while the snapshot+log replay rebuilds `recordsById` from
+  /// scratch — incrementally diffing against an empty counter map would produce negative
+  /// counts. After the replay, `rebuildCountersFromRecords()` populates the counters in
+  /// one O(N) pass.
+  private func apply(_ mutation: ExportRecordMutation, recordCounters: Bool = true) {
+    let oldRecord = recordsById[mutation.id]
     switch mutation.op {
     case .upsert:
       if let record = mutation.record {
         recordsById[mutation.id] = record
+        if recordCounters {
+          adjustCounters(old: oldRecord, new: record)
+        }
       }
     case .delete:
       recordsById.removeValue(forKey: mutation.id)
+      if recordCounters {
+        adjustCounters(old: oldRecord, new: nil)
+      }
+    }
+  }
+
+  /// Subtracts the old record's contribution and adds the new record's to `monthCounters`.
+  /// Either side may be `nil` (a fresh insert has no `old`; a delete has no `new`).
+  private func adjustCounters(old: ExportRecord?, new: ExportRecord?) {
+    if let old { contribute(old, sign: -1) }
+    if let new { contribute(new, sign: +1) }
+  }
+
+  /// Adds (`sign == +1`) or removes (`sign == -1`) `record`'s contribution to its
+  /// `(year, month)` cell of `monthCounters`. Idempotent under `+1` then `-1` for the
+  /// same record value, which is what the diff in `adjustCounters` relies on.
+  private func contribute(_ record: ExportRecord, sign: Int) {
+    let key = MonthKey(year: record.year, month: record.month)
+    var counters = monthCounters[key] ?? .zero
+    for (variant, variantRec) in record.variants {
+      let prior = counters.variantStatus[variant]?[variantRec.status] ?? 0
+      counters.variantStatus[variant, default: [:]][variantRec.status] = prior + sign
+    }
+    let originalDone = record.variants[.original]?.status == .done
+    let editedDone = record.variants[.edited]?.status == .done
+    if originalDone && editedDone {
+      counters.bothVariantsDone += sign
+    }
+    if originalDone, !editedDone,
+      let filename = record.variants[.original]?.filename,
+      !ExportFilenamePolicy.isOrigCompanion(filename: filename)
+    {
+      counters.originalDoneAtNaturalStem += sign
+    }
+    monthCounters[key] = counters
+  }
+
+  /// Rebuilds `monthCounters` from scratch by walking `recordsById` once. Called from
+  /// `configure(for:)` after the snapshot is loaded and log ops are replayed (with
+  /// counter updates suppressed during replay), and after `recoverInProgressVariants()`
+  /// transitions any leftover in-progress variants to failed in-memory.
+  private func rebuildCountersFromRecords() {
+    monthCounters = [:]
+    for record in recordsById.values {
+      contribute(record, sign: +1)
     }
   }
 

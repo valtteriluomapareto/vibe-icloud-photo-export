@@ -808,8 +808,17 @@ final class ExportManager: ObservableObject {
       logger.error(
         "Export failed for id: \(job.assetLocalIdentifier, privacy: .public) error: \(String(describing: error), privacy: .public)"
       )
+      // Record the failure against the variant that was actually in flight when the
+      // error landed. Falling back to `.original` here used to fabricate a phantom
+      // `.failed .original` entry on collection-only `.edited` jobs (collection-export
+      // descriptors that only need the edited variant); those jobs would surface a
+      // failure on a variant they never attempted to write. The in-flight tuple is
+      // populated as soon as `exportSingleVariant` issues the variant-in-progress
+      // record and is cleared on success/per-variant catch, so by the time we reach
+      // this outer catch it accurately names the variant whose write threw.
+      let failedVariant = inFlight?.variant ?? .original
       recordVariantFailed(
-        assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
+        assetId: job.assetLocalIdentifier, placement: job.placement, variant: failedVariant,
         error: error.localizedDescription, at: Date())
     }
   }

@@ -12,7 +12,7 @@ Tracked per phase. Each phase lands as one or more commits on the `collections-e
 | 0. Stable destination identity | ✅ Done | volume-UUID-based id; `ExportRecordsDirectoryCoordinator` handles legacy migration |
 | 1. Type/queue plumbing + new collection store | ✅ Done | Foundation types, `JSONLRecordFile`, `CollectionExportRecordStore`, corruption recovery, `ExportManager` routing. Behind `enableCollections == false`. |
 | 2. PhotoKit collection discovery | ✅ Done | `PhotoCollectionDescriptor` + scope-based fetch/count APIs; `ExportPlacementResolver` with placement-id format and sibling-collision disambiguation. Resolver not yet wired (Phase 3). |
-| 3. ExportManager and destination collection-aware | ⬜ Not started | — |
+| 3. ExportManager and destination collection-aware | ✅ Done | `urlForRelativeDirectory` + escape protection; `startExportFavorites`/`startExportAlbum` + queue wiring; reuse-source copy path; `CollectionCountCache` actor. Behind `enableCollections == false`. |
 | 4. UI + docs | ⬜ Not started | Flips `enableCollections` to `true` |
 
 The whole feature ships to the App Store only when Phase 4 is ready; phases 1–3 stay behind the feature flag for

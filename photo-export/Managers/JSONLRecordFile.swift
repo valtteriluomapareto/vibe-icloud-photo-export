@@ -202,8 +202,17 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   ///   but **encoded** off-main on `ioQueue`. At ~150 MB JSON for a 500k-record library
   ///   the encode itself was the dominant main-actor stall during compaction; moving it
   ///   off-main is the entire point of this split.
-  /// - On log-write failure, the mutation count is rolled back to its pre-append value
-  ///   so subsequent appends re-attempt the threshold check.
+  /// - On log-write failure, the mutation count is rolled back via `max(...)` so it
+  ///   does not regress below the live counter (which subsequent appends may have
+  ///   already advanced). Two cases:
+  ///   - Non-threshold append failed: target is `nextMutationCount - 1` = the
+  ///     pre-append value. Subsequent appends re-attempt the threshold check.
+  ///   - Threshold-crossing append failed: the synchronous path already set
+  ///     `mutationCountSinceCompact = 0` before dispatch, so the rollback target
+  ///     `nextMutationCount - 1` (= 999) actually *advances* the counter to one shy
+  ///     of the threshold. That is intentional: the log line did not land, so no
+  ///     compaction is owed for it, but the next append should re-cross the threshold
+  ///     and re-attempt compaction.
   /// - On compaction encode-or-write failure, the count is rolled back to one shy of the
   ///   threshold so the next append re-triggers compaction. The log line itself is
   ///   already on disk in this case (encode runs *after* a successful log append) — the

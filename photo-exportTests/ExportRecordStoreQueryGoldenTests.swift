@@ -882,18 +882,18 @@ struct ExportRecordStoreQueryGoldenTests {
 
   // MARK: - configure(for:) reload roundtrip
 
-  /// Closes the most important coverage gap from the c15c159 review:
-  /// `rebuildCountersFromRecords()` is the only path that materializes counters during
-  /// load. It runs after the snapshot+log replay (which calls `apply` with
-  /// `recordCounters: false`) and after `recoverInProgressVariants()` rewrites in-flight
-  /// variants to failed. If the rebuild has any divergence from the production
-  /// `contribute(_:sign:)` math, the incremental counters would silently disagree with
-  /// reality after every app launch — and no other test exercises this path end-to-end.
+  /// Covers the **log-only reload path**: store A's mutations live in the JSONL log
+  /// (compaction triggers at 1000 mutations and we only plant ~10), so when store B
+  /// configures, `loaded.snapshot` is `nil` and the `recordsById = snapshot` branch is
+  /// skipped — the entire state is reconstructed by replaying log ops via
+  /// `apply(_:recordCounters: false)`, then `recoverInProgressVariants()` rewrites
+  /// in-progress variants to failed in-place, then `rebuildCountersFromRecords()`
+  /// materializes the counter map in one O(N) pass.
   ///
-  /// Test approach: drive a deterministic mutation sequence on store A, capture every
-  /// public count value, then construct store B against the same on-disk directory and
-  /// verify B reports identical counts.
-  @Test func configureReloadReproducesCountersExactly() throws {
+  /// The companion test `configureReloadFromSnapshotPlusLogReproducesCounters` covers
+  /// the snapshot-load path (`recordsById = snapshot` branch); together they exercise
+  /// every load shape `configure(for:)` can take.
+  @Test func configureReloadFromLogOnlyReproducesCounters() throws {
     let (dir, storeA) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
@@ -992,5 +992,207 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .done) == 1)
     #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .failed) == 1)
     #expect(storeB.recordCountBothVariantsDone(year: yr, month: mo) == 1)
+  }
+
+  /// Covers the **snapshot-load path** plus **multi-cell in-progress recovery**, both
+  /// of which are unreachable through the standard `markVariant*` API at small scale
+  /// (compaction triggers at 1000 mutations). We hand-craft a snapshot file containing
+  /// records across two `(year, month)` cells, with `.inProgress` variants in BOTH
+  /// cells, plus a small log overlay. After `configure(for:)`:
+  /// - `loaded.snapshot != nil` so the `recordsById = snapshot` branch runs.
+  /// - Log replay overlays one additional record.
+  /// - `recoverInProgressVariants()` rewrites the in-progress variants to failed
+  ///   across both cells (a regression that truncates recovery to a single cell would
+  ///   fire here).
+  /// - `rebuildCountersFromRecords()` populates `monthCounters` from the final
+  ///   `recordsById`. The resulting counts must match a recompute exactly.
+  @Test func configureReloadFromSnapshotPlusLogReproducesCounters() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ExportRecordStoreSnapshotReload-\(UUID().uuidString)",
+        isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let dest = "test"
+    let storeDir = dir.appendingPathComponent(dest, isDirectory: true)
+    try FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
+    let now = Date(timeIntervalSince1970: 0)
+
+    func record(
+      id: String, year: Int, month: Int, variant: ExportVariant, status: ExportStatus,
+      filename: String?
+    ) -> ExportRecord {
+      ExportRecord(
+        id: id, year: year, month: month,
+        relPath: "\(year)/\(String(format: "%02d", month))/",
+        variants: [
+          variant: ExportVariantRecord(
+            filename: filename, status: status, exportDate: now, lastError: nil)
+        ])
+    }
+
+    // Snapshot: 4 records across 2025-06 and 2024-12, with .inProgress in BOTH cells.
+    let snapshotRecords: [String: ExportRecord] = [
+      "june-done": record(
+        id: "june-done", year: 2025, month: 6, variant: .original, status: .done,
+        filename: "JD.HEIC"),
+      "june-stuck": record(
+        id: "june-stuck", year: 2025, month: 6, variant: .original, status: .inProgress,
+        filename: nil),
+      "dec-done": record(
+        id: "dec-done", year: 2024, month: 12, variant: .original, status: .done,
+        filename: "DD.HEIC"),
+      "dec-stuck": record(
+        id: "dec-stuck", year: 2024, month: 12, variant: .edited, status: .inProgress,
+        filename: nil),
+    ]
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let snapshotData = try encoder.encode(snapshotRecords)
+    let snapshotURL = storeDir.appendingPathComponent(
+      ExportRecordStore.Constants.snapshotFileName)
+    try snapshotData.write(to: snapshotURL)
+
+    // Log overlay: one fresh record in 2025-06 (proves snapshot+log overlay works).
+    let fresh = record(
+      id: "fresh", year: 2025, month: 6, variant: .original, status: .done,
+      filename: "F.HEIC")
+    let overlay = ExportRecordMutation.upsert(fresh)
+    var logData = try encoder.encode(overlay)
+    logData.append(0x0A)
+    let logURL = storeDir.appendingPathComponent(ExportRecordStore.Constants.logFileName)
+    try logData.write(to: logURL)
+
+    let store = ExportRecordStore(baseDirectoryURL: dir)
+    store.configure(for: dest)
+
+    #expect(store.state == .ready)
+    #expect(store.recordsById.count == 5, "4 from snapshot + 1 from log")
+
+    // Multi-cell recovery: both stuck records transitioned to failed in their own cells.
+    #expect(
+      store.recordCount(year: 2025, month: 6, variant: .original, status: .inProgress) == 0)
+    #expect(
+      store.recordCount(year: 2024, month: 12, variant: .edited, status: .inProgress) == 0)
+    #expect(
+      store.recordCount(year: 2025, month: 6, variant: .original, status: .failed) == 1,
+      "june-stuck recovered → .failed")
+    #expect(
+      store.recordCount(year: 2024, month: 12, variant: .edited, status: .failed) == 1,
+      "dec-stuck recovered → .failed")
+
+    // Snapshot+log overlay landed.
+    #expect(
+      store.recordCount(year: 2025, month: 6, variant: .original, status: .done) == 2,
+      "june-done + fresh")
+    #expect(
+      store.recordCount(year: 2024, month: 12, variant: .original, status: .done) == 1,
+      "dec-done")
+
+    // Year roll-up sums across all months in scope.
+    #expect(store.yearExportedCount(year: 2025) == 2)
+    #expect(store.yearExportedCount(year: 2024) == 1)
+
+    // Recompute-from-scratch sanity across both cells.
+    for (year, month) in [(2025, 6), (2024, 12)] {
+      var byVariantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
+      var bothDone = 0
+      var origAtNaturalStem = 0
+      for rec in store.recordsById.values where rec.year == year && rec.month == month {
+        for (variant, variantRec) in rec.variants {
+          byVariantStatus[variant, default: [:]][variantRec.status, default: 0] += 1
+        }
+        let originalDone = rec.variants[.original]?.status == .done
+        let editedDone = rec.variants[.edited]?.status == .done
+        if originalDone && editedDone { bothDone += 1 }
+        if originalDone, !editedDone,
+          let filename = rec.variants[.original]?.filename,
+          !ExportFilenamePolicy.isOrigCompanion(filename: filename)
+        {
+          origAtNaturalStem += 1
+        }
+      }
+      for variant in [ExportVariant.original, .edited] {
+        for status in [ExportStatus.pending, .inProgress, .done, .failed] {
+          let expected = byVariantStatus[variant]?[status] ?? 0
+          let actual = store.recordCount(
+            year: year, month: month, variant: variant, status: status)
+          #expect(
+            actual == expected,
+            "post-reload recordCount(\(year)-\(month), \(variant), \(status)) = \(actual), expected \(expected)"
+          )
+        }
+      }
+      #expect(store.recordCountBothVariantsDone(year: year, month: month) == bothDone)
+      #expect(
+        store.recordCountOriginalDoneAtNaturalStem(year: year, month: month)
+          == origAtNaturalStem)
+    }
+  }
+
+  // MARK: - resetToEmpty post-reset counter state
+
+  /// Closes the post-reset coverage gap from the c15c159 review: production code clears
+  /// `monthCounters` in `resetToEmpty` (alongside `recordsById`), but no existing test
+  /// queried any count method after a reset to verify the counters were actually
+  /// cleared. A regression that left stale counters would silently survive.
+  ///
+  /// This test forces the store into `.failed` (corrupt-snapshot path), populates
+  /// counters via the standard mutation API on a fresh store, plants a corrupt
+  /// snapshot file, reloads → `.failed`, calls `resetToEmpty`, then asserts every
+  /// public count method returns 0 for the previously-populated cell.
+  @Test func resetToEmptyClearsCounters() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ExportRecordStoreResetClears-\(UUID().uuidString)",
+        isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let dest = "test"
+    let storeDir = dir.appendingPathComponent(dest, isDirectory: true)
+    try FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
+    let now = Date(timeIntervalSince1970: 0)
+
+    // Step 1: drive mutations on a healthy store so counters are populated.
+    let storeA = ExportRecordStore(baseDirectoryURL: dir)
+    storeA.configure(for: dest)
+    storeA.markVariantExported(
+      assetId: "x", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "X.HEIC", exportedAt: now)
+    storeA.markVariantExported(
+      assetId: "y", variant: .edited, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "Y.JPG", exportedAt: now)
+    #expect(storeA.recordCount(year: 2025, month: 6, variant: .original, status: .done) == 1)
+    #expect(storeA.recordCount(year: 2025, month: 6, variant: .edited, status: .done) == 1)
+    storeA.flushForTesting()
+
+    // Step 2: corrupt the snapshot on disk and reload — store transitions to .failed.
+    // We have to write a file to the snapshot path to force the corrupt path; the
+    // log alone won't trigger it.
+    let snapshotURL = storeDir.appendingPathComponent(
+      ExportRecordStore.Constants.snapshotFileName)
+    try Data("not valid json".utf8).write(to: snapshotURL)
+    let storeB = ExportRecordStore(baseDirectoryURL: dir)
+    storeB.configure(for: dest)
+    #expect(storeB.state == .failed)
+
+    // Step 3: resetToEmpty — should clear monthCounters along with recordsById.
+    storeB.resetToEmpty()
+    #expect(storeB.state == .ready)
+    #expect(storeB.recordsById.isEmpty)
+
+    // Step 4: every public count method must return 0 for the previously-populated
+    // cell. A regression that left stale counters in `monthCounters` after reset would
+    // surface here.
+    #expect(storeB.recordCount(year: 2025, month: 6, variant: .original, status: .done) == 0)
+    #expect(storeB.recordCount(year: 2025, month: 6, variant: .edited, status: .done) == 0)
+    #expect(storeB.recordCount(year: 2025, month: 6, variant: .original, status: .failed) == 0)
+    #expect(storeB.recordCountBothVariantsDone(year: 2025, month: 6) == 0)
+    #expect(storeB.recordCountOriginalDoneAtNaturalStem(year: 2025, month: 6) == 0)
+    #expect(storeB.recordCountEditedDone(year: 2025, month: 6) == 0)
+    #expect(storeB.yearExportedCount(year: 2025) == 0)
+    let summary = storeB.monthSummary(year: 2025, month: 6, totalAssets: 5)
+    #expect(summary.exportedCount == 0)
+    #expect(summary.status == .notExported)
   }
 }

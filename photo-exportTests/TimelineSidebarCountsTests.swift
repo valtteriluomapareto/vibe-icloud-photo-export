@@ -147,6 +147,26 @@ struct TimelineSidebarCountsTests {
     #expect(loader.assetCountsByYearMonth == snapshot)
   }
 
+  // MARK: - reset()
+
+  /// `reset()` clears both dicts so a re-load (e.g. after auth revoke +
+  /// re-grant) starts from scratch. The view calls this on the auth-flip-false
+  /// branch to avoid leaking stale counts into the next session.
+  @Test func resetClearsAllState() async throws {
+    let svc = FakePhotoLibraryService()
+    svc.assetsByYearMonth["2025-3"] = [makeAsset(id: "a", hasAdjustments: true)]
+
+    let loader = TimelineSidebarCounts(service: svc)
+    await loader.loadCounts(forYears: [2025])
+    #expect(!loader.assetCountsByYearMonth.isEmpty)
+    #expect(!loader.adjustedCountsByYearMonth.isEmpty)
+
+    loader.reset()
+    #expect(loader.assetCountsByYearMonth.isEmpty)
+    #expect(loader.adjustedCountsByYearMonth.isEmpty)
+    #expect(loader.lastError == nil)
+  }
+
   // MARK: - Selection-prioritized order
 
   /// The loader should prioritize a "preferred year" (typically the

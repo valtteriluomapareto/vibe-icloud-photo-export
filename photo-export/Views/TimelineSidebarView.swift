@@ -72,7 +72,17 @@ struct TimelineSidebarView: View {
         years = []
         expandedYears.removeAll()
         assetCountsByYear.removeAll()
+        counts.reset()
       }
+    }
+    // Self-heal after Photos.app mutations. `libraryRevision` bumps in
+    // `PhotoLibraryManager.invalidateCache()` after every `photoLibraryDidChange`;
+    // the underlying `CollectionCountCache` is invalidated at the same time, so
+    // re-running `handleAppear` triggers fresh fetches that bypass stale cache
+    // entries. Without this, a user adding/removing photos in Photos.app while
+    // the sidebar is open would see stale badges until the next app launch.
+    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
+      handleAppear()
     }
   }
 

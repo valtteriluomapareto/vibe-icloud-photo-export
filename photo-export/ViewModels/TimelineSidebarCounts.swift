@@ -46,11 +46,31 @@ final class TimelineSidebarCounts: ObservableObject {
   /// `preferredYear` is loaded first so its badge data lands quickly even on
   /// large libraries (typically the user's currently-selected year, surfaced
   /// by `TimelineSidebarView`).
+  ///
+  /// Within a year, all 12 months are dispatched in parallel via a
+  /// `TaskGroup`. Each child task issues its month's total + adjusted fetches
+  /// concurrently via `async let`. The `cachedCount*` methods on
+  /// `PhotoLibraryService` are `nonisolated async` and dispatch their work to
+  /// detached tasks internally, so the actual PhotoKit fetches run on the
+  /// global executor in parallel even though the per-month child tasks
+  /// themselves hop back to `@MainActor` to update the published dicts.
+  /// Across years, loading is sequential — that keeps the in-flight count
+  /// bounded at 12 fetches at a time even on 30-year libraries.
   func loadCounts(forYears years: [Int], preferredYear: Int? = nil) async {
     let ordered = orderYears(years, preferredYear: preferredYear)
     for year in ordered {
       await loadYear(year)
     }
+  }
+
+  /// Clears all loaded counts. Call when the user revokes Photos access or
+  /// when the underlying library is replaced (e.g. signing into a different
+  /// iCloud account in Photos.app). The next `loadCounts(forYears:)` will
+  /// repopulate from scratch.
+  func reset() {
+    assetCountsByYearMonth = [:]
+    adjustedCountsByYearMonth = [:]
+    lastError = nil
   }
 
   // MARK: - Read helpers
@@ -68,30 +88,44 @@ final class TimelineSidebarCounts: ObservableObject {
 
   // MARK: - Internals
 
-  /// Loads one year's twelve months. Each month's total + adjusted are
-  /// fetched concurrently via `async let`; months are processed sequentially
-  /// so dict updates land in a predictable order on the main actor (cheaper
-  /// for SwiftUI diffing than 12 simultaneous mutations).
+  /// Loads one year's twelve months in parallel via a `TaskGroup`. Each
+  /// child task hops back to `@MainActor` (`loadMonth(year:month:)` is
+  /// `@MainActor`-isolated) to read `service` and write the published
+  /// dicts, but the underlying `cachedCount*` calls dispatch detached
+  /// tasks internally — so the actual PhotoKit fetches run concurrently
+  /// on the global executor.
   private func loadYear(_ year: Int) async {
-    for month in 1...12 {
-      async let totalTask = service.cachedCountAssets(
-        in: .timeline(year: year, month: month))
-      async let adjustedTask = service.cachedCountAdjustedAssets(
-        in: .timeline(year: year, month: month))
+    await withTaskGroup(of: Void.self) { group in
+      for month in 1...12 {
+        group.addTask { [weak self] in
+          await self?.loadMonth(year: year, month: month)
+        }
+      }
+    }
+  }
 
-      let key = "\(year)-\(month)"
-      do {
-        let total = try await totalTask
-        assetCountsByYearMonth[key] = total
-      } catch {
-        lastError = error
-      }
-      do {
-        let adjusted = try await adjustedTask
-        adjustedCountsByYearMonth[key] = adjusted
-      } catch {
-        lastError = error
-      }
+  /// Fetches one (year, month) pair's total + adjusted counts and writes
+  /// them to the published dicts. The two fetches are dispatched
+  /// concurrently via `async let`; if either throws, the failure is
+  /// recorded in `lastError` but the other still lands.
+  private func loadMonth(year: Int, month: Int) async {
+    async let totalTask = service.cachedCountAssets(
+      in: .timeline(year: year, month: month))
+    async let adjustedTask = service.cachedCountAdjustedAssets(
+      in: .timeline(year: year, month: month))
+
+    let key = "\(year)-\(month)"
+    do {
+      let total = try await totalTask
+      assetCountsByYearMonth[key] = total
+    } catch {
+      lastError = error
+    }
+    do {
+      let adjusted = try await adjustedTask
+      adjustedCountsByYearMonth[key] = adjusted
+    } catch {
+      lastError = error
     }
   }
 

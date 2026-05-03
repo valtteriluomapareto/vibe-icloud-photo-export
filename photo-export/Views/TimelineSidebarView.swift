@@ -4,8 +4,11 @@ import SwiftUI
 /// during the Phase 4 refactor so the same content area can host either a Timeline
 /// sidebar or a Collections sidebar without duplicating the surrounding split view.
 ///
-/// Selection is bridged out through `selection: Binding<LibrarySelection?>` so the
-/// content view receives a unified selection regardless of which section is active.
+/// Per-(year, month) total + adjusted counts are owned by `TimelineSidebarCounts`,
+/// which fans out async fetches for every year on appear so that **collapsed years'
+/// progress badges populate too** (issue #20). Selection is bridged out through
+/// `selection: Binding<LibrarySelection?>` so the content view receives a unified
+/// selection regardless of which section is active.
 struct TimelineSidebarView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
@@ -15,10 +18,14 @@ struct TimelineSidebarView: View {
 
   @State private var years: [Int] = []
   @State private var expandedYears: Set<Int> = []
-  @State private var monthsWithAssetsByYear: [Int: [Int]] = [:]
-  @State private var assetCountsByYearMonth: [String: Int] = [:]
   @State private var assetCountsByYear: [Int: Int] = [:]
-  @State private var adjustedCountsByYearMonth: [String: Int] = [:]
+  @StateObject private var counts: TimelineSidebarCounts
+
+  init(selection: Binding<LibrarySelection?>, photoLibraryService: any PhotoLibraryService) {
+    self._selection = selection
+    _counts = StateObject(
+      wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
+  }
 
   var body: some View {
     List(selection: yearMonthSelection) {
@@ -36,17 +43,14 @@ struct TimelineSidebarView: View {
               }
             )
           ) {
-            ForEach(monthsWithAssetsByYear[year] ?? [], id: \.self) { month in
+            ForEach(counts.monthsWithAssets(for: year), id: \.self) { month in
               MonthRow(
                 year: year,
                 month: month,
-                total: assetCountsByYearMonth["\(year)-\(month)"] ?? 0,
-                adjusted: adjustedCountsByYearMonth["\(year)-\(month)"]
+                total: counts.assetCountsByYearMonth["\(year)-\(month)"] ?? 0,
+                adjusted: counts.adjustedCountsByYearMonth["\(year)-\(month)"]
               )
               .tag(LibrarySelection.timelineMonth(year: year, month: month))
-              .task(id: "\(year)-\(month)-adjusted") {
-                await loadAdjustedCount(year: year, month: month)
-              }
             }
           } label: {
             YearRow(
@@ -63,21 +67,11 @@ struct TimelineSidebarView: View {
     .onAppear { handleAppear() }
     .onChange(of: photoLibraryManager.isAuthorized) { _, new in
       if new {
-        loadYears()
-        if case .timelineMonth(let year, _) = selection {
-          expandedYears.insert(year)
-          monthsWithAssetsByYear[year] = computeMonthsWithAssets(for: year)
-        }
+        handleAppear()
       } else {
         years = []
         expandedYears.removeAll()
-        monthsWithAssetsByYear.removeAll()
         assetCountsByYear.removeAll()
-      }
-    }
-    .onChange(of: expandedYears) { _, _ in
-      for year in expandedYears where monthsWithAssetsByYear[year] == nil {
-        monthsWithAssetsByYear[year] = computeMonthsWithAssets(for: year)
       }
     }
   }
@@ -102,12 +96,20 @@ struct TimelineSidebarView: View {
   // MARK: - Helpers
 
   private func handleAppear() {
-    if photoLibraryManager.isAuthorized {
-      loadYears()
-      if case .timelineMonth(let year, _) = selection {
-        expandedYears.insert(year)
-        monthsWithAssetsByYear[year] = computeMonthsWithAssets(for: year)
-      }
+    guard photoLibraryManager.isAuthorized else { return }
+    loadYears()
+    var preferredYear: Int?
+    if case .timelineMonth(let year, _) = selection {
+      expandedYears.insert(year)
+      preferredYear = year
+    }
+    // Fan out per-month total + adjusted count fetches for every year. Lands
+    // progressively via `@Published` updates on `counts` — collapsed years'
+    // badges populate as their data arrives. The current year (if selected)
+    // goes first so its data is ready by the time the user might expand it.
+    let yearsCopy = years
+    Task { [counts] in
+      await counts.loadCounts(forYears: yearsCopy, preferredYear: preferredYear)
     }
   }
 
@@ -119,30 +121,10 @@ struct TimelineSidebarView: View {
     }
   }
 
-  private func computeMonthsWithAssets(for year: Int) -> [Int] {
-    var months: [Int] = []
-    for month in 1...12 {
-      let count = (try? photoLibraryManager.countAssets(year: year, month: month)) ?? 0
-      assetCountsByYearMonth["\(year)-\(month)"] = count
-      if count > 0 {
-        months.append(month)
-      }
-    }
-    return months
-  }
-
-  private func loadAdjustedCount(year: Int, month: Int) async {
-    let key = "\(year)-\(month)"
-    guard adjustedCountsByYearMonth[key] == nil else { return }
-    if let count = try? await photoLibraryManager.countAdjustedAssets(year: year, month: month) {
-      adjustedCountsByYearMonth[key] = count
-    }
-  }
-
   private func monthTotals(for year: Int) -> [Int: Int] {
     var map: [Int: Int] = [:]
     for month in 1...12 {
-      map[month] = assetCountsByYearMonth["\(year)-\(month)"] ?? 0
+      map[month] = counts.assetCountsByYearMonth["\(year)-\(month)"] ?? 0
     }
     return map
   }
@@ -150,7 +132,7 @@ struct TimelineSidebarView: View {
   private func adjustedMonths(for year: Int) -> [Int: Int?] {
     var map: [Int: Int?] = [:]
     for month in 1...12 {
-      map[month] = adjustedCountsByYearMonth["\(year)-\(month)"]
+      map[month] = counts.adjustedCountsByYearMonth["\(year)-\(month)"]
     }
     return map
   }

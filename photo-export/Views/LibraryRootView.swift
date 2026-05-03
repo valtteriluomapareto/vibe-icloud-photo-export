@@ -129,7 +129,7 @@ struct LibraryRootView: View {
   private var sidebar: some View {
     switch section {
     case .timeline:
-      TimelineSidebarView(selection: $selection)
+      TimelineSidebarView(selection: $selection, photoLibraryService: photoLibraryManager)
     case .collections:
       CollectionsSidebarView(selection: $selection)
     }

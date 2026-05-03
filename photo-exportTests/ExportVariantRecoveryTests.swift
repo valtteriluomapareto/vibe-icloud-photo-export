@@ -38,7 +38,8 @@ struct ExportVariantRecoveryTests {
     let copy = ExportVariantRecovery.friendlyCopy(
       for: ExportVariantRecovery.editedResourceUnavailableMessage, label: "Edited")
     #expect(
-      copy == "Edited version was not provided by Photos. Future exports will try again.")
+      copy
+        == "Edited version could not be exported this time. Future exports will try again.")
   }
 
   @Test func friendlyCopyReturnsNilForUnknownMessages() {

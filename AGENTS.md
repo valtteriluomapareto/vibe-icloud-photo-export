@@ -56,9 +56,15 @@ Source code under `photo-export/` is organized as follows:
 
 - `BackupScanner` — scans an existing backup folder and matches files to Photos assets (used by Import Existing Backup)
 - `ExportFilenamePolicy` — pure rules for `_orig` companion filenames
-- `ResourceSelection` — picks the right `PHAssetResource` for a variant (original vs. edited)
+- `ResourceSelection` — picks the byte source for an edited variant via the `EditedProducer` enum
 - `ProductionAssetResourceWriter` — production implementation behind the `AssetResourceWriter` seam
+- `ProductionMediaRenderer` — production implementation behind the `MediaRenderer` seam (edited videos)
 - `FileIOService` — atomic file moves and timestamp handling (conforms to `FileSystemService`)
+
+### Design Decisions Worth Knowing
+
+- **Edited video export goes through `PHImageManager.requestExportSession` + `AVAssetExportSession`, not `PHAssetResource`.** PhotoKit does not pre-render edited videos as static resources, so resource enumeration finds nothing and the render path is the only way to materialise the user-visible bytes.
+- **Byte-source dispatch lives in `ResourceSelection.selectEditedProducer` as a single enum** (`.resource | .render | .none`). `ExportManager` switches on that and never inlines media-kind-specific branches. Widening the render path to a new media kind is an enum-extension change in one place rather than a new boolean scattered through the pipeline.
 
 **Views** (`photo-export/Views/`): `ContentView` is a `NavigationSplitView` with year/month sidebar. `MonthContentView` shows thumbnails for a month (each thumbnail rendered by `ThumbnailView`). `ExportToolbarView` shows export controls. `OnboardingView` handles first-run flow. `AssetDetailView` shows full-size preview. `ImportView` runs the Import Existing Backup flow. `AboutView` is the in-app about box.
 

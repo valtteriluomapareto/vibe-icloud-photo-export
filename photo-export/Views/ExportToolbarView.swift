@@ -177,12 +177,17 @@ struct ExportToolbarView: ToolbarContent {
             .frame(width: 90, alignment: .leading)
             .help(progressCountTooltip)
 
-          Text(exportManager.currentAssetFilename ?? "")
+          Text(currentAssetLabel)
             .font(.caption2)
             .foregroundColor(.secondary)
             .lineLimit(1)
-            .truncationMode(.middle)
+            // Tail truncation keeps the leading filename and the
+            // `(rendering…)` / `(downloading…)` suffix readable.
+            // Middle truncation here would chop the activity hint and
+            // make a long filename look stuck.
+            .truncationMode(.tail)
             .frame(width: 140, alignment: .leading)
+            .accessibilityLabel(accessibilityCurrentAssetLabel)
         }
       } else if let emptyMessage = exportManager.emptyRunMessage {
         // The user just clicked Export Month/Year/All against an already-complete library.
@@ -217,6 +222,35 @@ struct ExportToolbarView: ToolbarContent {
       }
     }
     .animation(.default, value: exportManager.emptyRunMessage)
+  }
+
+  /// Filename + render-activity hint shown next to the progress bar. The
+  /// hint is what tells the user a long render is making progress rather
+  /// than hung — `(downloading…)` while PhotoKit fetches the iCloud
+  /// original, `(rendering…)` while AVFoundation writes the edit.
+  private var currentAssetLabel: String {
+    let filename = exportManager.currentAssetFilename ?? ""
+    switch exportManager.renderActivity {
+    case .none:
+      return filename
+    case .downloading:
+      return filename.isEmpty ? "Downloading…" : "\(filename) (downloading…)"
+    case .rendering:
+      return filename.isEmpty ? "Rendering…" : "\(filename) (rendering…)"
+    }
+  }
+
+  private var accessibilityCurrentAssetLabel: String {
+    let filename = exportManager.currentAssetFilename ?? ""
+    switch exportManager.renderActivity {
+    case .none:
+      return filename.isEmpty ? "" : "Currently exporting \(filename)"
+    case .downloading:
+      return filename.isEmpty
+        ? "Downloading from iCloud" : "Downloading \(filename) from iCloud"
+    case .rendering:
+      return filename.isEmpty ? "Rendering edited video" : "Rendering edited \(filename)"
+    }
   }
 
   private var progressCountTooltip: String {

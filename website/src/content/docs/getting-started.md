@@ -49,6 +49,9 @@ Once the destination is set, you'll see the main window with a **year/month side
 - Use the **Include originals** toggle in the toolbar to choose what gets written. Off
   (default) exports one file per photo, in the version Photos shows. On adds a `_orig`
   companion for any photo edited in Photos so you keep a copy of the original bytes.
+- Edited videos render through Photos and may take longer than copying — especially for
+  4K or iCloud-only originals. The toolbar may briefly show `(downloading…)` while Photos
+  prepares the source, then `(rendering…)` while the edit is applied.
 - Click **Export All** in the toolbar to queue the entire library
 - Use **File → Import Existing Backup...** (Cmd+Shift+I) if you already have a previous export and want to avoid re-copying those files
 

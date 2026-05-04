@@ -42,7 +42,18 @@ struct LibraryRootView: View {
   var body: some View {
     NavigationSplitView(
       sidebar: { sidebar },
-      content: { contentArea },
+      content: {
+        // Persistent progress strip sits above the content column only —
+        // not above the sidebar, where it would visually attach to the
+        // year/month tree it has nothing to do with. Using
+        // `safeAreaInset` here means the inset auto-collapses to zero
+        // height when the bar is hidden, so an idle queue gives the
+        // grid its full real estate back.
+        contentArea
+          .safeAreaInset(edge: .top, spacing: 0) {
+            ExportProgressBar()
+          }
+      },
       detail: {
         AssetDetailView(asset: selectedAsset)
           .environmentObject(photoLibraryManager)

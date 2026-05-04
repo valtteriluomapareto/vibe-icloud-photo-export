@@ -32,7 +32,13 @@ struct PhotoExportApp: App {
   }
 
   var body: some Scene {
-    WindowGroup("Photo Export") {
+    // Empty title hides the inline "Photo Export" text from the unified
+    // toolbar so the toolbar reads as one row of controls. macOS-level
+    // UIs that need a window name (Window menu, Dock tooltip, Mission
+    // Control) fall back to the bundle's display name from Info.plist,
+    // so the app is still identified as "Photo Export" everywhere it
+    // matters outside the chrome.
+    WindowGroup("") {
       ContentView()
         .recordStoreAlertHost()
         .environmentObject(exportDestinationManager)

@@ -16,10 +16,6 @@ struct ExportToolbarView: ToolbarContent {
     ToolbarItem(placement: .automatic) {
       primaryActions
     }
-
-    ToolbarItem(placement: .automatic) {
-      progressIndicator
-    }
   }
 
   // MARK: - Include-originals toggle
@@ -45,7 +41,9 @@ struct ExportToolbarView: ToolbarContent {
     .help(includeOriginalsHelp)
     .accessibilityLabel("Include originals for edited photos")
     .accessibilityHint(
-      "Off by default. Turn on to keep original-bytes copies alongside edited photos.")
+      "Off by default. Turn on to keep original-bytes copies alongside edited photos."
+    )
+    .padding(.trailing, 16)
   }
 
   private var includeOriginalsHelp: String {
@@ -99,7 +97,11 @@ struct ExportToolbarView: ToolbarContent {
         .buttonStyle(.bordered)
         .controlSize(.small)
       }
-      .padding(.trailing, 12)
+      // Inter-item spacing: 16pt past the system default. Matches the
+      // trailing padding on `includeOriginalsToggle` so adjacent items
+      // breathe consistently. The right-most item (`primaryActions`)
+      // doubles this for window-edge spacing.
+      .padding(.trailing, 16)
     } else {
       Button("Select Export Folder\u{2026}") {
         exportDestinationManager.selectFolder()
@@ -141,6 +143,9 @@ struct ExportToolbarView: ToolbarContent {
       .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
       .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
     }
+    // Right-most toolbar item: pad twice the inter-item spacing so
+    // the cancel button doesn't sit flush against the window edge.
+    .padding(.trailing, 32)
   }
 
   private var exportAllHelpText: String {
@@ -160,123 +165,4 @@ struct ExportToolbarView: ToolbarContent {
     }
   }
 
-  // MARK: - Progress Indicator
-
-  private var progressIndicator: some View {
-    let total = exportManager.totalJobsEnqueued
-    let done = exportManager.totalJobsCompleted
-    let fraction = total > 0 ? Double(done) / Double(total) : 0
-    let hasProgress = total > 0
-
-    return Group {
-      if hasProgress {
-        HStack(alignment: .center, spacing: 8) {
-          ProgressView(value: fraction)
-            .progressViewStyle(.linear)
-            .frame(width: 120)
-
-          Text("\(done)/\(total) assets")
-            .font(.caption)
-            .monospacedDigit()
-            .frame(width: 90, alignment: .leading)
-            .help(progressCountTooltip)
-
-          // Filename and activity-hint render as two Texts so the hint
-          // is never truncated away. The filename takes the remaining
-          // space and middle-truncates; the `(rendering…)` /
-          // `(downloading…)` suffix renders at its natural width and is
-          // always visible. A single Text with truncation would either
-          // hide the hint (`.tail`, drops the end) or risk hiding parts
-          // of the activity word (`.middle`).
-          HStack(alignment: .center, spacing: 4) {
-            Text(exportManager.currentAssetFilename ?? "")
-              .font(.caption2)
-              .foregroundColor(.secondary)
-              .lineLimit(1)
-              .truncationMode(.middle)
-              .layoutPriority(0)
-            if let hint = renderActivityHint {
-              Text(hint)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .layoutPriority(1)
-            }
-          }
-          .frame(width: 140, alignment: .leading)
-          .accessibilityLabel(accessibilityCurrentAssetLabel)
-        }
-      } else if let emptyMessage = exportManager.emptyRunMessage {
-        // The user just clicked Export Month/Year/All against an already-complete library.
-        // The progress bar slot is empty — show a transient confirmation in its place so the
-        // click doesn't look dead.
-        HStack(alignment: .center, spacing: 6) {
-          Image(systemName: "checkmark.circle.fill")
-            .foregroundColor(.green)
-            .font(.caption)
-          Text(emptyMessage)
-            .font(.caption)
-            .foregroundColor(.secondary)
-            .lineLimit(1)
-            .truncationMode(.tail)
-        }
-        .frame(maxWidth: 350, alignment: .leading)
-        .transition(.opacity)
-      } else {
-        // Reserve the progress slot's footprint so the toolbar layout doesn't jump when work
-        // starts or stops.
-        HStack(alignment: .center, spacing: 8) {
-          ProgressView(value: 0)
-            .progressViewStyle(.linear)
-            .frame(width: 120)
-          Text("0/0 assets")
-            .font(.caption)
-            .monospacedDigit()
-            .frame(width: 90, alignment: .leading)
-          Spacer().frame(width: 140)
-        }
-        .opacity(0)
-      }
-    }
-    .animation(.default, value: exportManager.emptyRunMessage)
-  }
-
-  /// Render-activity suffix rendered next to the filename. `nil` when
-  /// no render is active so the filename takes the full toolbar slot.
-  /// Kept short on purpose — the filename is what users glance at;
-  /// the hint just confirms the slow render is making progress.
-  private var renderActivityHint: String? {
-    switch exportManager.renderActivity {
-    case .none: return nil
-    case .downloading: return "(downloading…)"
-    case .rendering: return "(rendering…)"
-    }
-  }
-
-  private var accessibilityCurrentAssetLabel: String {
-    let filename = exportManager.currentAssetFilename ?? ""
-    switch exportManager.renderActivity {
-    case .none:
-      return filename.isEmpty ? "" : "Currently exporting \(filename)"
-    case .downloading:
-      return filename.isEmpty
-        ? "Downloading from iCloud" : "Downloading \(filename) from iCloud"
-    case .rendering:
-      return filename.isEmpty ? "Rendering edited video" : "Rendering edited \(filename)"
-    }
-  }
-
-  private var progressCountTooltip: String {
-    switch exportManager.versionSelection {
-    case .editedWithOriginals:
-      return
-        "Counts assets, not files. Each adjusted asset writes both an edited file and a "
-        + "_orig companion but counts once. The filename below is whichever file is "
-        + "currently being written."
-    case .edited:
-      return
-        "Counts assets. The filename below is the file currently being written for the "
-        + "asset in progress."
-    }
-  }
 }

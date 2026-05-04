@@ -1,6 +1,36 @@
 import Photos
 import SwiftUI
 
+/// Pure helper for the per-collection progress badge in `CollectionsSidebarView`.
+///
+/// Compares the store's `exportedCount` (records that have at least one done
+/// variant) against the live album count. Trusting `summary.status` from the
+/// store would be a bug: that field treats "all stored records are done" as
+/// `.complete`, which is wrong whenever the album has more assets than there
+/// are records (the most common case — every partial export, every newly
+/// added asset). The visible grid header solves this with
+/// `monthSummary(assets:placement:selection:)`; the sidebar can't iterate
+/// the asset list, so it falls back to comparing exported-record-count
+/// against the live count.
+enum CollectionSidebarBadge {
+  enum State: Equatable {
+    case complete
+    case partial(exported: Int, total: Int)
+    case notStarted(total: Int)
+  }
+
+  static func state(liveCount: Int, exportedRecords: Int) -> State {
+    precondition(liveCount > 0, "Caller must guard count > 0 before computing badge state")
+    // Clamp on the way out so an album whose assets were removed after a
+    // larger past export doesn't render `1000/941` partial — there's
+    // nothing left to do for those stale records.
+    let exported = min(exportedRecords, liveCount)
+    if exported >= liveCount { return .complete }
+    if exported > 0 { return .partial(exported: exported, total: liveCount) }
+    return .notStarted(total: liveCount)
+  }
+}
+
 /// Sidebar for the Collections section: a synthetic Favorites entry followed by the
 /// user's albums and folders. Selection is bridged out as a `LibrarySelection` so the
 /// content area can observe it.
@@ -174,13 +204,20 @@ private struct CollectionRow: View {
   private var countBadge: some View {
     if let count, count > 0, let placement = matchingPlacement() {
       let summary = collectionExportRecordStore.summary(for: placement)
-      switch summary.status {
+      // Note: this still treats "any variant done" as "asset exported",
+      // so it does not catch the case where a user exported with Include
+      // originals off and later toggled it on. Surfacing that gap
+      // requires the asset list + version selection in the sidebar;
+      // tracked as a separate follow-up.
+      switch CollectionSidebarBadge.state(
+        liveCount: count, exportedRecords: summary.exportedCount)
+      {
       case .complete:
         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
-      case .partial:
-        Text("\(summary.exportedCount)/\(count)").foregroundColor(.orange).font(.caption)
-      case .notExported:
-        Text("\(count)").foregroundColor(.secondary).font(.caption)
+      case .partial(let exported, let total):
+        Text("\(exported)/\(total)").foregroundColor(.orange).font(.caption)
+      case .notStarted(let total):
+        Text("\(total)").foregroundColor(.secondary).font(.caption)
       }
     } else if let count {
       Text("\(count)").foregroundColor(.secondary).font(.caption)

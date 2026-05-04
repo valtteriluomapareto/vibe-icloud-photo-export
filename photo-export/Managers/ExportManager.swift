@@ -197,7 +197,13 @@ final class ExportManager: ObservableObject {
     // this snapshot is the correctness guarantee.
     let selection = versionSelection
     clearEmptyRunMessage()
-    if !isRunning && !isProcessing { resetProgressCounters() }
+    // Only reset progress counters when the queue is truly idle. "Paused
+    // with pending jobs" satisfies `!isRunning && !isProcessing` but is
+    // not idle — resetting the counter there detaches the visible
+    // `done/total` from `pendingJobs.count`, so the user sees a counter
+    // for the new work while the queue actually drains the leftover
+    // paused jobs first.
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
@@ -229,7 +235,7 @@ final class ExportManager: ObservableObject {
     }
     let selection = versionSelection
     clearEmptyRunMessage()
-    if !isRunning && !isProcessing { resetProgressCounters() }
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
@@ -263,7 +269,11 @@ final class ExportManager: ObservableObject {
     let selection = versionSelection
     clearEmptyRunMessage()
     isEnqueueingAll = true
-    resetProgressCounters()
+    // Same idle check as the other start functions: a paused queue with
+    // pending jobs must not reset the counter — Export All accumulates
+    // onto whatever is already queued. Users who want a clean slate
+    // should cancel first.
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else {
@@ -329,7 +339,7 @@ final class ExportManager: ObservableObject {
     }
     let selection = versionSelection
     clearEmptyRunMessage()
-    if !isRunning && !isProcessing { resetProgressCounters() }
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }
@@ -362,7 +372,7 @@ final class ExportManager: ObservableObject {
     }
     let selection = versionSelection
     clearEmptyRunMessage()
-    if !isRunning && !isProcessing { resetProgressCounters() }
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
       guard let self, self.generation == gen else { return }

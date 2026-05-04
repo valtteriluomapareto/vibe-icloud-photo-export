@@ -57,23 +57,54 @@ enum ResourceSelection {
     return resources.first
   }
 
-  /// Selects the resource to write for an edited export. Returns nil when the
-  /// asset does not expose a current edited resource of the expected kind —
-  /// callers must treat this as a failed edited variant rather than falling
-  /// back to original bytes.
-  static func selectEditedResource(
+  /// Picks the byte source for an edited variant.
+  ///
+  /// Three outcomes:
+  /// - `.resource` — a static `PHAssetResource` is available (e.g. the
+  ///   `.fullSizePhoto` companion for an edited photo, or the rare case
+  ///   where Photos has materialised a `.fullSizeVideo` resource).
+  /// - `.render` — the asset is video and has adjustments but no static
+  ///   edited resource. Bytes must be produced via `MediaRenderer` because
+  ///   PhotoKit does not pre-render edited videos as static resources.
+  /// - `.none` — no edited-side bytes are available for this asset.
+  ///
+  /// `descriptor.hasAdjustments` is the gate for the render path: an
+  /// unedited video should never reach the render branch.
+  static func selectEditedProducer(
     from resources: [ResourceDescriptor],
-    mediaType: PHAssetMediaType
-  ) -> ResourceDescriptor? {
+    mediaType: PHAssetMediaType,
+    descriptor: AssetDescriptor
+  ) -> EditedProducer {
     switch mediaType {
     case .image:
-      return resources.first(where: { $0.type == .fullSizePhoto })
+      if let resource = resources.first(where: { $0.type == .fullSizePhoto }) {
+        return .resource(resource)
+      }
+      return .none
     case .video:
-      return resources.first(where: { $0.type == .fullSizeVideo })
+      if let resource = resources.first(where: { $0.type == .fullSizeVideo }) {
+        return .resource(resource)
+      }
+      if descriptor.hasAdjustments,
+        let original = resources.first(where: { $0.type == .video })
+      {
+        return .render(
+          MediaRenderRequest(
+            assetId: descriptor.id,
+            originalFilename: original.originalFilename,
+            fileType: avFileType(forOriginalFilename: original.originalFilename),
+            kind: .video
+          )
+        )
+      }
+      return .none
     default:
-      return resources.first(where: {
+      if let resource = resources.first(where: {
         $0.type == .fullSizePhoto || $0.type == .fullSizeVideo
-      })
+      }) {
+        return .resource(resource)
+      }
+      return .none
     }
   }
 }

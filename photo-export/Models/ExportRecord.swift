@@ -53,7 +53,7 @@ enum ExportVariantRecovery {
     case interruptedMessage:
       return "\(label): Will retry on next export"
     case editedResourceUnavailableMessage:
-      return "\(label) version was not provided by Photos. Future exports will try again."
+      return "\(label) version could not be exported this time. Future exports will try again."
     default:
       return nil
     }

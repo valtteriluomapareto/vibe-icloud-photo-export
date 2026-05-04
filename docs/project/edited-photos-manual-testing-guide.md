@@ -78,8 +78,83 @@ Toggle **Include originals** OFF.
 
 ### A4 — Edited video writes the edited bytes
 1. Export PA-4.
-2. Expected: destination has `IMG_<n>.MOV` (or whatever the edited
-   extension is). No `_orig`.
+2. Expected: destination has `IMG_<n>.MOV` (or whatever the original
+   extension is — the rendered edit keeps the source container). No
+   `_orig`. The toolbar may briefly show `(downloading…)` while Photos
+   prepares the source, then `(rendering…)` while AVFoundation writes
+   the edit.
+
+### A4b — Edited video with Include originals
+1. Toggle **Include originals** ON.
+2. Export PA-4.
+3. Expected: destination has both `IMG_<n>.MOV` (rendered edit) and
+   `IMG_<n>_orig.MOV` (original bytes). Both files share the same
+   container; `_orig` suffix is the only filename difference. First plays
+   the edit, second plays the full original.
+
+### A4c — Edited iCloud-only video
+1. Make sure PA-4 (or another adjusted video) is iCloud-only on this Mac.
+2. Export.
+3. Expected: download + render + write all succeed; toolbar transitions
+   `(downloading…)` → `(rendering…)`. No error.
+
+### A4d — Edited slow-motion video
+1. Edit a slow-motion video in Photos (trim or filter).
+2. Export.
+3. Expected: rendered output preserves the slow-motion segment; visual
+   matches Photos playback.
+
+### A4e — Cancel mid-render
+1. Start an export of a long edited video.
+2. Click cancel while the toolbar shows `(rendering…)`.
+3. Expected: queue stops within ~1–2 seconds (not instant —
+   `AVAssetExportSession` wind-down is acceptable). No partial file at
+   destination. The cancelled variant has no `.failed` record (the
+   in-progress record is removed instead). The 1–2 second wait is
+   expected, not a bug.
+
+### A4f — Edited cinematic-mode video (iPhone 13 Pro+)
+1. Edit a cinematic-mode video in Photos.
+2. Export.
+3. Expected: flat rendered output matching Photos' preview of the
+   user-chosen focus track.
+
+### A4g — Edited HDR video (iPhone 13+) — empirical
+1. Edit an HDR video in Photos.
+2. Export.
+3. Open the result on an HDR-capable display alongside the Photos
+   preview. Acceptance: visual match (HDR preserved). If degraded to
+   SDR, document as known limitation; turn on **Include originals** to
+   keep an HDR copy of the source bytes via the `_orig` companion.
+
+### A4h — Re-edit after a successful export
+1. Export PA-4.
+2. Re-edit PA-4 in Photos.
+3. Export again.
+4. Expected: second export creates `IMG_<n> (1).MOV`; original
+   `IMG_<n>.MOV` is not overwritten.
+
+### A4i — Trim + adjust combined edits
+1. In Photos, trim a video AND apply a colour adjustment.
+2. Export.
+3. Expected: both adjustments visible in the rendered output.
+
+### A4j — Adjustment rollback before render
+1. Edit a video in Photos. Queue an export.
+2. Before the render starts, revert the edit in Photos.
+3. Expected: render completes (Photos returns the original bytes); no
+   error; record store clean.
+
+### A4k — Unsupported-extension fallback (verification gate)
+1. Find or synthesise a video in Photos whose original extension is
+   `.avi` or `.mkv`.
+2. Edit it.
+3. Run the export.
+4. Open the result in QuickTime.
+5. Acceptance: plays correctly. **Failure mode:** if the file is
+   unplayable, switch `selectEditedProducer` to refuse-mode for
+   unsupported extensions per the resolved-decisions section of the
+   plan.
 
 ---
 

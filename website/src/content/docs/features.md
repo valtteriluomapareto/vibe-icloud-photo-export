@@ -18,7 +18,7 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 - One-click export for a single month, a year, or the entire library
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` structure
-- Handles both images and videos
+- Handles both images and videos, including edits made in Photos
 - Real-time progress tracking in the toolbar (count and current filename)
 
 ### Version selection
@@ -35,6 +35,13 @@ A toolbar toggle next to the export buttons chooses what to write:
   `IMG_0001.JPG` (the edit) and `IMG_0001_orig.HEIC` (the original).
 
 Unedited photos never produce a `_orig` companion — there is nothing to pair with.
+
+Edited videos export the user-visible version with the original container preserved (e.g.
+an edited `.MOV` stays `.MOV`). With **Include originals** on, the companion is named
+`IMG_xxxx_orig.MOV` — the `_orig` suffix is the only filename difference, since videos
+keep their original container both times. Photos can change containers (an edited HEIC
+may export as `.JPG` because Photos rendered the edit as JPEG); videos do not get that
+asymmetric rename.
 
 ## Export destination
 

@@ -100,6 +100,26 @@ When changing user-visible behavior, update both the root `README.md` and the ma
 - After a non-trivial change, run a code review pass before requesting human review. If your harness exposes a slash-command or subagent for AI review (e.g. `/codex-review`, `/review`), use it; otherwise re-read your own diff against [`docs/reference/swift-swiftui-best-practices.md`](docs/reference/swift-swiftui-best-practices.md) and the conventions below.
 - **Releasing:** always run `scripts/bump-version.sh <version>` before pushing a tag. Pushing a `v*` tag triggers both release pipelines (`release-direct.yml` and `release-app-store.yml`) and they validate that the tag matches `MARKETING_VERSION`. See [`docs/project/release-process.md`](docs/project/release-process.md).
 
+### Delegating to opencode / Kimi K2.6 (scout model)
+
+The `/opencode` skill (`.claude/skills/opencode/SKILL.md`) routes a one-shot prompt through the opencode CLI. By default it uses **Kimi K2.6 (Fireworks)** — fast, cheap, and a good fit for "scout" tasks where the goal is *generate a candidate report broadly* rather than *deliver a final precise verdict*. Use it for:
+
+- **First-pass codebase reviews** — architecture, maintainability, docs, tests, UX, or website health. Treat the output as a triage list.
+- **Stale-documentation detection.** Strong when prompted to compare docs against the actual code, tests, and CI rather than trusting the docs.
+- **Test inventory and coverage-gap discovery** at the macro level (e.g. "no UI tests exist," "no tests for the import-backup flow").
+- **Multi-area review synthesis** — turning a pile of findings into an executive summary.
+- **Issue-backlog drafting** — generating candidate GitHub issues. A human or stricter model should verify each before filing.
+- **Onboarding summaries** from `README.md` / `AGENTS.md`.
+- **Prompted self-audits** that explicitly ask the model to verify, not trust docs, search before claiming missing, and separate facts from inference.
+
+Do **not** use Kimi K2.6 (or accept its output unverified) for:
+
+- Precise pre-merge code review where false positives are costly. Use `/codex-review` instead.
+- Final testing-gap reports without a verifier — Kimi will sometimes recommend tests that already exist.
+- Line-level factual authority. It cites lots of lines; spot-check before relying on them.
+
+**Best workflow:** scout with Kimi → verify the top findings with a stricter model or a human → act. Tell the user when you're scouting so the output is read as a triage list rather than a decree.
+
 ## Key Conventions
 
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.

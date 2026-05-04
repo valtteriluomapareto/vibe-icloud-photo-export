@@ -1,0 +1,138 @@
+import Foundation
+
+/// Loader for the per-(year, month) total + adjusted asset counts the
+/// timeline sidebar's `YearRow` and `MonthRow` need to compute their progress
+/// badges.
+///
+/// Issue #20: previously these dicts were populated lazily — total counts
+/// only when a year was expanded (`computeMonthsWithAssets(for:)`), adjusted
+/// counts only when each `MonthRow` rendered (`.task(id:)` on the row). For
+/// collapsed years, both dicts were empty for that year's months, so
+/// `YearRow`'s progress badge could not compute and rendered nothing.
+/// Subsequent updates during a long export went unnoticed unless the user
+/// expanded the year.
+///
+/// This loader fixes that by fanning out async fetches for **every** known
+/// year × month at startup, using the existing cached count APIs
+/// (`PhotoLibraryService.cachedCountAssets(in:)` and
+/// `cachedCountAdjustedAssets(in:)`). The `CollectionCountCache` actor
+/// dedups overlapping calls, so calling `loadCounts(forYears:)` multiple
+/// times is cheap. As each (year, month) pair lands, the `@Published` dicts
+/// update and dependent `YearRow` / `MonthRow` views re-render
+/// progressively.
+///
+/// Cost (see `AGENTS.md` perf notes): a typical 10-year library is ~120
+/// fetches, completing sub-second; a 30-year archive is ~360 fetches, a few
+/// seconds of background work. None of it blocks the main actor — each
+/// call to `cachedCountAssets` dispatches into `Task.detached` inside
+/// `PhotoLibraryManager`, and the wrapper `await` here simply yields the
+/// runloop while the detached fetch runs.
+@MainActor
+final class TimelineSidebarCounts: ObservableObject {
+  @Published private(set) var assetCountsByYearMonth: [String: Int] = [:]
+  @Published private(set) var adjustedCountsByYearMonth: [String: Int] = [:]
+  /// Last error encountered while fetching counts. Surfaces once so a future
+  /// view-side banner can mention "couldn't load progress" without us having
+  /// to thread Result types throughout the loader.
+  @Published private(set) var lastError: Error?
+
+  private let service: any PhotoLibraryService
+
+  init(service: any PhotoLibraryService) {
+    self.service = service
+  }
+
+  /// Fetches per-month total + adjusted counts for every (year ∈ years) × (month ∈ 1...12).
+  /// `preferredYear` is loaded first so its badge data lands quickly even on
+  /// large libraries (typically the user's currently-selected year, surfaced
+  /// by `TimelineSidebarView`).
+  ///
+  /// Within a year, all 12 months are dispatched in parallel via a
+  /// `TaskGroup`. Each child task issues its month's total + adjusted fetches
+  /// concurrently via `async let`. The `cachedCount*` methods on
+  /// `PhotoLibraryService` are `nonisolated async` and dispatch their work to
+  /// detached tasks internally, so the actual PhotoKit fetches run on the
+  /// global executor in parallel even though the per-month child tasks
+  /// themselves hop back to `@MainActor` to update the published dicts.
+  /// Across years, loading is sequential — that keeps the in-flight count
+  /// bounded at 12 fetches at a time even on 30-year libraries.
+  func loadCounts(forYears years: [Int], preferredYear: Int? = nil) async {
+    let ordered = orderYears(years, preferredYear: preferredYear)
+    for year in ordered {
+      await loadYear(year)
+    }
+  }
+
+  /// Clears all loaded counts. Call when the user revokes Photos access or
+  /// when the underlying library is replaced (e.g. signing into a different
+  /// iCloud account in Photos.app). The next `loadCounts(forYears:)` will
+  /// repopulate from scratch.
+  func reset() {
+    assetCountsByYearMonth = [:]
+    adjustedCountsByYearMonth = [:]
+    lastError = nil
+  }
+
+  // MARK: - Read helpers
+
+  /// Months 1...12 of `year` whose total count is non-zero. Replaces the old
+  /// `computeMonthsWithAssets(for:)` view-method; the loader's dict is the
+  /// new source of truth.
+  func monthsWithAssets(for year: Int) -> [Int] {
+    var months: [Int] = []
+    for month in 1...12 where (assetCountsByYearMonth["\(year)-\(month)"] ?? 0) > 0 {
+      months.append(month)
+    }
+    return months
+  }
+
+  // MARK: - Internals
+
+  /// Loads one year's twelve months in parallel via a `TaskGroup`. Each
+  /// child task hops back to `@MainActor` (`loadMonth(year:month:)` is
+  /// `@MainActor`-isolated) to read `service` and write the published
+  /// dicts, but the underlying `cachedCount*` calls dispatch detached
+  /// tasks internally — so the actual PhotoKit fetches run concurrently
+  /// on the global executor.
+  private func loadYear(_ year: Int) async {
+    await withTaskGroup(of: Void.self) { group in
+      for month in 1...12 {
+        group.addTask { [weak self] in
+          await self?.loadMonth(year: year, month: month)
+        }
+      }
+    }
+  }
+
+  /// Fetches one (year, month) pair's total + adjusted counts and writes
+  /// them to the published dicts. The two fetches are dispatched
+  /// concurrently via `async let`; if either throws, the failure is
+  /// recorded in `lastError` but the other still lands.
+  private func loadMonth(year: Int, month: Int) async {
+    async let totalTask = service.cachedCountAssets(
+      in: .timeline(year: year, month: month))
+    async let adjustedTask = service.cachedCountAdjustedAssets(
+      in: .timeline(year: year, month: month))
+
+    let key = "\(year)-\(month)"
+    do {
+      let total = try await totalTask
+      assetCountsByYearMonth[key] = total
+    } catch {
+      lastError = error
+    }
+    do {
+      let adjusted = try await adjustedTask
+      adjustedCountsByYearMonth[key] = adjusted
+    } catch {
+      lastError = error
+    }
+  }
+
+  private func orderYears(_ years: [Int], preferredYear: Int?) -> [Int] {
+    guard let preferredYear, years.contains(preferredYear) else { return years }
+    var ordered = [preferredYear]
+    ordered.append(contentsOf: years.filter { $0 != preferredYear })
+    return ordered
+  }
+}

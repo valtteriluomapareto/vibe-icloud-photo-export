@@ -27,6 +27,45 @@ protocol PhotoLibraryService: AnyObject {
   func availableYears() throws -> [Int]
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)]
 
+  // MARK: - Collections (Phase 2)
+
+  /// Fetches the user's Photos collection tree: a synthetic Favorites entry first, then
+  /// user-created top-level albums and folders (folders contain albums and other folders).
+  /// PhotoKit types do not leak — only `PhotoCollectionDescriptor` is returned.
+  ///
+  /// Implementations must invalidate any cached tree on `PHPhotoLibraryChangeObserver`
+  /// callbacks; the sidebar relies on the tree being current.
+  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor]
+
+  /// Fetches assets in a `PhotoFetchScope`. Used by both the timeline grid and the
+  /// collection grids; the existing `fetchAssets(year:month:mediaType:)` becomes a
+  /// wrapper around the `.timeline` case.
+  func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
+    -> [AssetDescriptor]
+
+  /// Number of assets in a fetch scope. Phase 2 keeps these uncached — every call
+  /// re-fetches. Phase 3 introduces a `CollectionCountCache` actor.
+  ///
+  /// Declared `nonisolated async` so implementations can build the `PHFetchResult` off
+  /// the main actor (counting many albums on launch otherwise blocks the UI). The plan
+  /// permits a `@MainActor`-bound fallback if measurement shows `Task.detached` is
+  /// incompatible with PhotoKit threading; current implementations are detached.
+  nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int
+
+  /// Number of assets in a fetch scope whose `hasAdjustments` is `true`. `nonisolated`
+  /// for the same reason as `countAssets(in:)`.
+  nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
+
+  // MARK: - Cached counts (Phase 3)
+
+  /// Cached version of `countAssets(in:)`. The same scope returns a cached value until
+  /// the next `PHPhotoLibraryChangeObserver` callback invalidates the cache. Concurrent
+  /// callers for the same scope share one in-flight fetch.
+  nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int
+
+  /// Cached version of `countAdjustedAssets(in:)`.
+  nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
+
   func startCachingThumbnails(for assets: [AssetDescriptor])
   func stopCachingThumbnails(for assets: [AssetDescriptor])
   func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage?

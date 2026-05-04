@@ -9,7 +9,7 @@ import screenshot from '../assets/photo_export_screenshot.png';
 const base = import.meta.env.BASE_URL;
 const title = 'Photo Export — Free Mac App to Back Up iCloud & Apple Photos';
 const description =
-	'Free, open-source macOS app to export your iCloud and Apple Photos library to any external drive or local folder. Organized by year/month. No subscription, no cloud services.';
+	'Free, open-source macOS app to back up your iCloud and Apple Photos library to any external drive — entire library, your Favorites, or a single album. No subscription, no cloud services.';
 
 const faqData = {
 	'@context': 'https://schema.org',
@@ -53,6 +53,14 @@ const faqData = {
 			acceptedAnswer: {
 				'@type': 'Answer',
 				text: 'Yes. The app exports photos and videos. Live Photos are exported as a single still image — full motion export (paired image + video) is planned for a future release.',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'How do I export a single album from Apple Photos?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: "Yes — you can export your Favorites or any individual album to its own folder on your drive. Photo Export lists everything you've created in Photos under a Collections tab in the sidebar; pick one and click Export. Albums land at Collections/Albums/<Album>/ (folder hierarchy preserved); Favorites land at Collections/Favorites/. Smart albums other than Favorites and shared albums aren't included. Timeline (year/month) export still works exactly as before.",
 			},
 		},
 		{
@@ -110,9 +118,11 @@ const faqData = {
 					>
 				</div>
 				<div class="value-prop">
-					<strong>Organized automatically</strong>
+					<strong>Two ways to navigate</strong>
 					<span
-						>Photos sorted into a clean <code>Year/Month/</code> folder hierarchy.</span
+						>Browse year by year and month by month, or by your
+						<strong>Favorites</strong> and the <strong>albums</strong> you've created
+						in Photos. Pick the view that fits your library.</span
 					>
 				</div>
 				<div class="value-prop">
@@ -137,9 +147,15 @@ const faqData = {
 		<div class="container">
 			<h2 id="features">Features</h2>
 			<div class="feature-grid">
-				<FeatureCard title="Library Browsing" icon="📸">
-					Browse your entire Photos library with a year/month sidebar. See photo
-					counts and export status at a glance.
+				<FeatureCard title="Two Ways to Browse" icon="📸">
+					Find any photo fast — by the date you took it, or by the album you
+					saved it to. Photo counts and export status at a glance.
+				</FeatureCard>
+				<FeatureCard title="Export by Album" icon="❤️">
+					Back up just your Favorites, or one specific album, in one step.
+					Albums under Photos folders preserve their hierarchy on disk, e.g. <code
+						>Collections/Albums/Trips/Iceland/</code
+					>.
 				</FeatureCard>
 				<FeatureCard title="Thumbnail Previews" icon="🖼">
 					Fast thumbnail grid with in-memory caching. Click any photo for a
@@ -194,17 +210,22 @@ const faqData = {
 					<div class="step-number">2</div>
 					<h3>Browse your library</h3>
 					<p>
-						Navigate by year and month. Preview thumbnails and inspect
-						individual photos before exporting.
+						Switch the sidebar between two views: a <strong
+							>year-and-month</strong
+						>
+						timeline, or your <strong>Favorites and albums</strong> straight from
+						Photos. Preview thumbnails and inspect individual photos before exporting.
 					</p>
 				</div>
 				<div class="step">
 					<div class="step-number">3</div>
 					<h3>Export</h3>
 					<p>
-						Hit export and the app copies original files into an organized <code
-							>Year/Month/</code
-						> folder tree. Track progress in real time.
+						Hit export and the app copies original files into an organized
+						folder tree — <code>Year/Month/</code> for the timeline,
+						<code>Collections/Favorites/</code> or <code
+							>Collections/Albums/&lt;Album&gt;/</code
+						> for collections. Track progress in real time.
 					</p>
 				</div>
 			</div>
@@ -218,11 +239,16 @@ const faqData = {
 			<div class="screenshot-wrapper">
 				<Image
 					src={screenshot}
-					alt="Photo Export app showing the year/month sidebar, thumbnail grid, and full-size photo preview"
+					alt="Photo Export app on macOS, showing the year/month sidebar, a thumbnail grid for the selected month, and a full-size photo preview"
 					class="screenshot"
 					widths={[600, 900, 1200]}
 					sizes="(max-width: 768px) 100vw, 900px"
 				/>
+				<p class="screenshot-caption">
+					Timeline view shown above. The sidebar's <strong>Collections</strong>
+					tab lists your Favorites and every album you've created in Photos — pick
+					one and click <strong>Export Album</strong>.
+				</p>
 			</div>
 		</div>
 	</section>
@@ -334,6 +360,21 @@ const faqData = {
 						Yes. The app exports photos and videos. Live Photos are exported as
 						a single still image — full motion export (paired image + video) is
 						planned for a future release.
+					</dd>
+				</div>
+				<div class="faq-item">
+					<dt>How do I export a single album from Apple Photos?</dt>
+					<dd>
+						Yes — you can export your <strong>Favorites</strong> or any individual
+						album to its own folder on your drive. Photo Export lists everything you've
+						created in Photos under a <strong>Collections</strong>
+						tab in the sidebar; pick one and click <strong>Export</strong>.
+						Albums land at <code>Collections/Albums/&lt;Album&gt;/</code> (folder
+						hierarchy preserved); Favorites land at <code
+							>Collections/Favorites/</code
+						>. Smart albums other than Favorites and shared albums aren't
+						included. Timeline (year/month) export still works exactly as
+						before.
 					</dd>
 				</div>
 				<div class="faq-item">
@@ -608,6 +649,14 @@ const faqData = {
 		height: auto;
 		border-radius: 12px;
 		box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+	}
+
+	.screenshot-caption {
+		max-width: 36rem;
+		margin: 1rem auto 0;
+		color: var(--site-muted);
+		font-size: 0.95rem;
+		line-height: 1.55;
 	}
 
 	@media (max-width: 768px) {

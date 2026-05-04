@@ -97,7 +97,13 @@ struct ExportRecordStoreRecoveryTests {
 
   // MARK: - Corrupted snapshot falls back to log
 
-  @Test func corruptedSnapshotFallsBackToLogReplay() throws {
+  /// Phase 1.4 of the collections-export plan changes corruption behavior: a corrupt
+  /// snapshot transitions the store to `.failed` and **does not** replay the log. The
+  /// rationale is the deferred-rename rule (corrupt file stays on disk so Quit-and-relaunch
+  /// reproduces `.failed`) and the no-silent-recovery property: if the snapshot was the
+  /// authoritative state and it's unreadable, log-only replay could yield an inconsistent
+  /// view; users get a Reset action in Phase 4 to consciously discard the corrupt snapshot.
+  @Test func corruptedSnapshotTransitionsToFailedAndPreservesFile() throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "corrupted-snap"
@@ -106,9 +112,10 @@ struct ExportRecordStoreRecoveryTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
     // Write corrupted snapshot
-    try Data("this is not valid JSON".utf8).write(to: snapshotURL(base: base, dest: dest))
+    let snapURL = snapshotURL(base: base, dest: dest)
+    try Data("this is not valid JSON".utf8).write(to: snapURL)
 
-    // Write valid log with one record
+    // Write a valid log line; under the new behavior it is **not** replayed.
     let record = makeRecord(id: "from-log", year: 2025, month: 5)
     let mutation = ExportRecordMutation.upsert(record)
     let encoder = JSONEncoder()
@@ -122,10 +129,27 @@ struct ExportRecordStoreRecoveryTests {
     let store = ExportRecordStore(baseDirectoryURL: base)
     store.configure(for: dest)
 
-    // Should have recovered from log despite corrupted snapshot
-    #expect(store.recordsById.count == 1)
-    #expect(store.recordsById["from-log"]?.variants[.original]?.status == .done)
-    #expect(store.recordCount(year: 2025, month: 5, variant: .original, status: .done) == 1)
+    // Store transitions to `.failed`; in-memory state stays empty.
+    #expect(store.state == .failed)
+    #expect(store.recordsById.isEmpty)
+
+    // Corrupt file is **left in place** (deferred-rename rule).
+    #expect(FileManager.default.fileExists(atPath: snapURL.path))
+
+    // resetToEmpty renames the corrupt file out of the way and writes a fresh empty
+    // snapshot at the canonical path. After the call, both files exist on disk: the
+    // forensic `.broken-<ISO8601>` (preserves the corrupt bytes for inspection) and the
+    // new empty `export-records.json`.
+    store.resetToEmpty()
+    #expect(store.state == .ready)
+    #expect(store.recordsById.isEmpty)
+    let dirContents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    let brokenFiles = dirContents.filter { $0.contains(".broken-") }
+    #expect(brokenFiles.count == 1)
+    // New empty snapshot at the canonical path.
+    let newSnapshot = try Data(contentsOf: snapURL)
+    let decoded = try JSONDecoder().decode([String: ExportRecord].self, from: newSnapshot)
+    #expect(decoded.isEmpty)
   }
 
   // MARK: - Empty snapshot + populated log

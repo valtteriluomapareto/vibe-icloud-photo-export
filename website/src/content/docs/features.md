@@ -7,7 +7,9 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 
 ## Library browsing
 
-- Year/month sidebar navigation with asset counts
+- Two sidebar sections via a Timeline / Collections segmented control
+  - **Timeline**: year/month tree with asset counts and per-month export status
+  - **Collections**: Favorites plus the user's albums and folders, grouped by Photos hierarchy
 - Export status indicators at both year and month level (not started, in progress with percentage, fully exported with checkmark)
 - Fast thumbnail grid with in-memory caching
 - Full-size preview for any selected photo or video
@@ -16,8 +18,10 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 ## Export
 
 - One-click export for a single month, a year, or the entire library
+- One-click export for Favorites or any album you've created in Photos, written to `Collections/Favorites/` or `Collections/Albums/<Album>/`
 - Only copies assets that haven't been exported yet
-- Automatic folder creation in `<year>/<month>/` structure
+- Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
+- Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)
 - Handles both images and videos, including edits made in Photos
 - Real-time progress tracking in the toolbar (count and current filename)
 
@@ -80,5 +84,7 @@ asymmetric rename.
 ## Current boundaries
 
 - macOS only (15.0+)
-- Export folder structure is fixed to year/month hierarchy
+- Timeline exports use the fixed year/month hierarchy; collection exports land under `Collections/Favorites/` and `Collections/Albums/`
 - Exports run sequentially (one asset at a time)
+- Folders in Photos render in the sidebar tree but are not directly exportable — pick the album you want
+- Smart albums other than Favorites and shared albums are not surfaced in the Collections sidebar

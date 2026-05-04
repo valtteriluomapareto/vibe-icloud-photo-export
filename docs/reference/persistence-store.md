@@ -4,20 +4,33 @@ This document explains how the app persists export status for Photos assets.
 
 ## Overview
 
-- The app tracks exports by the Photos `PHAsset.localIdentifier`.
-- Each exported asset has an `ExportRecord` containing year, month, relative path, and a
-  per-variant state dictionary. Variants are `original` and `edited`.
-- The store persists data using an append-only JSON Lines log and a compact snapshot.
+The app keeps **two parallel record stores**, one per "shape" of export:
+
+- `ExportRecordStore` (timeline) — keyed by `PHAsset.localIdentifier`. Backs the
+  year/month exports under `<root>/YYYY/MM/`.
+- `CollectionExportRecordStore` (collections) — keyed by
+  `(placementId, assetId)`. Backs Favorites and user-album exports under
+  `<root>/Collections/Favorites/` and `<root>/Collections/Albums/...`.
+
+The two stores share **no key space**: the collection store rejects `.timeline`
+placements at every API entry point. As a result a corrupt collection store cannot
+affect timeline progress and vice versa.
+
+Both stores use the same persistence mechanism — an append-only JSON Lines log plus a
+compacted snapshot — implemented by the shared `JSONLRecordFile` component.
 
 ## Files & Locations
 
 - Directory (sandboxed): `~/Library/Containers/<bundle id>/Data/Library/Application Support/<bundle id>/ExportRecords/<destinationId>/`
-  - `destinationId` is a SHA-256 hash of the destination bookmark data, so each export destination gets its own isolated record store
-- Files:
+  - `destinationId` is a SHA-256 hash of the destination's volume UUID + volume-relative path, so each export destination gets its own isolated record store
+- Timeline store files:
   - `export-records.jsonl` — append-only mutation log (one JSON object per line)
   - `export-records.json` — compacted snapshot of the current state (single JSON object mapping `id` → `ExportRecord`)
+- Collection store files (sit in the same per-destination directory):
+  - `collection-records.jsonl` — append-only log of placement and record mutations
+  - `collection-records.json` — compacted snapshot containing `placements` (placement metadata keyed by placement id) and `records` (record bodies nested by `[placementId][assetId]`)
 
-## Data Model
+## Data Model — timeline store
 
 - `ExportRecord` (JSON):
   - `id` (String) — `PHAsset.localIdentifier`
@@ -37,6 +50,34 @@ This document explains how the app persists export status for Photos assets.
   - `op` — `upsert` | `delete`
   - `id` — asset id
   - `record` — present on `upsert`, omitted on `delete`
+
+## Data Model — collection store
+
+- `Snapshot`:
+  - `version` (Int) — schema version (current: `1`)
+  - `placements` (Object) — placement metadata keyed by placement id; each value is an
+    `ExportPlacement` (see below)
+  - `records` (Object) — `{ placementId: { assetId: { variants: { variantName: ExportVariantRecord } } } }`
+- `ExportPlacement`:
+  - `kind` (String) — `timeline` | `favorites` | `album`. The collection store rejects
+    `timeline` at every API entry point; persisted snapshots only ever contain
+    `favorites` and `album`.
+  - `id` (String) — placement id. Format: `collections:favorites` for the canonical
+    Favorites placement; `collections:album:<collectionIdHash16>:<displayPathHash8>` for
+    albums (the path-hash component changes when the album is renamed or moved between
+    folders, so the next export resolves to a fresh placement).
+  - `displayName` (String) — human-readable label (e.g. `Trips/Iceland`).
+  - `collectionLocalIdentifier` (String?) — `PHAssetCollection.localIdentifier` for
+    `.album`. `nil` for `.favorites`.
+  - `relativePath` (String) — path under the export root, e.g. `Collections/Albums/Iceland/`.
+  - `createdAt` (ISO8601 date) — diagnostic only, not part of identity.
+- `LogOp` (JSON Lines): four operations, distinguished by an `op` discriminator —
+  `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord`. Record-level
+  bodies are the same `{ variants: { ... } }` shape as the snapshot.
+
+The collection store also enforces a referential constraint when replaying the log: an
+`upsertRecord` with no matching placement metadata is skipped (with a log line) so a
+truncated log can't freeze an orphan record into the next compaction.
 
 ### Legacy schema migration
 
@@ -100,7 +141,13 @@ compaction.
 ## Error Handling
 
 - If the log contains an invalid line, it is skipped and logged. The rest of the log is still applied.
-- If snapshot loading fails, the store continues from the log only.
+- If snapshot loading fails, the store transitions to `RecordStoreState.failed` and
+  rejects further writes. The corrupt snapshot is **not** renamed automatically — the
+  in-app `RecordStoreAlertHost` surfaces a recovery alert with a Reset action that
+  renames the corrupt file aside (`<name>.broken-<ISO8601>`) and starts the store with
+  an empty snapshot. Choosing Cancel leaves both the snapshot and the user's exported
+  files on disk untouched. Each store presents its alert independently — only the
+  failed store's records are reset.
 
 ## Migrations
 

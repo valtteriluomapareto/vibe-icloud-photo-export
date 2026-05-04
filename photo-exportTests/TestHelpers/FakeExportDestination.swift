@@ -17,6 +17,7 @@ final class FakeExportDestination: ExportDestination {
 
   // Error injection
   var urlForMonthError: Error?
+  var urlForRelativeDirectoryError: Error?
 
   init() {
     rootURL = FileManager.default.temporaryDirectory
@@ -25,15 +26,24 @@ final class FakeExportDestination: ExportDestination {
     selectedFolderURL = rootURL
   }
 
-  func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL {
-    if let error = urlForMonthError { throw error }
-    let monthStr = String(format: "%02d", month)
-    let dir = rootURL.appendingPathComponent("\(year)", isDirectory: true)
-      .appendingPathComponent(monthStr, isDirectory: true)
+  func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
+    if let error = urlForRelativeDirectoryError { throw error }
+    var dir = rootURL
+    let trimmed =
+      relativePath.hasSuffix("/") ? String(relativePath.dropLast()) : relativePath
+    for component in trimmed.split(separator: "/", omittingEmptySubsequences: false) {
+      dir = dir.appendingPathComponent(String(component), isDirectory: true)
+    }
     if createIfNeeded {
       try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
     return dir
+  }
+
+  func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL {
+    if let error = urlForMonthError { throw error }
+    let relPath = "\(year)/\(String(format: "%02d", month))/"
+    return try urlForRelativeDirectory(relPath, createIfNeeded: createIfNeeded)
   }
 
   func beginScopedAccess() -> URL? {

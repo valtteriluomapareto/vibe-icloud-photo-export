@@ -21,6 +21,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private var volumeObservers: [NSObjectProtocol] = []
 
+  /// Hash of the **original** bookmark bytes captured at restore time, before any stale-bookmark
+  /// refresh in `restoreBookmarkIfAvailable()` overwrites the bytes in `userDefaults`. This is
+  /// the legacy `<oldId>` an upgraded user's `ExportRecords/<oldId>/` directory was named under.
+  /// Without this snapshot, refreshing a stale bookmark would change the bytes in defaults, the
+  /// coordinator would hash the new bytes, and the existing legacy directory would silently go
+  /// missing.
+  private var stashedLegacyDestinationId: String?
+
   // MARK: - Errors
   enum ExportDestinationError: LocalizedError, Equatable {
     static func == (lhs: ExportDestinationError, rhs: ExportDestinationError) -> Bool {
@@ -37,6 +45,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         return l == r
       case (.failedToCreateFolder(let lURL, _), .failedToCreateFolder(let rURL, _)):
         return lURL == rURL
+      case (.invalidRelativePath(let l), .invalidRelativePath(let r)):
+        return l == r
       default:
         return false
       }
@@ -50,6 +60,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     case pathTooLong
     case notDirectory(URL)
     case failedToCreateFolder(URL, underlying: Error)
+    /// The relative path supplied to `urlForRelativeDirectory` was rejected at the
+    /// destination boundary. The associated message names the specific failure (absolute
+    /// path, `..` segment, escapes root, non-directory intermediate, etc.) so the log
+    /// surfaces what to fix.
+    case invalidRelativePath(String)
 
     var errorDescription: String? {
       switch self {
@@ -64,6 +79,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       case .notDirectory(let url): return "Path exists but is not a folder: \(url.path)"
       case .failedToCreateFolder(let url, let underlying):
         return "Failed to create folder at \(url.path): \(underlying.localizedDescription)"
+      case .invalidRelativePath(let message):
+        return "Invalid relative path: \(message)"
       }
     }
   }
@@ -120,6 +137,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isWritable = false
     statusMessage = "No export folder selected"
     destinationId = nil
+    stashedLegacyDestinationId = nil
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
     logger.info("Cleared export destination selection")
   }
@@ -138,36 +156,137 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Returns the URL for the <root>/<year>/<month>/ folder, optionally creating it.
   /// Month is formatted as two digits ("01" … "12").
-  /// - Parameters:
-  ///   - year: e.g., 2025
-  ///   - month: 1…12
-  ///   - createIfNeeded: create the directory if it does not exist (default true)
-  /// - Throws: ExportDestinationError on invalid state or inability to create.
+  ///
+  /// Backed by `urlForRelativeDirectory` after Phase 3 of the collections-export plan.
+  /// Year/month-specific validation (positive year, month in `1...12`) lives here; the
+  /// generic destination-escape validation lives in `urlForRelativeDirectory`.
   func urlForMonth(year: Int, month: Int, createIfNeeded: Bool = true) throws -> URL {
+    guard year > 0 else { throw ExportDestinationError.invalidYear }
+    guard (1...12).contains(month) else { throw ExportDestinationError.invalidMonth }
+    let relativePath = "\(year)/\(String(format: "%02d", month))/"
+    return try urlForRelativeDirectory(relativePath, createIfNeeded: createIfNeeded)
+  }
+
+  /// Resolves a relative directory under the export root. Rejects any path that escapes
+  /// the root, contains `..`/absolute-path segments, lands at or beneath a non-directory
+  /// intermediate, or exceeds the platform path length.
+  ///
+  /// The path is split on `/`, individual components are inspected (no `.`/`..`/empty
+  /// components other than a possible trailing slash), and the resolved URL is verified
+  /// to lie within the canonical root using `standardizedFileURL`. Symlink escapes are
+  /// caught by canonicalizing every parent that already exists on disk and asserting the
+  /// canonical path still has the root as a prefix.
+  func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
     guard let root = selectedFolderURL else { throw ExportDestinationError.noSelection }
     guard isAvailable else { throw ExportDestinationError.notAvailable }
     guard isWritable else { throw ExportDestinationError.notWritable }
-    guard year > 0 else { throw ExportDestinationError.invalidYear }
-    guard (1...12).contains(month) else { throw ExportDestinationError.invalidMonth }
+    guard !relativePath.isEmpty else {
+      throw ExportDestinationError.invalidRelativePath("path is empty")
+    }
+    guard !relativePath.hasPrefix("/") else {
+      throw ExportDestinationError.invalidRelativePath("absolute path: \(relativePath)")
+    }
 
-    let yearComponent = String(year)
-    let monthComponent = String(format: "%02d", month)
-    let target = root.appendingPathComponent(yearComponent, isDirectory: true)
-      .appendingPathComponent(monthComponent, isDirectory: true)
+    // Split on forward slash. Trailing slash is allowed (collection placements include it
+    // by convention); empty interior components are not (would be a `//` segment).
+    let trimmed =
+      relativePath.hasSuffix("/")
+      ? String(relativePath.dropLast()) : relativePath
+    let components = trimmed.split(separator: "/", omittingEmptySubsequences: false).map(
+      String.init)
+    for component in components {
+      if component.isEmpty {
+        throw ExportDestinationError.invalidRelativePath(
+          "empty component in path: \(relativePath)")
+      }
+      if component == ".." {
+        throw ExportDestinationError.invalidRelativePath(
+          ".. segment in path: \(relativePath)")
+      }
+      if component == "." {
+        throw ExportDestinationError.invalidRelativePath(
+          ". segment in path: \(relativePath)")
+      }
+    }
 
-    // Guard against excessively long paths (PATH_MAX ~1024 on macOS)
+    // Build the target URL by appending components.
+    var target = root
+    for component in components {
+      target = target.appendingPathComponent(component, isDirectory: true)
+    }
+
+    // Path-length guard (PATH_MAX is 1024 on macOS; reserve some headroom for the
+    // filename that will be appended later).
     if target.path.utf8.count >= 1000 { throw ExportDestinationError.pathTooLong }
+
+    // Symlink-escape protection: resolve symlinks on the deepest existing prefix and
+    // verify it still lies under the root's canonical path. If the user has placed a
+    // symlink at `<root>/Collections/Albums/Trip` pointing outside the destination, the
+    // resolved path would not have the root as a prefix.
+    let rootCanonical = root.standardizedFileURL.resolvingSymlinksInPath().path
+    let targetCanonical = Self.canonicalizeExistingPrefix(of: target).path
+    // Boundary-safe prefix check: a bare `hasPrefix(rootCanonical)` would let
+    // `/tmp/Backup-old/Trip` slip past a root of `/tmp/Backup`. Accept either equal-to-
+    // root (zero-length tail) or root-followed-by-slash. `rootCanonical` itself never
+    // ends with `/` (FileManager's standardized paths drop the trailing slash) so we
+    // append it explicitly here.
+    let rootBoundary = rootCanonical + "/"
+    if targetCanonical != rootCanonical && !targetCanonical.hasPrefix(rootBoundary) {
+      throw ExportDestinationError.invalidRelativePath(
+        "path resolves outside the export root: \(relativePath)")
+    }
+
+    // Verify each existing intermediate component is a directory (or doesn't exist yet,
+    // in which case `ensureDirectoryExists` will create it).
+    let fileManager = FileManager.default
+    var probe = root
+    for component in components {
+      probe = probe.appendingPathComponent(component, isDirectory: true)
+      var isDir: ObjCBool = false
+      if fileManager.fileExists(atPath: probe.path, isDirectory: &isDir) {
+        if !isDir.boolValue {
+          throw ExportDestinationError.notDirectory(probe)
+        }
+      } else {
+        // Stop probing; remaining segments don't exist yet.
+        break
+      }
+    }
 
     if createIfNeeded {
       try ensureDirectoryExists(at: target)
     } else {
       var isDir: ObjCBool = false
-      if FileManager.default.fileExists(atPath: target.path, isDirectory: &isDir) {
+      if fileManager.fileExists(atPath: target.path, isDirectory: &isDir) {
         if !isDir.boolValue { throw ExportDestinationError.notDirectory(target) }
       }
     }
 
     return target
+  }
+
+  /// Walks `url` upward until it finds an ancestor that exists on disk, then resolves
+  /// symlinks on that ancestor to get a canonical path. The non-existing tail is
+  /// re-appended so the result is still the requested URL — but with the symlink-resolved
+  /// existing prefix substituted in. Used by `urlForRelativeDirectory` to detect
+  /// symlink-escape attacks where a parent component is a symlink pointing outside the
+  /// root.
+  private static func canonicalizeExistingPrefix(of url: URL) -> URL {
+    let fileManager = FileManager.default
+    var components: [String] = []
+    var current = url
+    while !fileManager.fileExists(atPath: current.path) {
+      components.insert(current.lastPathComponent, at: 0)
+      let parent = current.deletingLastPathComponent()
+      // Stop at the filesystem root to avoid infinite loops on malformed input.
+      if parent.path == current.path { break }
+      current = parent
+    }
+    var result = current.standardizedFileURL.resolvingSymlinksInPath()
+    for component in components {
+      result = result.appendingPathComponent(component, isDirectory: true)
+    }
+    return result
   }
 
   /// Ensures the directory exists at the given URL, creating with intermediates.
@@ -207,6 +326,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   // MARK: - Internal Helpers
   private func setSelectedFolder(_ url: URL) {
     logger.info("User selected export folder: \(url.path, privacy: .public)")
+    // Clear any stashed legacy id from a prior bookmark restore. Otherwise a sequence
+    // like "restore folder A → user picks new folder B" would leave A's legacy hash in
+    // place; the next `currentLegacyDestinationId()` call would return A's hash and the
+    // directory coordinator would migrate A's records into B's `<newId>` directory —
+    // mixing destinations and stranding A.
+    stashedLegacyDestinationId = nil
     guard saveBookmark(for: url) else {
       statusMessage = "Failed to save access to selected folder"
       return
@@ -215,9 +340,69 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     validate(url: url)
   }
 
-  private func computeDestinationId(from bookmarkData: Data) -> String {
+  /// Derives a stable `destinationId` for a folder URL.
+  ///
+  /// The id is `SHA-256(volumeUUID || U+0000 || volumeRelativePath)`. Survives bookmark refresh
+  /// on the same drive **and** rename of the drive (e.g. `/Volumes/MyDrive` →
+  /// `/Volumes/PhotoBackup`) — the path component is taken in the volume's coordinate system,
+  /// not as the absolute mount path. Changes only when the volume is reformatted, the folder is
+  /// moved to a different volume, or the user duplicates the folder via Finder.
+  ///
+  /// Returns `nil` when the volume identifier cannot be read (typically because the drive is
+  /// unmounted). Callers treat this as "destination not yet available" and wait for the volume
+  /// to mount.
+  static func computeDestinationId(for url: URL) -> String? {
+    let resolved = url.resolvingSymlinksInPath()
+    let keys: Set<URLResourceKey> = [.volumeUUIDStringKey, .volumeIdentifierKey, .volumeURLKey]
+    guard let values = try? resolved.resourceValues(forKeys: keys) else { return nil }
+    let volumeId: String
+    if let uuid = values.volumeUUIDString {
+      volumeId = uuid
+    } else if let identifier = values.volumeIdentifier {
+      // `volumeIdentifier` is `(NSCopying & NSSecureCoding & NSObjectProtocol)?`; its description is
+      // the platform's stable token for the volume.
+      volumeId = String(describing: identifier)
+    } else {
+      return nil
+    }
+    // Strip the volume mount prefix so renaming the drive (`/Volumes/MyDrive` →
+    // `/Volumes/PhotoBackup`) doesn't change the digest. For the boot volume the mount root
+    // is "/" and the relative path equals the absolute path.
+    let canonicalPath = resolved.standardizedFileURL.path
+    let volumeRoot = values.volume?.standardizedFileURL.path ?? ""
+    var relativePath = canonicalPath
+    if !volumeRoot.isEmpty, volumeRoot != "/", canonicalPath.hasPrefix(volumeRoot) {
+      relativePath = String(canonicalPath.dropFirst(volumeRoot.count))
+    }
+    if !relativePath.hasPrefix("/") {
+      relativePath = "/" + relativePath
+    }
+    let combined = volumeId + "\u{0000}" + relativePath
+    let digest = SHA256.hash(data: Data(combined.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Pre-Phase-0 destination-id derivation: SHA-256 of the security-scoped bookmark bytes.
+  /// Kept around exclusively so `ExportRecordsDirectoryCoordinator` can locate legacy
+  /// `ExportRecords/<oldId>/` directories during the lazy migration.
+  static func legacyDestinationId(from bookmarkData: Data) -> String {
     let digest = SHA256.hash(data: bookmarkData)
     return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Returns the legacy `<oldId>` for the currently selected folder, or `nil` if no bookmark
+  /// is stored. Used by `ExportRecordsDirectoryCoordinator` during destination configure to
+  /// decide whether a legacy `ExportRecords/<oldId>/` directory needs renaming.
+  ///
+  /// Prefers the `stashedLegacyDestinationId` snapshot captured during
+  /// `restoreBookmarkIfAvailable()` — that's the hash of the *original* bookmark bytes, which
+  /// is what the upgraded user's existing `ExportRecords/<oldId>/` directory was named under.
+  /// Falls back to hashing the current bookmark bytes only when no snapshot exists (e.g. a
+  /// brand-new selection via `setSelectedFolder`, where there is no legacy directory anyway).
+  func currentLegacyDestinationId() -> String? {
+    if let stashed = stashedLegacyDestinationId { return stashed }
+    guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else { return nil }
+    return Self.legacyDestinationId(from: data)
   }
 
   private func saveBookmark(for url: URL) -> Bool {
@@ -228,7 +413,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         relativeTo: nil
       )
       userDefaults.set(data, forKey: bookmarkDefaultsKey)
-      destinationId = computeDestinationId(from: data)
       return true
     } catch {
       logger.error(
@@ -243,6 +427,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       destinationId = nil
       return
     }
+    // Capture the legacy hash from the *original* bytes before any stale-bookmark refresh.
+    // The coordinator relies on this to find existing `ExportRecords/<oldId>/` directories
+    // written by previous app versions; refreshing the bookmark would otherwise change the
+    // hash and silently orphan those records.
+    stashedLegacyDestinationId = Self.legacyDestinationId(from: data)
     do {
       var isStale = false
       let url = try URL(
@@ -254,8 +443,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       if isStale {
         logger.info("Bookmark data is stale; attempting to re-save")
         _ = saveBookmark(for: url)
-      } else {
-        destinationId = computeDestinationId(from: data)
       }
       selectedFolderURL = url
       validate(url: url)
@@ -267,6 +454,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       isAvailable = false
       isWritable = false
       destinationId = nil
+      stashedLegacyDestinationId = nil
     }
   }
 
@@ -301,6 +489,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       statusMessage = "Export folder is read-only"
     } else {
       statusMessage = nil
+    }
+
+    // Derive the stable destinationId once the volume is reachable. When the drive is
+    // unmounted, volume-resource keys are unreadable; clear the id so the rest of the app
+    // treats the destination as unavailable until the drive comes back.
+    if isAvailable {
+      destinationId = Self.computeDestinationId(for: url)
+    } else {
+      destinationId = nil
     }
   }
 

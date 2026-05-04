@@ -13,8 +13,12 @@ const base = import.meta.env.BASE_URL;
 		/>
 		<h1>Photo Export</h1>
 		<p class="tagline">
-			Free, open-source macOS app to export and back up your iCloud photos to
-			any local or external drive, organized by year and month.
+			Free, open-source macOS app to back up your iCloud photos to any local or
+			external drive.
+		</p>
+		<p class="sub-tagline">
+			Browse by year and month — or export your <strong>Favorites</strong> and
+			<strong>individual albums</strong> straight from Apple Photos.
 		</p>
 		<p class="subtitle">
 			A native, open-source app. No cloud services, no subscriptions, no account
@@ -82,8 +86,20 @@ const base = import.meta.env.BASE_URL;
 	.tagline {
 		font-size: 1.35rem;
 		opacity: 0.95;
-		margin: 0 0 0.75rem;
+		margin: 0 0 0.6rem;
 		line-height: 1.5;
+	}
+
+	.sub-tagline {
+		font-size: 1.15rem;
+		opacity: 0.92;
+		margin: 0 0 1rem;
+		line-height: 1.5;
+		max-width: 36rem;
+	}
+
+	.sub-tagline strong {
+		font-weight: 700;
 	}
 
 	.subtitle {

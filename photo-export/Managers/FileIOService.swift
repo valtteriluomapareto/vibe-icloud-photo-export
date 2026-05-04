@@ -66,4 +66,8 @@ struct FileIOService: FileSystemService {
   func removeItem(at url: URL) throws {
     try FileManager.default.removeItem(at: url)
   }
+
+  func copyItem(from src: URL, to dst: URL) throws {
+    try FileManager.default.copyItem(at: src, to: dst)
+  }
 }

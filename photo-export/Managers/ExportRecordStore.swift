@@ -29,22 +29,54 @@ final class ExportRecordStore: ObservableObject {
     label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
 
   private(set) var recordsById: [String: ExportRecord] = [:]
-  private var mutationCountSinceCompact: Int = 0
+
+  /// Incrementally-maintained per-`(year, month)` counters that back the public count
+  /// queries. Without these, `recordCount`, `monthSummary`, `sidebarSummary`, and the
+  /// year-roll-up helpers each iterate `recordsById.values` once per call — a 500k-record
+  /// library × ~5 visible years on screen × every coalesced `mutationCounter` bump turned
+  /// the timeline sidebar into a multi-second stall during exports. The counters are
+  /// rebuilt from scratch at `configure(for:)` time and updated incrementally on every
+  /// `apply(_:)` thereafter (every public mutation routes through `apply` via `append`).
+  ///
+  /// All public read methods translate one-for-one against the original implementations;
+  /// `ExportRecordStoreQueryGoldenTests` pins the exact integer outputs against
+  /// hand-checked fixtures so any drift here surfaces immediately.
+  private struct MonthKey: Hashable {
+    let year: Int
+    let month: Int
+  }
+  private struct MonthCounters {
+    /// Per-variant, per-status occurrence count.
+    var variantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
+    /// Records where both `.original` and `.edited` variants are `.done`.
+    var bothVariantsDone: Int = 0
+    /// Records where `.original.done` at a natural-stem filename (not `_orig`-companion)
+    /// AND `.edited` is not `.done`. The records-only sidebar formula's "unedited asset
+    /// exported once" estimator depends on this.
+    var originalDoneAtNaturalStem: Int = 0
+    static let zero = MonthCounters()
+  }
+  private var monthCounters: [MonthKey: MonthCounters] = [:]
+
+  /// Per-store load state. See `RecordStoreState` for semantics. The corruption alert UI
+  /// that drives `resetToEmpty()` lives in Phase 4; before then, a `.failed` state is
+  /// observable in logs and tests but not surfaced to the user.
+  @Published private(set) var state: RecordStoreState = .unconfigured
 
   // Published bump used to notify SwiftUI of logical changes
   @Published private(set) var mutationCounter: Int = 0
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
-  private let storeRootURL: URL
+  /// Base directory containing per-destination subdirectories
+  /// (`<App Support>/<bundleId>/ExportRecords/`). Exposed for
+  /// `ExportRecordsDirectoryCoordinator`, which needs to manage
+  /// the per-destination subdirectory before this store configures.
+  let storeRootURL: URL
   private var currentStoreDirURL: URL?
-
-  private var logFileURL: URL? {
-    currentStoreDirURL?.appendingPathComponent(Constants.logFileName)
-  }
-  private var snapshotFileURL: URL? {
-    currentStoreDirURL?.appendingPathComponent(Constants.snapshotFileName)
-  }
+  /// JSONL persistence for the currently configured destination. `nil` when the store is
+  /// unconfigured (no destination selected). Reconstructed on every `configure(for:)`.
+  private var jsonl: JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>?
 
   init() {
     let appSupport = try! fileManager.url(
@@ -71,10 +103,12 @@ final class ExportRecordStore: ObservableObject {
   func configure(for destinationId: String?) {
     // Reset in-memory state
     recordsById = [:]
-    mutationCountSinceCompact = 0
+    monthCounters = [:]
 
     guard let destinationId else {
       currentStoreDirURL = nil
+      jsonl = nil
+      state = .unconfigured
       mutationCounter &+= 1
       return
     }
@@ -82,52 +116,65 @@ final class ExportRecordStore: ObservableObject {
     let dir = storeRootURL.appendingPathComponent(destinationId, isDirectory: true)
     createDirectoryIfNeeded(dir)
     currentStoreDirURL = dir
+    let file = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>(
+      snapshotURL: dir.appendingPathComponent(Constants.snapshotFileName),
+      logURL: dir.appendingPathComponent(Constants.logFileName),
+      ioQueue: ioQueue,
+      logger: logger
+    )
+    jsonl = file
 
-    // Load snapshot and log from the current directory
-    loadFromCurrentDirectory()
+    let loaded = file.load()
+    switch loaded.snapshotStatus {
+    case .corrupt:
+      // Deferred-rename rule: leave the corrupt snapshot at its original path on disk so
+      // a Quit-and-relaunch reproduces this `.failed` state instead of silently
+      // initializing empty. `resetToEmpty()` is the only path that renames the file out
+      // of the way; the alert UI that calls it lands in Phase 4.
+      logger.error(
+        "Timeline records snapshot at \(dir.appendingPathComponent(Constants.snapshotFileName).path, privacy: .public) failed to decode; store transitioning to .failed."
+      )
+      state = .failed
+    case .absent, .loaded:
+      if let snapshot = loaded.snapshot {
+        recordsById = snapshot
+      }
+      // During load, apply each op directly to `recordsById` without touching
+      // `monthCounters` — incrementally updating against an empty counter map would
+      // produce negative counts for keys whose snapshot value should be subtracted.
+      // After all ops are applied and recovery runs, rebuild counters once from the
+      // final `recordsById`.
+      for op in loaded.ops {
+        apply(op, recordCounters: false)
+      }
+      recoverInProgressVariants()
+      rebuildCountersFromRecords()
+      state = .ready
+    }
     mutationCounter &+= 1
   }
 
-  private func loadFromCurrentDirectory() {
-    guard let snapshotURL = snapshotFileURL, let logURL = logFileURL else { return }
-    recordsById = [:]
-    // Prefer snapshot if available, then apply log mutations after
-    if fileManager.fileExists(atPath: snapshotURL.path) {
-      do {
-        let data = try Data(contentsOf: snapshotURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let decoded = try decoder.decode([String: ExportRecord].self, from: data)
-        recordsById = decoded
-      } catch {
-        logger.error(
-          "Failed to read snapshot: \(String(describing: error), privacy: .public)")
-      }
+  /// Renames a corrupt snapshot to `<name>.broken-<ISO8601>` and reinitializes the store
+  /// with an empty snapshot + log. Called from the Phase 4 corruption alert UI's "Reset to
+  /// empty" action; in Phase 1 there is no UI for it and tests are the only caller.
+  ///
+  /// Transitions `state` from `.failed` back to `.ready` on success. Only valid to call
+  /// when `state == .failed` (otherwise it is a no-op so callers can wire it through a
+  /// generic alert handler without first checking).
+  func resetToEmpty() {
+    guard state == .failed else { return }
+    guard let jsonl else { return }
+    do {
+      try jsonl.resetToEmpty(emptySnapshot: [:])
+      recordsById = [:]
+      monthCounters = [:]
+      state = .ready
+      mutationCounter &+= 1
+    } catch {
+      logger.error(
+        "resetToEmpty failed: \(String(describing: error), privacy: .public). Store remains .failed."
+      )
     }
-    if fileManager.fileExists(atPath: logURL.path) {
-      do {
-        let handle = try FileHandle(forReadingFrom: logURL)
-        defer { try? handle.close() }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        while let lineData = handle.readLineData() {
-          do {
-            let mutation = try decoder.decode(ExportRecordMutation.self, from: lineData)
-            apply(mutation)
-          } catch {
-            // Skip broken lines but log
-            logger.error(
-              "Failed to decode mutation line: \(String(describing: error), privacy: .public)"
-            )
-          }
-        }
-      } catch {
-        logger.error(
-          "Failed to read log file: \(String(describing: error), privacy: .public)")
-      }
-    }
-
-    recoverInProgressVariants()
   }
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the interrupted
@@ -294,21 +341,21 @@ final class ExportRecordStore: ObservableObject {
   /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
   /// yearly progress counting for unadjusted libraries.
   func yearExportedCount(year: Int) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.variants[.original]?.status == .done else { return sum }
-      return sum + 1
+    var total = 0
+    for month in 1...12 {
+      total +=
+        monthCounters[MonthKey(year: year, month: month)]?
+        .variantStatus[.original]?[.done] ?? 0
     }
+    return total
   }
 
   /// Legacy month summary that counts `.original` done records. Preserved for call sites that
   /// have not yet adopted `monthSummary(assets:selection:)`.
   func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
-    let exportedCount = recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month,
-        record.variants[.original]?.status == .done
-      else { return sum }
-      return sum + 1
-    }
+    let exportedCount =
+      monthCounters[MonthKey(year: year, month: month)]?
+      .variantStatus[.original]?[.done] ?? 0
     return makeSummary(year: year, month: month, exported: exportedCount, total: totalAssets)
   }
 
@@ -337,24 +384,15 @@ final class ExportRecordStore: ObservableObject {
   func recordCount(
     year: Int, month: Int, variant: ExportVariant, status: ExportStatus
   ) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month,
-        record.variants[variant]?.status == status
-      else { return sum }
-      return sum + 1
-    }
+    monthCounters[MonthKey(year: year, month: month)]?
+      .variantStatus[variant]?[status] ?? 0
   }
 
   /// Count of records in `year`/`month` whose `.original` and `.edited` variants are both
   /// `.done`. These records are definitely fully complete under `editedWithOriginals`
   /// regardless of whether the asset is currently adjusted.
   func recordCountBothVariantsDone(year: Int, month: Int) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month else { return sum }
-      let originalDone = record.variants[.original]?.status == .done
-      let editedDone = record.variants[.edited]?.status == .done
-      return sum + (originalDone && editedDone ? 1 : 0)
-    }
+    monthCounters[MonthKey(year: year, month: month)]?.bothVariantsDone ?? 0
   }
 
   /// Count of records in `year`/`month` whose `.edited` variant is `.done`. Used by the
@@ -368,14 +406,7 @@ final class ExportRecordStore: ObservableObject {
   /// sidebar formula to estimate "unedited asset, exported once" rows without loading
   /// descriptors.
   func recordCountOriginalDoneAtNaturalStem(year: Int, month: Int) -> Int {
-    recordsById.values.reduce(0) { sum, record in
-      guard record.year == year, record.month == month else { return sum }
-      guard let original = record.variants[.original], original.status == .done,
-        let filename = original.filename
-      else { return sum }
-      if record.variants[.edited]?.status == .done { return sum }
-      return sum + (ExportFilenamePolicy.isOrigCompanion(filename: filename) ? 0 : 1)
-    }
+    monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
   }
 
   /// Records-only approximation of "fully exported under this selection," capped by the
@@ -452,7 +483,13 @@ final class ExportRecordStore: ObservableObject {
   /// Imports a batch of records from the backup-scan flow, merging per variant. An existing
   /// `.done` for a given asset+variant is preserved; weaker statuses may be replaced by an imported
   /// `.done` variant.
+  ///
+  /// Bails early when the store isn't `.ready` — otherwise the per-record `append` would
+  /// trip a debug assertion on every iteration. The caller (Import Existing Backup flow)
+  /// should only invoke this when the store has loaded successfully; the early return is a
+  /// belt-and-braces no-op for unexpected states.
   func bulkImportRecords(_ records: [ExportRecord]) {
+    guard state == .ready else { return }
     var importedVariants = 0
     var skippedVariants = 0
     for incoming in records {
@@ -484,90 +521,91 @@ final class ExportRecordStore: ObservableObject {
 
   // MARK: - Internals
   private func append(_ mutation: ExportRecordMutation) {
+    // RecordStoreState guard: writes only land when `.ready`. `.failed` means the snapshot
+    // is corrupt (deferred-rename rule); `.unconfigured` means no destination is selected.
+    // Either case: no-op. Debug builds trip an `assertionFailure` so a routing bug shows up
+    // in tests; release silently drops to avoid crashing on a benign race during state
+    // transitions.
+    guard state == .ready else {
+      assertionFailure(
+        "ExportRecordStore.append called while state == \(state); ExportManager should have routed via canExport."
+      )
+      return
+    }
+
     apply(mutation)
     // Coalesce notifications to avoid excessive UI churn during exports
     scheduleCoalescedNotify()
 
     // If not configured to any destination, do not persist
-    guard
-      let storeDirURL = self.currentStoreDirURL,
-      let logURL = self.logFileURL,
-      let snapshotURL = self.snapshotFileURL
-    else { return }
-
-    // Prepare data for log write off the main actor
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    let mutationData: Data
-    do { mutationData = try encoder.encode(mutation) } catch {
-      logger.error(
-        "Failed to encode mutation: \(String(describing: error), privacy: .public)")
-      return
-    }
-    let nextMutationCount = mutationCountSinceCompact + 1
-    let recordsSnapshot: [String: ExportRecord]?
-    if nextMutationCount >= Constants.compactEveryNMutations {
-      // Capture a COW snapshot now and serialize it later on the IO queue after
-      // this append is durable, so newer mutations cannot slip in before log truncation.
-      recordsSnapshot = recordsById
-      mutationCountSinceCompact = 0
-    } else {
-      recordsSnapshot = nil
-      mutationCountSinceCompact = nextMutationCount
-    }
-
-    ioQueue.async { [weak self] in
-      guard let self else { return }
-      do {
-        try appendLine(data: mutationData, to: logURL)
-      } catch {
-        self.logger.error(
-          "Failed to persist mutation: \(String(describing: error), privacy: .public)")
-        Task { @MainActor [weak self] in
-          self?.restoreMutationCountAfterPersistenceFailure(
-            for: storeDirURL,
-            restoredCount: nextMutationCount - 1
-          )
-        }
-        return
-      }
-
-      guard let recordsSnapshot else { return }
-      do {
-        let snapshotData = try encoder.encode(recordsSnapshot)
-        try writeSnapshotAndTruncate(
-          snapshotData: snapshotData,
-          snapshotFileURL: snapshotURL,
-          logFileURL: logURL
-        )
-      } catch {
-        self.logger.error(
-          "Failed to compact snapshot: \(String(describing: error), privacy: .public)"
-        )
-        Task { @MainActor [weak self] in
-          self?.restoreMutationCountAfterPersistenceFailure(
-            for: storeDirURL,
-            restoredCount: Constants.compactEveryNMutations - 1
-          )
-        }
-      }
-    }
+    guard let jsonl else { return }
+    jsonl.append(mutation, currentSnapshot: { self.recordsById })
   }
 
-  private func restoreMutationCountAfterPersistenceFailure(for storeDirURL: URL, restoredCount: Int)
-  {
-    guard currentStoreDirURL == storeDirURL else { return }
-    mutationCountSinceCompact = max(mutationCountSinceCompact, restoredCount)
-  }
-
-  private func apply(_ mutation: ExportRecordMutation) {
+  /// Applies a mutation to in-memory state. When `recordCounters` is `true` (the default
+  /// for production mutations), `monthCounters` is updated incrementally by subtracting
+  /// the old record's contribution and adding the new record's. The `false` path is used
+  /// during `configure(for:)` while the snapshot+log replay rebuilds `recordsById` from
+  /// scratch — incrementally diffing against an empty counter map would produce negative
+  /// counts. After the replay, `rebuildCountersFromRecords()` populates the counters in
+  /// one O(N) pass.
+  private func apply(_ mutation: ExportRecordMutation, recordCounters: Bool = true) {
+    let oldRecord = recordsById[mutation.id]
     switch mutation.op {
     case .upsert:
       if let record = mutation.record {
         recordsById[mutation.id] = record
+        if recordCounters {
+          adjustCounters(old: oldRecord, new: record)
+        }
       }
     case .delete:
       recordsById.removeValue(forKey: mutation.id)
+      if recordCounters {
+        adjustCounters(old: oldRecord, new: nil)
+      }
+    }
+  }
+
+  /// Subtracts the old record's contribution and adds the new record's to `monthCounters`.
+  /// Either side may be `nil` (a fresh insert has no `old`; a delete has no `new`).
+  private func adjustCounters(old: ExportRecord?, new: ExportRecord?) {
+    if let old { contribute(old, sign: -1) }
+    if let new { contribute(new, sign: +1) }
+  }
+
+  /// Adds (`sign == +1`) or removes (`sign == -1`) `record`'s contribution to its
+  /// `(year, month)` cell of `monthCounters`. Idempotent under `+1` then `-1` for the
+  /// same record value, which is what the diff in `adjustCounters` relies on.
+  private func contribute(_ record: ExportRecord, sign: Int) {
+    let key = MonthKey(year: record.year, month: record.month)
+    var counters = monthCounters[key] ?? .zero
+    for (variant, variantRec) in record.variants {
+      let prior = counters.variantStatus[variant]?[variantRec.status] ?? 0
+      counters.variantStatus[variant, default: [:]][variantRec.status] = prior + sign
+    }
+    let originalDone = record.variants[.original]?.status == .done
+    let editedDone = record.variants[.edited]?.status == .done
+    if originalDone && editedDone {
+      counters.bothVariantsDone += sign
+    }
+    if originalDone, !editedDone,
+      let filename = record.variants[.original]?.filename,
+      !ExportFilenamePolicy.isOrigCompanion(filename: filename)
+    {
+      counters.originalDoneAtNaturalStem += sign
+    }
+    monthCounters[key] = counters
+  }
+
+  /// Rebuilds `monthCounters` from scratch by walking `recordsById` once. Called from
+  /// `configure(for:)` after the snapshot is loaded and log ops are replayed (with
+  /// counter updates suppressed during replay), and after `recoverInProgressVariants()`
+  /// transitions any leftover in-progress variants to failed in-memory.
+  private func rebuildCountersFromRecords() {
+    monthCounters = [:]
+    for record in recordsById.values {
+      contribute(record, sign: +1)
     }
   }
 
@@ -596,49 +634,4 @@ final class ExportRecordStore: ObservableObject {
   func flushForTesting() {
     ioQueue.sync {}
   }
-}
-
-// Non-actor helper to write snapshot and truncate log safely
-private func writeSnapshotAndTruncate(snapshotData: Data, snapshotFileURL: URL, logFileURL: URL)
-  throws
-{
-  let fileManager = FileManager.default
-  let tmpURL = snapshotFileURL.appendingPathExtension("tmp")
-  try snapshotData.write(to: tmpURL, options: .atomic)
-  if fileManager.fileExists(atPath: snapshotFileURL.path) {
-    try fileManager.removeItem(at: snapshotFileURL)
-  }
-  try fileManager.moveItem(at: tmpURL, to: snapshotFileURL)
-  try Data().write(to: logFileURL, options: .atomic)
-}
-
-// MARK: - FileHandle line reading
-extension FileHandle {
-  /// Reads a line terminated by \n and returns Data without the trailing newline.
-  fileprivate func readLineData() -> Data? {
-    var buffer = Data()
-    while true {
-      let chunk = try? self.read(upToCount: 1)
-      guard let byte = chunk, !byte.isEmpty else {
-        return buffer.isEmpty ? nil : buffer
-      }
-      if byte[0] == 0x0A {  // \n
-        return buffer
-      } else {
-        buffer.append(byte)
-      }
-    }
-  }
-}
-
-private func appendLine(data: Data, to url: URL) throws {
-  if !FileManager.default.fileExists(atPath: url.path) {
-    FileManager.default.createFile(atPath: url.path, contents: nil)
-  }
-  let handle = try FileHandle(forWritingTo: url)
-  defer { try? handle.close() }
-  try handle.seekToEnd()
-  try handle.write(contentsOf: data)
-  try handle.write(contentsOf: Data([0x0A]))  // newline
-  try handle.synchronize()
 }

@@ -3,7 +3,7 @@
 [![CI](https://github.com/valtteriluomapareto/photo-export/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/valtteriluomapareto/photo-export/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Photo Export is a native macOS app for exporting your Apple Photos library to local or external storage in a predictable `YYYY/MM/` folder layout.
+Photo Export is a native macOS app for exporting your Apple Photos library to local or external storage. Pick the layout that fits your library: a predictable `YYYY/MM/` timeline, or per-album folders under `Collections/Favorites/` and `Collections/Albums/<Album>/`.
 
 **[Download on the Mac App Store](https://apps.apple.com/app/photo-export-local-backup/id6761410742)** · [Download from GitHub (free)](https://github.com/valtteriluomapareto/photo-export/releases) · [Documentation](https://valtteriluomapareto.github.io/photo-export/)
 
@@ -11,9 +11,12 @@ The project is intentionally small: SwiftUI on top, system frameworks only, and 
 
 ## Current Capabilities
 
-- Browse your library by year and month
+- Browse your library two ways via a Timeline / Collections segmented control
+  - Timeline: year and month
+  - Collections: Favorites plus your Photos albums and folders
 - Preview thumbnails and selected assets
 - Export a month, a year, or the full queue without overwriting existing files
+- Export your Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`
 - Choose what to write with the toolbar's **Include originals** toggle. Off (default)
   exports one file per asset, in the version Photos shows. On adds a `_orig` companion
   (e.g. `IMG_0001_orig.HEIC`) for any photo or video edited in Photos so you keep a copy

@@ -9,6 +9,7 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   // Call tracking
   private var _moveCalls: [(from: URL, to: URL)] = []
   private var _timestampCalls: [(date: Date, url: URL)] = []
+  private var _copyCalls: [(from: URL, to: URL)] = []
 
   var moveCalls: [(from: URL, to: URL)] {
     lock.lock()
@@ -22,8 +23,15 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
     return _timestampCalls
   }
 
+  var copyCalls: [(from: URL, to: URL)] {
+    lock.lock()
+    defer { lock.unlock() }
+    return _copyCalls
+  }
+
   // Error injection
   var moveError: Error?
+  var copyError: Error?
   var shouldApplyTimestamps = true
 
   // Delegate to real filesystem by default
@@ -58,5 +66,14 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
 
   func removeItem(at url: URL) throws {
     try real.removeItem(at: url)
+  }
+
+  func copyItem(from src: URL, to dst: URL) throws {
+    lock.lock()
+    _copyCalls.append((from: src, to: dst))
+    lock.unlock()
+
+    if let error = copyError { throw error }
+    try real.copyItem(from: src, to: dst)
   }
 }

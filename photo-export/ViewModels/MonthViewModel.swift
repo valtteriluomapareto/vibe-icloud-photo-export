@@ -33,13 +33,23 @@ final class MonthViewModel: ObservableObject {
     self.photoLibraryService = photoLibraryService
   }
 
+  /// Timeline-scope wrapper. Phase 4 keeps it as the call site for the existing
+  /// `MonthContentView`; new collection views call `loadAssets(for:)` directly. Both
+  /// paths share `loadAssets(for:)` for caching/preheat behavior.
   func loadAssets(forYear year: Int, month: Int) async {
+    await loadAssets(for: .timeline(year: year, month: month))
+  }
+
+  /// Scope-based loader used by both timeline and collection grids. A `nil` scope clears
+  /// the view model (used when `LibrarySelection` is nil — e.g. before any collection is
+  /// selected).
+  func loadAssets(for scope: PhotoFetchScope?) async {
     isLoading = true
     errorMessage = nil
     // Cancel any in-flight HQ upgrade work
     hqUpgradeTask?.cancel()
     hqUpgradeTask = nil
-    // Stop caching for previous month
+    // Stop caching for previous scope
     if !cachedAssets.isEmpty {
       photoLibraryService.stopCachingThumbnails(for: cachedAssets)
       cachedAssets = []
@@ -50,15 +60,20 @@ final class MonthViewModel: ObservableObject {
     highQualityIds = []
     selectedAssetId = nil
 
+    guard let scope else {
+      isLoading = false
+      return
+    }
+
     do {
-      let monthAssets = try await photoLibraryService.fetchAssets(year: year, month: month)
-      assets = monthAssets
-      // Start caching for new month
-      photoLibraryService.startCachingThumbnails(for: monthAssets)
-      cachedAssets = monthAssets
+      let scopedAssets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
+      assets = scopedAssets
+      // Start caching for new scope
+      photoLibraryService.startCachingThumbnails(for: scopedAssets)
+      cachedAssets = scopedAssets
 
       // Preload an initial batch of fast thumbnails
-      let initialBatch = Array(monthAssets.prefix(initialThumbnailBatchSize))
+      let initialBatch = Array(scopedAssets.prefix(initialThumbnailBatchSize))
       var initialThumbs: [String: NSImage] = [:]
 
       for asset in initialBatch {
@@ -74,7 +89,7 @@ final class MonthViewModel: ObservableObject {
       isLoading = false
 
       // Auto-select first asset if available
-      if let first = monthAssets.first {
+      if let first = scopedAssets.first {
         selectedAssetId = first.id
       }
 
@@ -82,12 +97,12 @@ final class MonthViewModel: ObservableObject {
       hqUpgradeTask = Task { [weak self] in
         guard let self else { return }
         // First: load fast thumbnails for remaining assets
-        for asset in monthAssets.dropFirst(self.initialThumbnailBatchSize) {
+        for asset in scopedAssets.dropFirst(self.initialThumbnailBatchSize) {
           guard !Task.isCancelled else { return }
           await self.loadAndStoreThumbnail(for: asset.id)
         }
         // Then: upgrade all to high quality
-        for asset in monthAssets {
+        for asset in scopedAssets {
           guard !Task.isCancelled else { return }
           await self.upgradeThumbnailToHighQuality(for: asset.id)
         }

@@ -141,29 +141,72 @@ final class LiveVideoExportExecutor: VideoExportExecutor {
         if shouldRun { block() }
       }
     }
+    // Stores the PhotoKit request id once the call returns. The cancel
+    // handler reads it to forward cancellation; the body checks it
+    // immediately after the request returns to handle the case where
+    // cancellation arrived during the call itself.
+    final class RequestIDBox: @unchecked Sendable {
+      private let lock = NSLock()
+      private var _id: PHImageRequestID = PHInvalidImageRequestID
+      func set(_ id: PHImageRequestID) {
+        lock.lock()
+        _id = id
+        lock.unlock()
+      }
+      func get() -> PHImageRequestID {
+        lock.lock()
+        defer { lock.unlock() }
+        return _id
+      }
+    }
     let box = Box()
+    let idBox = RequestIDBox()
 
-    return try await withCheckedThrowingContinuation { continuation in
-      PHImageManager.default().requestExportSession(
-        forVideo: asset,
-        options: options,
-        exportPreset: AVAssetExportPresetHighestQuality
-      ) { session, info in
-        if let error = info?[PHImageErrorKey] as? Error {
-          box.tryResume { continuation.resume(throwing: error) }
-          return
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        let id = PHImageManager.default().requestExportSession(
+          forVideo: asset,
+          options: options,
+          exportPreset: AVAssetExportPresetHighestQuality
+        ) { session, info in
+          // Cancellation may surface as PHImageCancelledKey == true
+          // (PhotoKit standard) when our cancel handler fired before
+          // the work completed. Treat it as a clean cancel.
+          if let cancelled = info?[PHImageCancelledKey] as? Bool, cancelled {
+            box.tryResume { continuation.resume(throwing: CancellationError()) }
+            return
+          }
+          if let error = info?[PHImageErrorKey] as? Error {
+            box.tryResume { continuation.resume(throwing: error) }
+            return
+          }
+          if let isDegraded = info?[PHImageResultIsDegradedKey] as? Bool, isDegraded {
+            // Intermediate progress callback — wait for the final one.
+            return
+          }
+          guard let session else {
+            box.tryResume {
+              continuation.resume(throwing: Self.renderUnavailableError())
+            }
+            return
+          }
+          box.tryResume {
+            continuation.resume(returning: ExportSessionHandle(session))
+          }
         }
-        if let isDegraded = info?[PHImageResultIsDegradedKey] as? Bool, isDegraded {
-          // Intermediate progress callback — wait for the final one.
-          return
+        idBox.set(id)
+        // Race window: cancellation could have arrived between the
+        // request starting and the id being stored. If so, the cancel
+        // handler ran with an invalid id and was a no-op — propagate
+        // here so we still cancel PhotoKit.
+        if Task.isCancelled {
+          PHImageManager.default().cancelImageRequest(id)
         }
-        guard let session else {
-          box.tryResume { continuation.resume(throwing: Self.renderUnavailableError()) }
-          return
-        }
-        box.tryResume {
-          continuation.resume(returning: ExportSessionHandle(session))
-        }
+      }
+    } onCancel: {
+      let id = idBox.get()
+      if id != PHInvalidImageRequestID {
+        PHImageManager.default().cancelImageRequest(id)
       }
     }
   }

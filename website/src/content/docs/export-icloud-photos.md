@@ -54,6 +54,10 @@ The app organizes the output on disk:
 
 If any photos are stored only in iCloud, the app automatically downloads the originals during export. Unedited photos never produce a `_orig` companion — there is nothing to pair with.
 
+Edited videos render on your Mac during export, which is slower than copying — expect 4K
+iCloud videos to take noticeably longer per file than a plain copy would. Plain copies
+remain fast.
+
 ## Resuming an interrupted export
 
 If the export is interrupted — you unplug the drive, close the app, or your Mac goes to sleep — you can resume and the app will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again, but no data is lost.

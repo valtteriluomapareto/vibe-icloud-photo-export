@@ -181,12 +181,30 @@ struct ExportToolbarView: ToolbarContent {
             .frame(width: 90, alignment: .leading)
             .help(progressCountTooltip)
 
-          Text(exportManager.currentAssetFilename ?? "")
-            .font(.caption2)
-            .foregroundColor(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .frame(width: 140, alignment: .leading)
+          // Filename and activity-hint render as two Texts so the hint
+          // is never truncated away. The filename takes the remaining
+          // space and middle-truncates; the `(rendering…)` /
+          // `(downloading…)` suffix renders at its natural width and is
+          // always visible. A single Text with truncation would either
+          // hide the hint (`.tail`, drops the end) or risk hiding parts
+          // of the activity word (`.middle`).
+          HStack(alignment: .center, spacing: 4) {
+            Text(exportManager.currentAssetFilename ?? "")
+              .font(.caption2)
+              .foregroundColor(.secondary)
+              .lineLimit(1)
+              .truncationMode(.middle)
+              .layoutPriority(0)
+            if let hint = renderActivityHint {
+              Text(hint)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            }
+          }
+          .frame(width: 140, alignment: .leading)
+          .accessibilityLabel(accessibilityCurrentAssetLabel)
         }
       } else if let emptyMessage = exportManager.emptyRunMessage {
         // The user just clicked Export Month/Year/All against an already-complete library.
@@ -221,6 +239,31 @@ struct ExportToolbarView: ToolbarContent {
       }
     }
     .animation(.default, value: exportManager.emptyRunMessage)
+  }
+
+  /// Render-activity suffix rendered next to the filename. `nil` when
+  /// no render is active so the filename takes the full toolbar slot.
+  /// Kept short on purpose — the filename is what users glance at;
+  /// the hint just confirms the slow render is making progress.
+  private var renderActivityHint: String? {
+    switch exportManager.renderActivity {
+    case .none: return nil
+    case .downloading: return "(downloading…)"
+    case .rendering: return "(rendering…)"
+    }
+  }
+
+  private var accessibilityCurrentAssetLabel: String {
+    let filename = exportManager.currentAssetFilename ?? ""
+    switch exportManager.renderActivity {
+    case .none:
+      return filename.isEmpty ? "" : "Currently exporting \(filename)"
+    case .downloading:
+      return filename.isEmpty
+        ? "Downloading from iCloud" : "Downloading \(filename) from iCloud"
+    case .rendering:
+      return filename.isEmpty ? "Rendering edited video" : "Rendering edited \(filename)"
+    }
   }
 
   private var progressCountTooltip: String {

@@ -163,9 +163,16 @@ struct EditedModeExportTests {
     #expect(record?.variants[.edited] == nil)
   }
 
-  // MARK: - Default mode adjusted asset with no edited resource fails edited variant
+  // MARK: - Default mode adjusted PHOTO with no .fullSizePhoto fails edited variant
+  //
+  // Boundary explicit: this asserts the photo-only branch of the
+  // edited-variant contract. Adjusted videos with no `.fullSizeVideo`
+  // take the render path instead — see
+  // `ExportManagerVideoRenderTests.adjustedVideoWithOnlyOriginalResourceGoesThroughRenderer`.
+  // Splitting the assertion along media kind prevents accidentally
+  // widening the render path to images later.
 
-  @Test func defaultModeAdjustedFailsWhenEditedResourceUnavailable() async throws {
+  @Test func defaultModeAdjustedPhotoFailsWhenFullSizePhotoUnavailable() async throws {
     let (manager, photoLib, dest, _, _, store) = makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited

@@ -41,6 +41,12 @@ final class ExportManager: ObservableObject {
   @Published private(set) var totalJobsCompleted: Int = 0
   @Published private(set) var currentAssetFilename: String?
 
+  /// Active render activity for the asset currently in flight. Surfaces in
+  /// the toolbar so a long edited-video render does not look like a hang.
+  /// `nil` whenever no render is active (the default for static-resource
+  /// writes).
+  @Published private(set) var renderActivity: RenderActivity?
+
   /// Transient toolbar feedback for the case where the user clicked Export Month / Year /
   /// All against an already-complete library (zero new jobs enqueued). Cleared on any new
   /// `startExport*` call, version-selection change, `cancelAndClear`, or after
@@ -85,6 +91,15 @@ final class ExportManager: ObservableObject {
   let exportRecordStore: ExportRecordStore
   let collectionExportRecordStore: CollectionExportRecordStore
   let assetResourceWriter: any AssetResourceWriter
+  // `var` rather than `let` so we can rebind it at the end of `init` with a
+  // callback that captures `self` weakly. Swift forbids referencing `self`
+  // (even weakly) before all stored properties are assigned, so the
+  // production renderer is wired in two steps: a provisional no-op
+  // callback during initialisation, then a live callback once `self` is
+  // ready. Functionally a `let`; the `var` is purely for the init order.
+  // DO NOT change this back to `let` without re-examining the closure
+  // capture in `init` — the rebind is the whole point.
+  private(set) var mediaRenderer: any MediaRenderer
   let fileSystem: any FileSystemService
 
   /// True when the **timeline** store is ready to accept writes. Timeline `startExport*`
@@ -130,6 +145,7 @@ final class ExportManager: ObservableObject {
     exportRecordStore: ExportRecordStore,
     collectionExportRecordStore: CollectionExportRecordStore? = nil,
     assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
+    mediaRenderer: (any MediaRenderer)? = nil,
     fileSystem: any FileSystemService = FileIOService()
   ) {
     self.photoLibraryService = photoLibraryService
@@ -142,12 +158,28 @@ final class ExportManager: ObservableObject {
     self.collectionExportRecordStore = collectionExportRecordStore ?? CollectionExportRecordStore()
     self.assetResourceWriter = assetResourceWriter
     self.fileSystem = fileSystem
+    // Provisional renderer — gives `self.mediaRenderer` a value so all
+    // stored properties are initialised before we capture `self` below.
+    if let mediaRenderer {
+      self.mediaRenderer = mediaRenderer
+    } else {
+      self.mediaRenderer = ProductionMediaRenderer { _ in }
+    }
     if let raw = UserDefaults.standard.string(forKey: Self.versionSelectionDefaultsKey),
       let saved = ExportVersionSelection(rawValue: raw)
     {
       self.versionSelection = saved
     } else {
       self.versionSelection = .edited
+    }
+    // `self` is fully initialised now — rebind the default renderer with
+    // a callback that routes render activity back to `renderActivity`.
+    if mediaRenderer == nil {
+      self.mediaRenderer = ProductionMediaRenderer { @Sendable [weak self] activity in
+        Task { @MainActor [weak self] in
+          self?.renderActivity = activity
+        }
+      }
     }
   }
 
@@ -742,15 +774,17 @@ final class ExportManager: ObservableObject {
       // land on the same stem instead of splitting via per-file uniqueFileURL collisions.
       if groupStem == nil, orderedVariants == [.original, .edited],
         let originalRes = ResourceSelection.selectOriginalResource(
-          from: resources, mediaType: descriptor.mediaType),
-        let editedRes = ResourceSelection.selectEditedResource(
           from: resources, mediaType: descriptor.mediaType)
       {
-        let baseStem = splitFilename(originalRes.originalFilename).base
-        let originalExt = (originalRes.originalFilename as NSString).pathExtension
-        let editedExt = (editedRes.originalFilename as NSString).pathExtension
-        groupStem = allocatePairedGroupStem(
-          baseStem: baseStem, editedExt: editedExt, originalExt: originalExt, destDir: destDir)
+        let editedProducer = ResourceSelection.selectEditedProducer(
+          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
+        if let editedFilename = editedProducer.originalFilename {
+          let baseStem = splitFilename(originalRes.originalFilename).base
+          let originalExt = (originalRes.originalFilename as NSString).pathExtension
+          let editedExt = (editedFilename as NSString).pathExtension
+          groupStem = allocatePairedGroupStem(
+            baseStem: baseStem, editedExt: editedExt, originalExt: originalExt, destDir: destDir)
+        }
       }
 
       for variant in orderedVariants {
@@ -841,18 +875,27 @@ final class ExportManager: ObservableObject {
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?
   ) async throws -> String? {
-    let resource: ResourceDescriptor? = {
+    // Renderer activity must always be cleared on the way out of this
+    // function — including on throw — so a render failure or cancel does
+    // not leave the toolbar showing `(rendering…)` forever.
+    defer { renderActivity = nil }
+
+    let producer: EditedProducer = {
       switch variant {
       case .original:
-        return ResourceSelection.selectOriginalResource(
+        if let resource = ResourceSelection.selectOriginalResource(
           from: resources, mediaType: descriptor.mediaType)
+        {
+          return .resource(resource)
+        }
+        return .none
       case .edited:
-        return ResourceSelection.selectEditedResource(
-          from: resources, mediaType: descriptor.mediaType)
+        return ResourceSelection.selectEditedProducer(
+          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
       }
     }()
 
-    guard let resource else {
+    guard let originalFilename = producer.originalFilename else {
       let errMsg: String
       switch variant {
       case .original: errMsg = "No exportable resource"
@@ -862,7 +905,7 @@ final class ExportManager: ObservableObject {
         assetId: descriptor.id, placement: job.placement, variant: variant, error: errMsg,
         at: Date())
       logger.error(
-        "No \(variant.rawValue, privacy: .public) resource for id: \(descriptor.id, privacy: .public)"
+        "No \(variant.rawValue, privacy: .public) byte source for id: \(descriptor.id, privacy: .public)"
       )
       return nil
     }
@@ -870,7 +913,7 @@ final class ExportManager: ObservableObject {
     let (finalURL, chosenStem) = try resolveDestination(
       variant: variant,
       descriptor: descriptor,
-      resource: resource,
+      originalFilename: originalFilename,
       resources: resources,
       destDir: destDir,
       groupStem: groupStem,
@@ -903,7 +946,10 @@ final class ExportManager: ObservableObject {
     // PhotoKit. On APFS the copy is a CoW clone (no extra disk usage); on non-APFS
     // it's a real copy. PhotoKit fallback only on source-side errors (the prior
     // `.done` record is stale); destination-side errors fail the variant directly
-    // because retrying via PhotoKit would hit the same destination problem.
+    // because retrying via PhotoKit would hit the same destination problem. The
+    // copy works regardless of whether the byte source is a static resource or a
+    // rendered edit — once a placement has the file, all other placements just
+    // clone it.
     var didCopyFromReuseSource = false
     if let reuse = findReuseSource(
       assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
@@ -936,9 +982,41 @@ final class ExportManager: ObservableObject {
       }
     }
     if !didCopyFromReuseSource {
-      try await assetResourceWriter.writeResource(
-        resource, forAssetId: descriptor.id, to: tempURL)
+      switch producer {
+      case .resource(let resource):
+        try await assetResourceWriter.writeResource(
+          resource, forAssetId: descriptor.id, to: tempURL)
+      case .render(let request):
+        // Translate any renderer error (other than cancellation) into the
+        // canonical recoverable failure so the persisted `lastError` is
+        // stable across both "no static resource" and "render attempted
+        // and failed" cases. The original error survives in the log for
+        // diagnostics.
+        do {
+          try await mediaRenderer.render(request: request, to: tempURL)
+        } catch is CancellationError {
+          throw CancellationError()
+        } catch {
+          logger.error(
+            "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
+          )
+          throw NSError(
+            domain: "Export", code: 9,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                ExportVariantRecovery.editedResourceUnavailableMessage
+            ])
+        }
+      case .none:
+        // Guarded above by `producer.originalFilename` check.
+        preconditionFailure("EditedProducer.none reached the write step")
+      }
     }
+    // Load-bearing: this checkpoint must run BEFORE the atomic move
+    // below so that a cancel arriving during the render does not leak a
+    // partially-written file into the destination. Reordering this is a
+    // correctness regression — temp cleanup is handled by `defer`, but
+    // only if we throw before the move.
     try throwIfCancelledOrStale(gen)
 
     try await withCheckedThrowingContinuation {
@@ -996,7 +1074,7 @@ final class ExportManager: ObservableObject {
   private func resolveDestination(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
-    resource: ResourceDescriptor,
+    originalFilename: String,
     resources: [ResourceDescriptor],
     destDir: URL,
     groupStem: String?,
@@ -1004,7 +1082,7 @@ final class ExportManager: ObservableObject {
   ) throws -> (URL, String) {
     switch variant {
     case .original:
-      let origExt = (resource.originalFilename as NSString).pathExtension
+      let origExt = (originalFilename as NSString).pathExtension
       if let stem = groupStem {
         let filename = ExportFilenamePolicy.originalFilename(
           stem: stem, ext: origExt, withSuffix: pairOriginalWithSuffix)
@@ -1020,15 +1098,15 @@ final class ExportManager: ObservableObject {
         return (candidate, stem)
       }
       // Fresh single-variant `.original`: no pairing, use uniqueFileURL collision handling.
-      let (origStem, _) = splitFilename(resource.originalFilename)
+      let (origStem, _) = splitFilename(originalFilename)
       let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
       return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
 
     case .edited:
-      let editedExt = (resource.originalFilename as NSString).pathExtension
+      let editedExt = (originalFilename as NSString).pathExtension
       if let stem = groupStem {
         let filename = ExportFilenamePolicy.editedFilename(
-          stem: stem, editedResourceFilename: resource.originalFilename)
+          stem: stem, editedResourceFilename: originalFilename)
         let (base, ext) = splitFilename(filename)
         // If the inherited natural stem is already taken (post-edit case where the prior
         // `.original.done` occupies it), uniqueFileURL splits the pair onto a `(N)`
@@ -1046,7 +1124,7 @@ final class ExportManager: ObservableObject {
       {
         baseStem = splitFilename(original.originalFilename).base
       } else {
-        baseStem = splitFilename(resource.originalFilename).base
+        baseStem = splitFilename(originalFilename).base
       }
       let finalURL = uniqueFileURL(in: destDir, baseName: baseStem, ext: editedExt)
       return (finalURL, finalURL.deletingPathExtension().lastPathComponent)

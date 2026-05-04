@@ -18,9 +18,9 @@ The project is intentionally small: SwiftUI on top, system frameworks only, and 
 - Export a month, a year, or the full queue without overwriting existing files
 - Export your Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`
 - Choose what to write with the toolbar's **Include originals** toggle. Off (default)
-  exports one file per photo, in the version Photos shows. On adds a `_orig` companion
-  (e.g. `IMG_0001_orig.HEIC`) for any photo edited in Photos so you keep a copy of the
-  original bytes alongside the user-visible edit
+  exports one file per asset, in the version Photos shows. On adds a `_orig` companion
+  (e.g. `IMG_0001_orig.HEIC`) for any photo or video edited in Photos so you keep a copy
+  of the original bytes alongside the user-visible edit
 - Track exported assets per destination so interrupted exports can resume safely
 - Pause, resume, cancel, and clear queued work
 - Import an existing backup folder to rebuild local export state on a fresh install
